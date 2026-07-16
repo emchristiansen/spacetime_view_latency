@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["module", "roundtrip_latency_test"]
+members = ["module", "roundtrip_latency_test", "experiment_module", "experiment_harness"]
 
 [workspace.dependencies]
 spacetimedb = "=2.6.1"

@@ -597,6 +597,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "experiment_harness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "spacetimedb-sdk",
+]
+
+[[package]]
+name = "experiment_module"
+version = "0.1.0"
+dependencies = [
+ "spacetimedb",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

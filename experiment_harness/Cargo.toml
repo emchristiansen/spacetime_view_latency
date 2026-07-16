@@ -1,0 +1,13 @@
+[package]
+name = "experiment_harness"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "experiment_harness"
+path = "src/main.rs"
+
+[dependencies]
+spacetimedb-sdk.workspace = true
+anyhow.workspace = true
+clap.workspace = true
