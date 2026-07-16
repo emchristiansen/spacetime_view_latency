@@ -80,6 +80,17 @@ impl ValidatedRunManifest {
             },
         }
     }
+
+    /// The published database identity, needed to connect a client to this run's database.
+    pub(crate) fn database_identity(&self) -> DatabaseIdentity {
+        self.module.database_identity
+    }
+
+    /// The explicit schedule seed recorded for this run, used to derive deterministic role
+    /// identities.
+    pub(crate) fn schedule_seed(&self) -> ScheduleSeed {
+        self.schedule_seed
+    }
 }
 
 /// Verified distribution provenance (both binaries + Nix store output).

@@ -15,20 +15,24 @@ use crate::provision::staged_module_wasm::StagedModuleWasm;
 use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 
-/// Provision one isolated server for `run` and return its immutable [`ValidatedRunManifest`].
+/// Provision one isolated server for `run`, run `body` against the *live* server and its
+/// immutable manifest, and return `body`'s result.
 ///
 /// Pipeline: resolve+verify the pinned distribution, stage the hash-verified WASM (fail fast
 /// before starting anything if the built bytes don't match the committed provenance hash),
-/// start the `/proc`-proven standalone, publish the staged bytes, and snapshot the inert
-/// manifest — then, on **every** path, attempt all outstanding teardowns (server shutdown and
-/// staged-file cleanup), aggregating the primary error with every cleanup error. The manifest
-/// is returned only if it was assembled *and* all cleanup succeeded.
-pub(crate) fn provision_run(
+/// start the `/proc`-proven standalone, publish the staged bytes, snapshot the inert manifest,
+/// and invoke `body(&server, &manifest)` while the server is alive — then, on **every** path,
+/// attempt all outstanding teardowns (server shutdown and staged-file cleanup), aggregating the
+/// primary error (whether from provisioning or from `body`) with every cleanup error. `body`'s
+/// value is returned only if `body` succeeded *and* all cleanup succeeded. The live server and
+/// manifest are borrowed for the duration of `body`, so no live capability can escape it.
+pub(crate) fn provision_and_run<T>(
     listen: ListenAddress,
     module_wasm: &Path,
     run: RunCoordinate,
     seed: ScheduleSeed,
-) -> Result<ValidatedRunManifest> {
+    body: impl FnOnce(&RunningPinnedServer, &ValidatedRunManifest) -> Result<T>,
+) -> Result<T> {
     let distribution = VerifiedDistribution::resolve()?;
 
     // Stage first: a hash mismatch must abort before any server is provisioned. No loud-Drop
@@ -48,13 +52,14 @@ pub(crate) fn provision_run(
         }
     };
 
-    // Both `server` and `staged` are loud. Assemble the manifest while the server is alive
-    // (the manifest value-copies, retaining no handle), then tear both down unconditionally.
-    let assembled = publish_and_assemble(&distribution, &server, &staged, run, seed);
+    // Both `server` and `staged` are loud. Publish, assemble the manifest while the server is
+    // alive (the manifest value-copies, retaining no handle), and run `body` — then tear both
+    // down unconditionally.
+    let outcome = publish_assemble_and_run(&distribution, &server, &staged, run, seed, body);
 
     let mut errors = Vec::new();
-    let manifest = match assembled {
-        Ok(manifest) => Some(manifest),
+    let result = match outcome {
+        Ok(value) => Some(value),
         Err(primary) => {
             errors.push(primary);
             None
@@ -67,31 +72,41 @@ pub(crate) fn provision_run(
         errors.push(e);
     }
 
-    match manifest {
-        // Assembled and every teardown succeeded.
-        Some(manifest) if errors.is_empty() => Ok(manifest),
-        // Assembled but a teardown failed — surface the cleanup failure rather than a manifest
-        // whose server/tempfile may have leaked.
+    match result {
+        // `body` succeeded and every teardown succeeded.
+        Some(value) if errors.is_empty() => Ok(value),
+        // `body` succeeded but a teardown failed — surface the cleanup failure rather than a
+        // value obtained from a run whose server/tempfile may have leaked.
         Some(_) | None => Err(into_error(errors)),
     }
 }
 
-/// Publish the staged bytes and snapshot the inert manifest. Kept separate so its failure
-/// flows through the driver's unconditional teardown rather than a bare `?` that would strand
-/// the live server and staged tempfile.
-fn publish_and_assemble(
+/// Provision one isolated server for `run` and return its immutable [`ValidatedRunManifest`]
+/// after teardown. The effectful provisioning smoke path: it provisions and snapshots but does
+/// not measure. Implemented as the trivial [`provision_and_run`] body that clones the manifest.
+pub(crate) fn provision_run(
+    listen: ListenAddress,
+    module_wasm: &Path,
+    run: RunCoordinate,
+    seed: ScheduleSeed,
+) -> Result<ValidatedRunManifest> {
+    provision_and_run(listen, module_wasm, run, seed, |_server, manifest| {
+        Ok(manifest.clone())
+    })
+}
+
+/// Publish the staged bytes, snapshot the inert manifest, and run `body`. Kept separate so any
+/// failure flows through the driver's unconditional teardown rather than a bare `?` that would
+/// strand the live server and staged tempfile.
+fn publish_assemble_and_run<T>(
     distribution: &VerifiedDistribution,
     server: &RunningPinnedServer,
     staged: &StagedModuleWasm,
     run: RunCoordinate,
     seed: ScheduleSeed,
-) -> Result<ValidatedRunManifest> {
+    body: impl FnOnce(&RunningPinnedServer, &ValidatedRunManifest) -> Result<T>,
+) -> Result<T> {
     let artifact = server.publish(distribution, staged)?;
-    Ok(ValidatedRunManifest::assemble(
-        run,
-        distribution,
-        server,
-        &artifact,
-        seed,
-    ))
+    let manifest = ValidatedRunManifest::assemble(run, distribution, server, &artifact, seed);
+    body(server, &manifest)
 }

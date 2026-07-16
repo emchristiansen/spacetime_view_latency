@@ -1,38 +1,65 @@
-//! Resolved SpacetimeDB identities for the three measurement roles.
+//! Resolved SpacetimeDB identities for the measured and growth roles.
 
+use anyhow::{ensure, Result};
 use spacetimedb_sdk::Identity;
 
-/// The concrete `spacetimedb_sdk::Identity` bound to each measurement role in one
-/// run. Uses the published 2.6.1 client identity type directly.
+use crate::manifest::schedule_seed::ScheduleSeed;
+use crate::params::EXPERIMENT_ISSUER;
+use crate::plan::cell::Cell;
+use crate::roles::role::Role;
+
+/// The two concrete `spacetimedb_sdk::Identity` values bound to the roles of one run:
+/// the active **measured** subscriber and the non-subscribing **growth** driver.
+///
+/// Constructed only through [`Self::resolve`], which pins the measured identity to the
+/// server-issued connection identity and derives the growth identity deterministically,
+/// then rejects aliasing. There is no field-wise constructor, so execution code cannot
+/// smuggle in ad hoc or colliding identities (spec: "Construct and validate the complete
+/// role assignment through the typed `RoleIdentities` boundary rather than accepting ad
+/// hoc identities from execution code; measured and growth identities must be distinct").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RoleIdentities {
+pub(crate) struct RoleIdentities {
     measured: Identity,
-    own_slice_measured: Identity,
-    growth_driver: Identity,
+    growth: Identity,
 }
 
 impl RoleIdentities {
-    /// Bind resolved identities to the three roles.
-    pub fn new(measured: Identity, own_slice_measured: Identity, growth_driver: Identity) -> Self {
-        Self {
-            measured,
-            own_slice_measured,
-            growth_driver,
-        }
+    /// Resolve the role assignment for one run.
+    ///
+    /// `measured` is the **server-issued** identity captured from the measured
+    /// subscriber's `on_connect` (2.6.1 view `ctx.sender()` is the authenticated
+    /// connection identity; an arbitrary identity is not adoptable by a subscriber
+    /// without a server-key-signed JWT — see the Implementation-Time Decision "Align
+    /// typed role identities with authenticated subscriber identity"). The growth
+    /// identity is derived with [`Identity::from_claims`], domain-separated by the
+    /// experiment issuer, schedule seed, cell, and role, and must differ from the
+    /// measured identity.
+    pub(crate) fn resolve(measured: Identity, seed: ScheduleSeed, cell: Cell) -> Result<Self> {
+        let growth = Identity::from_claims(EXPERIMENT_ISSUER, &growth_subject(seed, cell));
+        ensure!(
+            measured != growth,
+            "measured (server-issued) and growth (from_claims) identities collide ({measured:?}); \
+             a run's measured and growth identities must be distinct"
+        );
+        Ok(Self { measured, growth })
     }
 
-    /// M — the measured identity with a small, fixed result slice.
-    pub fn measured(&self) -> Identity {
+    /// The active measured identity (M in `UnrelatedGrowth`, M2 in `OwnSliceGrowth`):
+    /// the server-issued subscriber connection identity.
+    pub(crate) fn measured(&self) -> Identity {
         self.measured
     }
 
-    /// M2 — the measured identity used only in the own-slice-growth regime.
-    pub fn own_slice_measured(&self) -> Identity {
-        self.own_slice_measured
+    /// The non-subscribing growth driver G, writing keys disjoint from the measured
+    /// role's.
+    pub(crate) fn growth(&self) -> Identity {
+        self.growth
     }
+}
 
-    /// G — the growth driver writing keys disjoint from M.
-    pub fn growth_driver(&self) -> Identity {
-        self.growth_driver
-    }
+/// The `from_claims` subject domain-separating the growth identity by schedule seed,
+/// cell, and role. The role component is the constant [`Role::GrowthDriver`] tag (only
+/// the non-subscribing growth role is derived this way); seed and cell vary it per run.
+fn growth_subject(seed: ScheduleSeed, cell: Cell) -> String {
+    format!("seed={};cell={:?};role={:?}", seed.get(), cell, Role::GrowthDriver)
 }
