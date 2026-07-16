@@ -60,6 +60,15 @@ impl RoleIdentities {
 /// The `from_claims` subject domain-separating the growth identity by schedule seed,
 /// cell, and role. The role component is the constant [`Role::GrowthDriver`] tag (only
 /// the non-subscribing growth role is derived this way); seed and cell vary it per run.
+///
+/// Every component is a stable canonical field — the raw seed and the explicit
+/// `canonical_tag` contracts — never `Debug` output, so the derived growth identity is
+/// reproducible against a recorded seed and cannot be moved by a Rust variant rename.
 fn growth_subject(seed: ScheduleSeed, cell: Cell) -> String {
-    format!("seed={};cell={:?};role={:?}", seed.get(), cell, Role::GrowthDriver)
+    format!(
+        "seed={};cell={};role={}",
+        seed.get(),
+        cell.canonical_tag(),
+        Role::GrowthDriver.canonical_tag()
+    )
 }

@@ -9,6 +9,7 @@ use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Identity};
 
 use crate::dataset::seed_op::SeedOp;
+use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::module_artifact::bindings::{
@@ -57,11 +58,11 @@ impl ConnectedClient {
             .on_connect({
                 let connect_tx = connect_tx.clone();
                 move |_ctx, identity, _token| {
-                    let _ = connect_tx.send(Ok(identity));
+                    deliver(&connect_tx, Ok(identity));
                 }
             })
             .on_connect_error(move |_ctx, err| {
-                let _ = connect_tx.send(Err(format!("{err:?}")));
+                deliver(&connect_tx, Err(format!("{err:?}")));
             })
             .build()
             .map_err(|e| anyhow!("building connection to {server_url}: {e:?}"))?;
@@ -121,26 +122,41 @@ impl ConnectedClient {
     /// Subscribe to `target` and, once the initial snapshot is applied, read its rows out of
     /// the client cache. Fails fast on a subscription error or an applied-timeout.
     pub(crate) fn subscribe_and_read(&self, target: SubscribedTable) -> Result<SubscribedRows> {
+        self.subscribe_and_await_applied(target.subscription_sql())?;
+        Ok(target.read_back(&self.conn))
+    }
+
+    /// Subscribe to the full `message_visibility` table, wait for its snapshot, and read every
+    /// live row back for the `(viewer, message_uuid)` pair-uniqueness check. Both the measured
+    /// and the growth slices' visibility rows are materialized, so the check covers the whole
+    /// seeded visibility set rather than the arm view's measured-only slice.
+    pub(crate) fn read_back_visibility(&self) -> Result<SeededVisibility> {
+        self.subscribe_and_await_applied(SeededVisibility::subscription_sql())?;
+        Ok(SeededVisibility::read_back(&self.conn))
+    }
+
+    /// Subscribe to `sql` and block until the initial snapshot is applied, failing fast on a
+    /// subscription error or an applied-timeout. Shared by the arm/control result read-back
+    /// and the `message_visibility` pair-uniqueness read-back.
+    fn subscribe_and_await_applied(&self, sql: String) -> Result<()> {
         let (applied_tx, applied_rx) = mpsc::channel::<std::result::Result<(), String>>();
         self.conn
             .subscription_builder()
             .on_applied({
                 let applied_tx = applied_tx.clone();
                 move |_ctx| {
-                    let _ = applied_tx.send(Ok(()));
+                    deliver(&applied_tx, Ok(()));
                 }
             })
             .on_error(move |_ctx, err| {
-                let _ = applied_tx.send(Err(format!("{err:?}")));
+                deliver(&applied_tx, Err(format!("{err:?}")));
             })
-            .subscribe([target.subscription_sql()]);
+            .subscribe([sql]);
 
         applied_rx
             .recv_timeout(SUBSCRIPTION_TIMEOUT)
             .context("waiting for the subscription to be applied")?
-            .map_err(|msg| anyhow!("subscription failed: {msg}"))?;
-
-        Ok(target.read_back(&self.conn))
+            .map_err(|msg| anyhow!("subscription failed: {msg}"))
     }
 
     /// Disconnect and join the message-processing thread.
@@ -167,12 +183,31 @@ impl ConnectedClient {
                 Ok(Err(msg)) => Err(format!("reducer returned an error: {msg}")),
                 Err(internal) => Err(format!("internal error awaiting reducer: {internal:?}")),
             };
-            let _ = done_tx.send(flattened);
+            deliver(&done_tx, flattened);
         });
         issue(callback).map_err(|e| anyhow!("issuing reducer: {e:?}"))?;
         done_rx
             .recv_timeout(REDUCER_TIMEOUT)
             .context("waiting for confirmed reducer completion")?
             .map_err(|msg| anyhow!("{msg}"))
+    }
+}
+
+/// Deliver a one-shot `outcome` to the waiting harness thread over `sender`.
+///
+/// Every one of these channels is awaited with `recv_timeout` on the harness thread while the
+/// SDK drives the sending callback on its own background thread. That ordering has exactly one
+/// failure mode: the harness already timed out and dropped the receiver before this late
+/// callback fired. [`mpsc::SendError`] has that single cause, so the failure is *modeled* here
+/// as the expected late-callback race — there is no result left to deliver and nothing to fail.
+/// It is deliberately neither discarded with a bare `let _` (the failure has a specific,
+/// reasoned meaning) nor propagated (a callback cannot return an error) nor panicked (which
+/// would abort the SDK background thread and lose the run's real error).
+fn deliver<T>(sender: &mpsc::Sender<T>, outcome: T) {
+    match sender.send(outcome) {
+        Ok(()) => {}
+        // The receiver has already stopped waiting (recv timed out and dropped it); the value
+        // returned inside the error is the signal we no longer have anyone to hand it to.
+        Err(mpsc::SendError(_unreceived)) => {}
     }
 }

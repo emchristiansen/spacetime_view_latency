@@ -10,5 +10,6 @@
 pub mod role_slice;
 pub mod seed_op;
 pub mod seed_plan;
+pub mod seeded_visibility;
 pub mod subscribed_rows;
 pub mod subscribed_table;

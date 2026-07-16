@@ -1,9 +1,5 @@
 //! The deterministic seed plan and expected result set for one run.
 
-use std::collections::HashSet;
-
-use anyhow::{ensure, Result};
-
 use crate::dataset::role_slice::RoleSlice;
 use crate::dataset::seed_op::SeedOp;
 use crate::params::{
@@ -84,31 +80,12 @@ impl SeedPlan {
             .collect()
     }
 
-    /// Assert every seeded `(viewer, message_uuid)` visibility pair is unique (spec: "The
-    /// dataset must enforce and assert uniqueness of `(viewer, message_uuid)` visibility
-    /// pairs"). Because the plan fully determines what is seeded, asserting the plan's
-    /// pairs certifies the seeded set; this is the harness-side defense in depth
-    /// complementing the reducer's fail-fast duplicate guard. A no-op for the single-table
-    /// `message` family, which has no visibility pairs.
-    pub(crate) fn assert_unique_pairs(&self) -> Result<()> {
-        if self.family != ControlTable::ChronicleMessage {
-            return Ok(());
-        }
-        let mut seen: HashSet<(String, u64)> = HashSet::new();
-        let mut total = 0u64;
-        for slice in [self.measured, self.growth] {
-            let viewer = slice.identity().to_hex().to_string();
-            for key in slice.keys() {
-                total += 1;
-                seen.insert((viewer.clone(), key));
-            }
-        }
-        ensure!(
-            seen.len() as u64 == total,
-            "duplicate (viewer, message_uuid) visibility pair in the seed plan: {} distinct of {} seeded",
-            seen.len(),
-            total
-        );
-        Ok(())
+    /// The number of logical Chronicle visibility/message pairs this plan seeds — the
+    /// measured slice plus the growth slice. Only meaningful for the Chronicle family; the
+    /// single-table `message` family seeds no visibility pairs. Used to check the live
+    /// `message_visibility` read-back's cardinality after seeding
+    /// ([`crate::dataset::seeded_visibility::SeededVisibility::assert_unique_pairs`]).
+    pub(crate) fn chronicle_pair_count(&self) -> u64 {
+        self.measured.count() + self.growth.count()
     }
 }

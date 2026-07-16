@@ -92,4 +92,26 @@ impl Cell {
     pub fn matched_runs(self) -> [Run; 2] {
         Run::matched_pair(self)
     }
+
+    /// A stable canonical tag uniquely identifying this cell, for deterministic identity
+    /// derivation and machine-readable evidence.
+    ///
+    /// Deliberately an explicit `&'static str` contract rather than `Debug`/variant-name
+    /// formatting: the growth identity is derived from this tag via `Identity::from_claims`,
+    /// so a `Debug`-derived subject would silently change every growth identity if a Rust
+    /// variant were ever renamed, breaking reproducibility against a recorded seed. The tag
+    /// is fixed independently of the variant names, so refactors cannot move it.
+    pub fn canonical_tag(self) -> &'static str {
+        match self {
+            Cell::TableScopedUnrelated(TableScopedArm::ProceduralRange) => "arm-a-unrelated",
+            Cell::TableScopedUnrelated(TableScopedArm::QueryFull) => "arm-b-unrelated",
+            Cell::TableScopedUnrelated(TableScopedArm::QuerySemijoin) => "arm-c-unrelated",
+            Cell::TableScopedUnrelated(TableScopedArm::QueryFullPk) => "arm-d-unrelated",
+            Cell::TableScopedUnrelated(TableScopedArm::QuerySemijoinPk) => "arm-e-unrelated",
+            Cell::KeyScopedUnrelated(KeyScopedArm::PointFilter) => "arm-f-unrelated",
+            Cell::KeyScopedUnrelated(KeyScopedArm::PointSemijoin) => "arm-fprime-unrelated",
+            Cell::KeyScopedOwnSlice(KeyScopedArm::PointFilter) => "arm-f-ownslice",
+            Cell::KeyScopedOwnSlice(KeyScopedArm::PointSemijoin) => "arm-fprime-ownslice",
+        }
+    }
 }
