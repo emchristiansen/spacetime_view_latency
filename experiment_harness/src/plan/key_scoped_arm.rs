@@ -4,7 +4,7 @@
 ///
 /// These run under **both** growth regimes: flat under other identities' growth,
 /// O(own slice) when the measured identity's own slice grows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum KeyScopedArm {
     /// F — procedural bounded point-filter over the single-column `sender` btree.
     PointFilter,

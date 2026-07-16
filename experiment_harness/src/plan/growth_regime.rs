@@ -6,7 +6,7 @@
 /// dose axis (spec: "Dataset and multi-identity design"). Each regime has a separate
 /// run and a separate x-axis; which one applies is fixed by the
 /// [`crate::plan::cell::Cell`] variant, not chosen freely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum GrowthRegime {
     /// M's result slice is pinned; growth driver G alone drives `N_total`; the
     /// x-axis is `N_total`. Applies to all seven arms.

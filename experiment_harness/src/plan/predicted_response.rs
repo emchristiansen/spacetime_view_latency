@@ -8,7 +8,7 @@ use crate::plan::growth_regime::GrowthRegime;
 /// generic exponent (spec: "Classification"). Always *derived* from a
 /// [`crate::plan::cell::Cell`], never stored beside it. These are falsifiable
 /// hypotheses; contradictory measured results are recorded unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum PredictedResponse {
     /// Predicted `Flat-equivalent` in the named regime.
     FlatIn(GrowthRegime),

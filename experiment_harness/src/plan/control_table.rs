@@ -10,7 +10,7 @@
 /// Per the spec matrix: A/B/D and F use the `message` control; C/E/F′ use the
 /// `chronicle_message` control. The mapping from arm to control table is derived
 /// privately in [`crate::plan::cell`], so it cannot drift per call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ControlTable {
     /// The `message` base table.
     Message,

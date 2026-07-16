@@ -1,5 +1,7 @@
 //! The schedulable plan.
 
+use anyhow::{ensure, Context, Result};
+
 use crate::params::REPETITION_BLOCKS;
 use crate::plan::cell::Cell;
 
@@ -31,6 +33,22 @@ impl Schedule {
     /// The cells in this plan.
     pub fn cells(&self) -> &[Cell] {
         &self.cells
+    }
+
+    /// Select one valid [`BlockRun`] by cell and block index, validating both against the
+    /// plan. This is the sole way for code outside the `schedule` subtree to obtain a
+    /// single schedule-owned `(cell, block)` value (e.g. the `provision` smoke command)
+    /// without minting one directly.
+    pub(crate) fn canonical_block(&self, cell_index: usize, block_index: u32) -> Result<BlockRun> {
+        let &cell = self.cells.get(cell_index).with_context(|| {
+            format!("cell index {cell_index} out of range 0..{}", self.cells.len())
+        })?;
+        ensure!(
+            block_index < Self::BLOCKS_PER_CELL,
+            "block index {block_index} out of range 0..{}",
+            Self::BLOCKS_PER_CELL
+        );
+        Ok(BlockRun::new(cell, block_index))
     }
 
     /// The complete, canonical (unrandomized) block set: every `(cell, block-index)`

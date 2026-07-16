@@ -6,7 +6,7 @@
 /// full-table-scoped read set. Keeping them in a separate enum from the key-scoped
 /// arms is what makes "table-scoped arm under own-slice growth" unrepresentable (see
 /// [`crate::plan::cell::Cell`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TableScopedArm {
     /// A — procedural `Vec<Row>` full-domain unbounded range over the `sender` btree.
     ProceduralRange,

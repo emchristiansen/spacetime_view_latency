@@ -2,13 +2,19 @@
 
 use anyhow::Result;
 
+use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::plan::run::Run;
-use crate::run_manifest::RunManifest;
+use crate::provision::running_pinned_server::RunningPinnedServer;
 
-/// Execute one [`Run`]: seed the dataset for its cell's growth regime, subscribe to
-/// the arm view or the matched direct control table, drive the preregistered dose
-/// ladder with confirmed round trips, run correctness checks outside the measured
-/// interval, and emit raw per-observation records. Stubbed in Phase 1.
-pub fn execute_run(_manifest: &RunManifest, _run: Run) -> Result<()> {
+/// Execute one [`Run`] against the provisioned `server`, recording under `manifest`: seed the
+/// dataset for its cell's growth regime, subscribe to the arm view or the matched direct
+/// control table, drive the preregistered dose ladder with confirmed round trips, run
+/// correctness checks outside the measured interval, and emit raw per-observation records.
+/// Stubbed until the measurement phase.
+pub(crate) fn execute_run(
+    _server: &RunningPinnedServer,
+    _manifest: &ValidatedRunManifest,
+    _run: Run,
+) -> Result<()> {
     todo!("seed, subscribe, drive doses, confirm round trips, correctness-check, emit records")
 }

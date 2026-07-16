@@ -14,7 +14,7 @@ use crate::plan::run::Run;
 use crate::plan::table_scoped_arm::TableScopedArm;
 
 /// A valid arm/regime pairing eligible for scheduling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Cell {
     /// A table-scoped arm (A–E) under unrelated-total growth — its only regime.
     TableScopedUnrelated(TableScopedArm),
