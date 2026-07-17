@@ -9,3 +9,6 @@ mod schedule;
 
 pub use block_run::BlockRun;
 pub use schedule::Schedule;
+
+#[cfg(test)]
+mod tests;

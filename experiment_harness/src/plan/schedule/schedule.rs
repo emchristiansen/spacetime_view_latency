@@ -1,11 +1,19 @@
 //! The schedulable plan.
 
 use anyhow::{ensure, Context, Result};
+use sha2::{Digest, Sha256};
 
-use crate::params::REPETITION_BLOCKS;
+use crate::params::{BLOCK_ORDER_DOMAIN, REPETITION_BLOCKS};
 use crate::plan::cell::Cell;
 
 use super::BlockRun;
+
+/// Total ordering key for a scheduled block: its SHA-256 digest, then its unique
+/// `(cell canonical tag, block index)` coordinate as a deterministic, collision-proof
+/// tiebreak. The tuple's `derive`d `Ord` compares digest first, then the coordinate, so
+/// the induced order is total even in the astronomically unlikely event of a digest tie
+/// (see [`Schedule::seeded_permutation`]).
+type BlockOrderKey = ([u8; 32], &'static str, u32);
 
 /// The schedulable plan. Stores **only** [`Cell`] values; per-run structure (the
 /// matched arm and control runs) is derived at execution time via
@@ -74,8 +82,39 @@ impl Schedule {
         Self::seeded_permutation(self.all_blocks(), seed)
     }
 
-    /// Deterministic seeded permutation of an exact block set. Stubbed in Phase 1.
-    fn seeded_permutation(_blocks: Vec<BlockRun>, _seed: u64) -> Vec<BlockRun> {
-        todo!("deterministic seeded permutation of the complete block set")
+    /// Deterministic seeded permutation of an exact block set: a pure reordering that
+    /// never adds, drops, or duplicates a block.
+    ///
+    /// Each block is assigned a [`BlockOrderKey`] and the vector is sorted by it. Sorting
+    /// a `Vec` is a permutation, so the input's completeness and uniqueness are preserved
+    /// by construction — the returned set equals the input set, only reordered. The seed
+    /// enters only through the digest, so the same seed always yields the same order and
+    /// a different seed almost always yields a different one. The `(tag, index)` tiebreak
+    /// makes the order total without relying on digest uniqueness.
+    fn seeded_permutation(blocks: Vec<BlockRun>, seed: u64) -> Vec<BlockRun> {
+        let mut keyed: Vec<(BlockOrderKey, BlockRun)> = blocks
+            .into_iter()
+            .map(|block| (Self::block_order_key(&block, seed), block))
+            .collect();
+        keyed.sort_by(|(left, _), (right, _)| left.cmp(right));
+        keyed.into_iter().map(|(_, block)| block).collect()
+    }
+
+    /// The total ordering key for one block under `seed`: its SHA-256 digest followed by
+    /// its unique `(cell canonical tag, block index)` coordinate. The digest is taken over
+    /// a domain-separated subject built from stable canonical tags — never `Debug` output —
+    /// so the derived order is reproducible against a recorded seed and cannot be moved by
+    /// a Rust variant rename.
+    fn block_order_key(block: &BlockRun, seed: u64) -> BlockOrderKey {
+        let tag = block.cell().canonical_tag();
+        let block_index = block.block_index();
+        let subject = format!(
+            "{};seed={};cell={};block={}",
+            BLOCK_ORDER_DOMAIN, seed, tag, block_index
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(subject.as_bytes());
+        let digest: [u8; 32] = hasher.finalize().into();
+        (digest, tag, block_index)
     }
 }

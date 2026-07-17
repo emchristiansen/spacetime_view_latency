@@ -1,6 +1,10 @@
 //! One scheduled repetition block for a single cell.
 
+use sha2::{Digest, Sha256};
+
+use crate::params::ARM_CONTROL_ORDER_DOMAIN;
 use crate::plan::cell::Cell;
+use crate::plan::run::Run;
 
 /// A single scheduled repetition block: run this cell's matched arm and control runs
 /// once, as block number `block_index` of the cell's fixed block sample.
@@ -35,5 +39,36 @@ impl BlockRun {
     /// 0-based index of this block within the cell's fixed block sample.
     pub fn block_index(&self) -> u32 {
         self.block_index
+    }
+
+    /// This block's two runs — its arm and its matched direct-table control — in the
+    /// seed-randomized order they execute in, returned together as one array so the
+    /// matched pair's adjacency is structural rather than caller-maintained (spec: "The
+    /// arm/control order within each block is randomized, and the two runs are adjacent
+    /// except for the fresh-server reset"). The pair is always exactly `{Arm, Control}`
+    /// for this block's cell; only their order varies with the seed.
+    pub fn ordered_runs(&self, seed: u64) -> [Run; 2] {
+        let [arm, control] = self.cell.matched_runs();
+        if self.control_first(seed) {
+            [control, arm]
+        } else {
+            [arm, control]
+        }
+    }
+
+    /// Whether this block's matched control run executes before its arm run, derived
+    /// deterministically from `seed` and the block's coordinate under a domain distinct
+    /// from the global block-order permutation so the two decisions do not correlate.
+    fn control_first(&self, seed: u64) -> bool {
+        let tag = self.cell.canonical_tag();
+        let block_index = self.block_index;
+        let subject = format!(
+            "{};seed={};cell={};block={}",
+            ARM_CONTROL_ORDER_DOMAIN, seed, tag, block_index
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(subject.as_bytes());
+        let digest: [u8; 32] = hasher.finalize().into();
+        digest[0] & 1 == 1
     }
 }

@@ -30,6 +30,19 @@ pub(crate) const OWN_SLICE_BASELINE: u64 = 1_000;
 /// `from_claims`; the measured role is the server-issued connection identity.
 pub(crate) const EXPERIMENT_ISSUER: &str = "view-read-set-experiment";
 
+/// Domain-separation label for the deterministic global block-order permutation. The
+/// schedule seed and each block's `(cell canonical tag, block index)` coordinate are
+/// hashed under this label to derive a stable pseudo-random ordering key (spec: "Controls
+/// and execution" — "Randomize the temporal order of all arm/regime/block products
+/// globally from the recorded seed"). Named so a rename cannot silently move every seeded
+/// ordering against a recorded seed.
+pub(crate) const BLOCK_ORDER_DOMAIN: &str = "view-read-set-experiment:block-order";
+
+/// Domain-separation label for the per-block arm/control run-order randomization, kept
+/// distinct from [`BLOCK_ORDER_DOMAIN`] so the two decisions derive independently (spec:
+/// "The arm/control order within each block is randomized").
+pub(crate) const ARM_CONTROL_ORDER_DOMAIN: &str = "view-read-set-experiment:arm-control-order";
+
 /// The fixed row payload written for every seeded row of every role. A single
 /// constant keeps returned columns and payload width identical across matched
 /// arm/control runs and across roles (spec: "Keep returned columns and payload width
