@@ -58,7 +58,8 @@ impl BlockRun {
 
     /// Whether this block's matched control run executes before its arm run, derived
     /// deterministically from `seed` and the block's coordinate under a domain distinct
-    /// from the global block-order permutation so the two decisions do not correlate.
+    /// from the global block-order permutation, so the run-order bit is a distinct
+    /// domain-separated derivation rather than a reuse of that permutation's key.
     fn control_first(&self, seed: u64) -> bool {
         let tag = self.cell.canonical_tag();
         let block_index = self.block_index;

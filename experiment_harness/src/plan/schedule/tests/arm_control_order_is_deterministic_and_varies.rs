@@ -40,7 +40,10 @@ fn arm_control_order_is_deterministic_and_varies() {
     }
 
     assert!(arm_first > 0, "some block must run its arm first");
-    assert!(control_first > 0, "some block must run its matched control first");
+    assert!(
+        control_first > 0,
+        "some block must run its matched control first"
+    );
     assert!(
         seed_sensitive,
         "these selected seeds must change at least one block's arm/control order"

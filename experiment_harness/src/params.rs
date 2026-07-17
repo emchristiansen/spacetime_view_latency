@@ -39,8 +39,9 @@ pub(crate) const EXPERIMENT_ISSUER: &str = "view-read-set-experiment";
 pub(crate) const BLOCK_ORDER_DOMAIN: &str = "view-read-set-experiment:block-order";
 
 /// Domain-separation label for the per-block arm/control run-order randomization, kept
-/// distinct from [`BLOCK_ORDER_DOMAIN`] so the two decisions derive independently (spec:
-/// "The arm/control order within each block is randomized").
+/// distinct from [`BLOCK_ORDER_DOMAIN`] so the arm/control bit is a distinct
+/// domain-separated derivation rather than a reuse of the block-order key (spec: "The
+/// arm/control order within each block is randomized").
 pub(crate) const ARM_CONTROL_ORDER_DOMAIN: &str = "view-read-set-experiment:arm-control-order";
 
 /// The fixed row payload written for every seeded row of every role. A single
