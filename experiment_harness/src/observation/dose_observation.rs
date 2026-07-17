@@ -6,6 +6,7 @@ use crate::dataset::campaign_dataset::CampaignDataset;
 use crate::dataset::dose_batch::DoseBatch;
 use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
+use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::plan::run_role::RunRole;
 use crate::observation::dose_coordinate::DoseCoordinate;
@@ -88,28 +89,46 @@ impl DoseObservation {
         self.coordinate.dose()
     }
 
-    /// A deterministic, internally coherent test fixture observation for the fixture manifest's own
-    /// run. It builds the fields directly (not through [`Self::assemble`], which calls the `todo!()`
-    /// [`LatencySummary::from_raw`]) but derives the coordinate and cardinalities through the *same*
-    /// production paths `assemble` uses — [`DoseCoordinate::new`] and
-    /// [`CampaignDataset::physical_cardinalities`] over the run's real resolved dataset and first
-    /// dose — so no field encodes a state impossible in production. Only the summary and the
-    /// not-yet-measured event evidence are supplied as coherent placeholders.
-    ///
-    /// Coherence: the run is own-slice growth (see [`RunCoordinate::fixture`]), so the driving role is
-    /// the measured subscriber and the first dose's intended own-slice growth is
-    /// [`BATCH_SIZE`](crate::params::BATCH_SIZE) brand-new logical rows. That dataset intent fixes only
-    /// the *cardinalities*; it proves neither a queried post-write result set nor any SDK-delivered net
-    /// delta. So the fixture merely *supplies* a mutually consistent hypothetical event decomposition
-    /// and net delta matching that intended growth (`BATCH_SIZE` inserts, 0 deletes, 0 updates, net
-    /// `+BATCH_SIZE`), and [`EventEvidence::checked`] proves only arithmetic agreement among those
-    /// supplied values (inserts − deletes = net delta) — never any runtime provenance, result-set
-    /// observation, or how the stock SDK would actually label a refresh. The all-1 ns samples agree
-    /// with the median-1/IQR-0 summary. Test-only: it exists so the sink's real
+    /// This observation's run coordinate, used to bind it to the active run before a durable write.
+    pub(crate) fn run_coordinate(&self) -> RunCoordinate {
+        self.coordinate.run()
+    }
+
+    /// The immutable manifest reference this observation keys to, used to bind it to the active run's
+    /// manifest receipt before a durable write.
+    pub(crate) fn manifest_ref(&self) -> &ManifestReference {
+        &self.manifest_ref
+    }
+
+    /// A deterministic, internally coherent test fixture observation for the fixture manifest's own run
+    /// and first dose. Delegates to [`Self::fixture_for`]. Test-only: it exists so the sink's real
     /// [`write_observation`](crate::observation::observation_sink::ObservationSink::write_observation)
     /// path can be exercised end-to-end.
     #[cfg(test)]
     pub(crate) fn fixture() -> Self {
+        let manifest = ValidatedRunManifest::fixture();
+        Self::fixture_for(&manifest, DoseIndex::ALL[0])
+    }
+
+    /// A deterministic, internally coherent test fixture observation for an arbitrary `manifest`'s run
+    /// and a specific `dose`. It builds the fields directly (not through [`Self::assemble`], which calls
+    /// the `todo!()` [`LatencySummary::from_raw`]) but derives the coordinate and cardinalities through
+    /// the *same* production paths `assemble` uses — [`DoseCoordinate::new`] and
+    /// [`CampaignDataset::physical_cardinalities`] over the run's real resolved dataset and the given
+    /// dose — so no field encodes a state impossible in production. The dataset is resolved for the
+    /// manifest run's actual role (arm or matched control), so the family, regime, and cardinalities are
+    /// coherent for that run. Only the summary and the not-yet-measured event evidence are supplied as
+    /// coherent placeholders.
+    ///
+    /// The `manifest_ref` is [`ManifestReference::of`] the given manifest, so every observation built
+    /// from one fixture manifest binds to that manifest's run — the exact binding a run cursor's
+    /// `write_observation` checks. The supplied event decomposition (`BATCH_SIZE` inserts, 0 deletes, 0
+    /// updates, net `+BATCH_SIZE`) is a mutually consistent hypothetical: [`EventEvidence::checked`]
+    /// proves only arithmetic agreement (inserts − deletes = net delta), never runtime provenance,
+    /// result-set observation, or how the stock SDK would actually label a refresh. The all-1 ns samples
+    /// agree with the median-1/IQR-0 summary.
+    #[cfg(test)]
+    pub(crate) fn fixture_for(manifest: &ValidatedRunManifest, dose: DoseIndex) -> Self {
         use std::time::Duration;
 
         use spacetimedb_sdk::Identity;
@@ -120,20 +139,23 @@ impl DoseObservation {
         use crate::params::{BATCH_SIZE, BATCH_SIZE_USIZE};
         use crate::roles::role_identities::RoleIdentities;
 
-        let manifest = ValidatedRunManifest::fixture();
         let run = manifest.run_coordinate();
         let cell = run.cell();
 
-        // Resolve the same run's real dataset and first dose. The measured identity is a fixture
+        // Resolve this run's real dataset for its actual role. The measured identity is a fixture
         // stand-in for the server-issued connection identity; the growth identity is derived and must
         // differ from it.
         let measured =
             Identity::from_claims("view-read-set-experiment-fixture", "fixture-measured");
         let identities = RoleIdentities::resolve(measured, manifest.schedule_seed(), cell)
             .expect("the fixture measured and growth identities are distinct");
-        let [arm_run, _control] = cell.matched_runs();
-        let dataset = CampaignDataset::resolve(arm_run, &identities);
-        let batch = DoseBatch::new(&dataset, DoseIndex::ALL[0]);
+        let [arm_run, control_run] = cell.matched_runs();
+        let source_run = match run.role() {
+            RunRole::Arm => arm_run,
+            RunRole::Control => control_run,
+        };
+        let dataset = CampaignDataset::resolve(source_run, &identities);
+        let batch = DoseBatch::new(&dataset, dose);
 
         let coordinate = DoseCoordinate::new(run, &dataset, &batch);
         let cardinalities = dataset.physical_cardinalities(&batch);
@@ -143,16 +165,15 @@ impl DoseObservation {
         let latencies =
             RawLatencies::sealed(samples).expect("the fixture supplies exactly BATCH_SIZE samples");
 
-        // Own-slice first dose: intended growth is BATCH_SIZE brand-new logical rows. The fixture
-        // supplies a mutually consistent hypothetical decomposition and net delta — neither a
-        // dataset-forced nor an observed value (see above). EventEvidence::checked proves only that
-        // inserts − deletes agrees with the supplied net delta, no runtime provenance.
+        // Supplied hypothetical decomposition and net delta — neither a dataset-forced nor an observed
+        // value (see above). EventEvidence::checked proves only that inserts − deletes agrees with the
+        // supplied net delta, no runtime provenance.
         let net_delta = i64::try_from(BATCH_SIZE).expect("BATCH_SIZE fits i64");
         let events = EventEvidence::checked(BATCH_SIZE, 0, 0, net_delta)
             .expect("the fixture event counts satisfy the net-delta identity");
 
         Self {
-            manifest_ref: ManifestReference::of(&manifest),
+            manifest_ref: ManifestReference::of(manifest),
             coordinate,
             cardinalities,
             latencies,

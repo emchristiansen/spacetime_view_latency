@@ -34,4 +34,10 @@ impl DoseCoordinate {
     pub(crate) fn dose(&self) -> DoseIndex {
         self.dose
     }
+
+    /// The run this observation belongs to, for binding a dose observation to its active run before a
+    /// durable write.
+    pub(crate) fn run(&self) -> RunCoordinate {
+        self.run.clone()
+    }
 }

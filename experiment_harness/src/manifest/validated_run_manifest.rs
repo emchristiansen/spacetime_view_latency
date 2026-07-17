@@ -98,27 +98,42 @@ impl ValidatedRunManifest {
         self.schedule_seed
     }
 
-    /// A deterministic test fixture manifest, value-constructing every immutable fact directly rather
-    /// than reading them out of a live [`VerifiedDistribution`]/[`RunningPinnedServer`] — which would
-    /// require spawning the pinned 2.6.1 standalone. Test-only: it is **not** a production
-    /// construction path (production manifests come solely from [`Self::assemble`] over real live
-    /// capabilities) and mints no liveness claim — every fact is a fixed placeholder. It exists so the
-    /// sink's real [`write_manifest`](crate::observation::observation_sink::ObservationSink::write_manifest)
-    /// path can be exercised end-to-end.
+    /// A deterministic test fixture manifest for the fixture run coordinate — the fixed own-slice
+    /// point-filter arm (see [`RunCoordinate::fixture`]) — under schedule seed `0`. Delegates to
+    /// [`Self::fixture_for`]. Test-only: it is **not** a production construction path and mints no
+    /// liveness claim.
     #[cfg(test)]
     pub(crate) fn fixture() -> Self {
+        use crate::manifest::run_coordinate::RunCoordinate;
+
+        Self::fixture_for(RunCoordinate::fixture(), 0)
+    }
+
+    /// A deterministic test fixture manifest for an arbitrary `run` under an explicit campaign
+    /// `schedule_seed`, value-constructing every other immutable fact directly rather than reading them
+    /// out of a live [`VerifiedDistribution`]/[`RunningPinnedServer`] — which would require spawning the
+    /// pinned 2.6.1 standalone. Every other fact is a fixed placeholder; the run coordinate and the
+    /// schedule seed are the exact scheduled values, so the manifest's provenance (and the
+    /// [`ManifestReference`](crate::observation::manifest_reference::ManifestReference) derived from run +
+    /// database identity + seed) matches the run the campaign actually drew at that seed. Two manifests
+    /// built for the same run and seed share one reference. Test-only: it is **not** a production
+    /// construction path (production manifests come solely from [`Self::assemble`] over real live
+    /// capabilities) and mints no liveness claim. It exists so a run cursor's real
+    /// [`write_manifest`](crate::observation::observation_sink::ObservationSink::write_manifest) binding
+    /// can be exercised for any scheduled run, not only the fixture coordinate.
+    #[cfg(test)]
+    pub(crate) fn fixture_for(run: RunCoordinate, schedule_seed: u64) -> Self {
         use std::num::NonZeroU32;
 
         use spacetimedb_sdk::Identity;
 
         use crate::manifest::database_identity::DatabaseIdentity;
-        use crate::manifest::run_coordinate::RunCoordinate;
         use crate::manifest::server_pid::ServerPid;
         use crate::manifest::wasm_sha256::WasmSha256;
 
         Self {
-            run: RunCoordinate::fixture(),
-            schedule_seed: ScheduleSeed::new(0),
+            run,
+            schedule_seed: ScheduleSeed::new(schedule_seed),
             parameters: PreregisteredParameters::preregistered(),
             distribution: DistributionFacts {
                 nix_store_bin_dir: PathBuf::from("/fixture/nix/store/bin"),

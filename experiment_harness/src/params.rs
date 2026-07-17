@@ -24,6 +24,18 @@ pub(crate) const BATCH_SIZE_USIZE: usize = {
 /// Number of cumulative doses (`1,000, 2,000, …, 10,000`).
 pub(crate) const NUM_DOSES: u64 = 10;
 
+/// [`NUM_DOSES`] as a `usize`, for use as an array/iterator length bound. Guarded by a compile-time
+/// round-trip assertion rather than a bare `as` cast, mirroring [`BATCH_SIZE_USIZE`], so a platform on
+/// which the value does not fit a `usize` fails to compile instead of silently truncating.
+pub(crate) const NUM_DOSES_USIZE: usize = {
+    let as_usize = NUM_DOSES as usize;
+    assert!(
+        as_usize as u64 == NUM_DOSES,
+        "NUM_DOSES does not fit in usize on this platform"
+    );
+    as_usize
+};
+
 /// The measured identity M's pinned result-slice size in `UnrelatedGrowth` — held
 /// fixed while the growth driver G alone drives `N_total` (spec: "Dataset and
 /// multi-identity design"; Implementation-Time Decision "Preregister concrete

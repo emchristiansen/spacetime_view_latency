@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
+mod dose_write_receipt;
 mod manifest_write_receipt;
 
+pub(crate) use dose_write_receipt::DoseWriteReceipt;
 pub(crate) use manifest_write_receipt::ManifestWriteReceipt;
 
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
@@ -139,11 +141,14 @@ impl ObservationSink {
         Ok(ManifestWriteReceipt::new(reference, seq))
     }
 
-    /// Durably append one dose observation record, tagged with its ladder index.
+    /// Durably append one dose observation record, tagged with its ladder index. Returns a
+    /// [`DoseWriteReceipt`] binding the exact assigned [`RecordId`] and the observation's dose, minted
+    /// only after the persist returns success, so a run cursor advances its dose ladder on the actual
+    /// written record rather than a caller-claimed sequence or dose.
     pub(crate) fn write_observation(
         &mut self,
         observation: &DoseObservation,
-    ) -> std::result::Result<RecordSeq, PersistError> {
+    ) -> std::result::Result<DoseWriteReceipt, PersistError> {
         let record = RecordId::new(self.next_seq, RecordKind::Dose(observation.dose()));
         self.persist(
             record,
@@ -151,7 +156,8 @@ impl ObservationSink {
                 record,
                 body: ObservationBody { observation },
             },
-        )
+        )?;
+        Ok(DoseWriteReceipt::new(record, observation.dose()))
     }
 
     /// Serialize one line and persist it durably through the writer. If the sink is already poisoned,

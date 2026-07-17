@@ -6,8 +6,6 @@
 
 use crate::observation::dose_observation::DoseObservation;
 use crate::observation::observation_sink::ObservationSink;
-use crate::observation::record_id::RecordId;
-use crate::observation::record_kind::RecordKind;
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 
 use super::capturing_writer::CapturingWriter;
@@ -24,15 +22,20 @@ fn written_line_carries_the_assigned_record_identity() {
         .expect("the manifest line seam returns success");
     assert_eq!(receipt.seq().get(), 0, "the manifest is the first record");
 
-    // The real observation write path returns the assigned sequence.
+    // The real observation write path returns a receipt binding the assigned record and its dose.
     let observation = DoseObservation::fixture();
-    let observation_seq = sink
+    let observation_receipt = sink
         .write_observation(&observation)
         .expect("the observation line seam returns success");
     assert_eq!(
-        observation_seq.get(),
+        observation_receipt.record().seq().get(),
         1,
         "the observation follows the manifest in sequence"
+    );
+    assert_eq!(
+        observation_receipt.dose(),
+        observation.dose(),
+        "the receipt binds the observation's actual dose"
     );
 
     sink.finalize()
@@ -53,11 +56,10 @@ fn written_line_carries_the_assigned_record_identity() {
     // The observation line serializes {seq: 1, Dose(index)}, agreeing with the returned sequence.
     let observation_line: serde_json::Value =
         serde_json::from_slice(&captured[1]).expect("the observation line is valid JSON");
-    let expected_observation_record =
-        RecordId::new(observation_seq, RecordKind::Dose(observation.dose()));
     assert_eq!(
         observation_line["record"],
-        serde_json::to_value(expected_observation_record).expect("the record identity serializes"),
+        serde_json::to_value(observation_receipt.record())
+            .expect("the record identity serializes"),
         "the observation line serializes its assigned {{seq, Dose}} identity"
     );
 }
