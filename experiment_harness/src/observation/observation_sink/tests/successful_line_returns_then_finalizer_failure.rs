@@ -25,9 +25,7 @@ fn successful_line_returns_then_finalizer_failure() {
     match sink.finalize() {
         Err(e) => {
             assert!(e.prior().is_none(), "there is no prior poison reason");
-            let sync_failures = e
-                .sync_failures()
-                .expect("the finalizer reported failure");
+            let sync_failures = e.sync_failures().expect("the finalizer reported failure");
             assert!(
                 sync_failures.file().is_some() && sync_failures.directory().is_some(),
                 "the scripted finalizer reports both the file and directory sync as failed"

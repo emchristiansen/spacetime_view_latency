@@ -27,9 +27,9 @@ impl ToolVersionLine {
         let (tool_str, rest) = rest
             .split_once(Self::SEP)
             .with_context(|| format!("version line missing {:?} separator: {line:?}", Self::SEP))?;
-        let lib_str = rest
-            .strip_suffix(Self::SUFFIX)
-            .with_context(|| format!("version line missing trailing {:?}: {line:?}", Self::SUFFIX))?;
+        let lib_str = rest.strip_suffix(Self::SUFFIX).with_context(|| {
+            format!("version line missing trailing {:?}: {line:?}", Self::SUFFIX)
+        })?;
 
         let tool = Version::parse(tool_str)
             .with_context(|| format!("tool version is not semver: {tool_str:?}"))?;

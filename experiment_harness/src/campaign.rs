@@ -17,8 +17,11 @@
 //! - The single required output stream ([`ObservationSink`](crate::observation::observation_sink)) is
 //!   owned by the campaign and threaded by move through the run states, so its write receipts never
 //!   escape to a sibling and it is always recovered for exactly one finalize.
-//! - A run advances `WritingManifest → Dosing → Disconnecting → Teardown → complete`; `RunComplete` is
-//!   minted only by the teardown transition, so a run cannot complete before disconnect and teardown.
+//! - A run advances `WritingManifest → Dosing → (exhausted | stopped)`, then its linear cleanup owner
+//!   ([`run_cleanup::RunCleanup`]) attempts the ordered client disconnect then server teardown and mints
+//!   the terminal; `RunComplete` is minted only after a clean cleanup, so a run cannot complete before its
+//!   client and server have been cleaned up, and a simultaneous execution-and-cleanup failure is retained
+//!   as typed structure.
 //!
 //! This entry file is declarative module declarations only.
 
@@ -26,16 +29,22 @@ mod block_frontier;
 mod campaign_frontier;
 mod campaign_incomplete;
 mod campaign_outcome;
-mod disconnect_reported;
+mod effect_stage;
 mod finalization_outcome;
 mod latest_progress;
+mod run_cleanup_failure;
+mod run_cleanup_outcome;
 mod run_frontier;
+mod run_incompletion;
 mod run_stage;
-mod teardown_reported;
+mod run_stop_evidence;
+mod sink_write_stage;
 
 mod block_cursor;
 mod campaign_cursor;
+mod run_cleanup;
 mod run_cursor;
+mod run_driver;
 
 #[cfg(test)]
 mod tests;

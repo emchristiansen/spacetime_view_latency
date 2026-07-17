@@ -35,7 +35,11 @@ impl VerifiedStandalone {
         let lines = strict_version_lines(raw, 1)?;
 
         let core = lines[0].strip_prefix(Self::PREFIX).with_context(|| {
-            format!("standalone --version missing {:?} prefix: {:?}", Self::PREFIX, lines[0])
+            format!(
+                "standalone --version missing {:?} prefix: {:?}",
+                Self::PREFIX,
+                lines[0]
+            )
         })?;
         let versions = ToolVersionLine::parse(core)?;
 

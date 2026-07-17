@@ -59,7 +59,8 @@ impl VerifiedDistribution {
         let standalone_exe = resolve_executable(&store_bin_dir, STANDALONE_EXE_NAME)?;
 
         let cli = VerifiedCli::parse(&cli_exe, &run_version(&cli_exe)?)?;
-        let standalone = VerifiedStandalone::parse(&standalone_exe, &run_version(&standalone_exe)?)?;
+        let standalone =
+            VerifiedStandalone::parse(&standalone_exe, &run_version(&standalone_exe)?)?;
 
         Ok(Self {
             store_bin_dir,

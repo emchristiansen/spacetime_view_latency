@@ -24,7 +24,11 @@ fn directory_sync_runs_even_when_file_sync_fails() {
         },
     );
 
-    assert_eq!(file_attempts.get(), 1, "the file sync is attempted exactly once");
+    assert_eq!(
+        file_attempts.get(),
+        1,
+        "the file sync is attempted exactly once"
+    );
     assert_eq!(
         directory_attempts.get(),
         1,

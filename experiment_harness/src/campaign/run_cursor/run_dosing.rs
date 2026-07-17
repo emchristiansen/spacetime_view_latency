@@ -10,14 +10,15 @@ use crate::observation::record_id::RecordId;
 use crate::params::NUM_DOSES_USIZE;
 
 use super::RunAwaitingDose;
-use super::RunDisconnecting;
 use super::RunDoseStep;
+use super::RunExecuted;
 
 /// A run part-way through its dose ladder: it owns the sink, its coordinate, the manifest receipt its
 /// observations key to, the remaining dose iterator, and the last record and dose whose writer contract
 /// returned success. [`Self::next_dose`] draws the next dose from the iterator — advancing to
-/// [`RunAwaitingDose`] — or, when the iterator is drained, advances to [`RunDisconnecting`]. Progress is
-/// gated on the iterator, never a count.
+/// [`RunAwaitingDose`] — or, when the iterator is drained, advances to [`RunExecuted`] (the inert
+/// exhausted-execution carrier the run's linear cleanup owner consumes). Progress is gated on the
+/// iterator, never a count.
 ///
 /// `last_record` is a required [`RecordId`], not an `Option`: this state is reachable only after the
 /// manifest write's contract returned success, so a last successful record always exists here (it is the
@@ -75,13 +76,13 @@ impl RunDosing {
 
     /// Draw the next dose. If the ladder iterator yields one, await its observation ([`RunAwaitingDose`]);
     /// when the iterator is drained, every dose's write contract has returned success, so advance to
-    /// [`RunDisconnecting`] — dropping the manifest receipt, which is no longer needed once no more
+    /// [`RunExecuted`] — dropping the manifest receipt, which is no longer needed once no more
     /// observations will be written.
     ///
     /// The `last_dose` `Option` is converted to a required [`DoseIndex`] exactly here, at the exhaustion
     /// edge, with a loud invariant check: the ten-dose ladder is nonempty and drains only by ten dose
     /// writes whose contracts returned success, so a last dose observation whose writer contract returned
-    /// success always exists once the iterator is empty. Past this edge (`RunDisconnecting` onward) the
+    /// success always exists once the iterator is empty. Past this edge (`RunExecuted` onward) the
     /// marker is required, so `last_dose: None` is unrepresentable there.
     pub(in crate::campaign) fn next_dose(self) -> RunDoseStep {
         let mut doses = self.doses;
@@ -99,7 +100,7 @@ impl RunDosing {
                 let last_dose = self.last_dose.expect(
                     "the ten-dose ladder is nonempty, so exhaustion follows at least one dose observation whose writer contract returned success",
                 );
-                RunDoseStep::Exhausted(RunDisconnecting::new(
+                RunDoseStep::Exhausted(RunExecuted::new(
                     self.sink,
                     self.coord,
                     self.last_record,

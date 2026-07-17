@@ -25,7 +25,10 @@ fn serialization_failure_is_definitely_not_written() {
     assert_eq!(first.tail_state(), TailState::DefinitelyNotWritten);
     assert_eq!(sink.pending_seq(), RecordSeq::zero());
     assert_eq!(sink.last_durable_seq(), None);
-    assert!(sink.poisoned().is_some(), "the sink is terminal after the failure");
+    assert!(
+        sink.poisoned().is_some(),
+        "the sink is terminal after the failure"
+    );
 
     // A later, perfectly serializable value is still refused, with no attempted record of its own,
     // and the retained original state stays definitely-not-written.
@@ -49,7 +52,10 @@ fn serialization_failure_is_definitely_not_written() {
     match sink.finalize() {
         Err(e) => {
             assert!(e.prior().is_some(), "the prior poison reason is retained");
-            assert!(e.sync_failures().is_none(), "the final sync itself succeeded");
+            assert!(
+                e.sync_failures().is_none(),
+                "the final sync itself succeeded"
+            );
             assert!(
                 !e.is_durability_ambiguous(),
                 "a pre-write poison leaves the tail clean, not ambiguous"

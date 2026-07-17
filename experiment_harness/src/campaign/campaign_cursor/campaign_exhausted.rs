@@ -29,11 +29,7 @@ impl CampaignExhausted {
     /// state. `pub(super)` so only [`CampaignReady::next_block`](super::CampaignReady), at the block
     /// iterator's exhaustion edge, mints one — no other caller can assemble this state from arbitrary
     /// sink/seed/progress parts.
-    pub(super) fn new(
-        sink: ObservationSink,
-        seed: u64,
-        progress: LatestProgress,
-    ) -> Self {
+    pub(super) fn new(sink: ObservationSink, seed: u64, progress: LatestProgress) -> Self {
         Self {
             sink,
             seed,

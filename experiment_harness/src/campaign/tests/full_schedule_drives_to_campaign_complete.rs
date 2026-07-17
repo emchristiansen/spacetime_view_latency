@@ -26,7 +26,11 @@ fn full_schedule_drives_to_campaign_complete() {
     let outcome = drive::drive_full_schedule(drive::SEED, DrivingWriter::always_ok());
     match outcome {
         CampaignOutcome::Complete(complete) => {
-            assert_eq!(complete.seed(), drive::SEED, "the completion names the campaign seed");
+            assert_eq!(
+                complete.seed(),
+                drive::SEED,
+                "the completion names the campaign seed"
+            );
             let progress = complete.progress();
             assert!(
                 progress.last_block().is_some(),

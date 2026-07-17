@@ -14,8 +14,9 @@ pub(crate) struct ListenAddress(SocketAddr);
 impl ListenAddress {
     /// Parse an explicit `host:port` listen address.
     pub(crate) fn parse(raw: &str) -> Result<Self> {
-        let addr = SocketAddr::from_str(raw)
-            .with_context(|| format!("invalid listen address {raw:?}; expected explicit host:port"))?;
+        let addr = SocketAddr::from_str(raw).with_context(|| {
+            format!("invalid listen address {raw:?}; expected explicit host:port")
+        })?;
         Ok(Self(addr))
     }
 

@@ -38,8 +38,8 @@ impl EventEvidence {
             "delivered event net row delta (inserts {inserts} − deletes {deletes} = {event_net}) \
              disagrees with the queried post-write net delta {queried_net_delta}"
         );
-        let delivered_net_row_delta = i64::try_from(event_net)
-            .context("delivered net row delta does not fit i64")?;
+        let delivered_net_row_delta =
+            i64::try_from(event_net).context("delivered net row delta does not fit i64")?;
         Ok(Self {
             delivered_net_row_delta,
             inserts,

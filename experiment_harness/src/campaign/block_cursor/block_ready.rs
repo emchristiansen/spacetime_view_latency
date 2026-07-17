@@ -46,7 +46,11 @@ impl BlockReady {
     /// Begin a fresh block. Derives the block's seed-ordered `[Run; 2]` internally from its own
     /// `block_run` and the schedule seed — the caller supplies neither the run collection nor its order —
     /// and encodes no completed run. `pub(in crate::campaign)` so only a campaign cursor starts a block.
-    pub(in crate::campaign) fn begin(sink: ObservationSink, block_run: BlockRun, seed: u64) -> Self {
+    pub(in crate::campaign) fn begin(
+        sink: ObservationSink,
+        block_run: BlockRun,
+        seed: u64,
+    ) -> Self {
         let runs = block_run.ordered_runs(seed).into_iter();
         Self {
             sink,

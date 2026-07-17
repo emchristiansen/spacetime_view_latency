@@ -20,11 +20,16 @@ fn prior_failure_and_finalize_sync_failure_retain_both() {
         matches!(first, PersistError::DurabilityAmbiguous { .. }),
         "a seam failure is conservatively classified durability-ambiguous, got {first:?}"
     );
-    assert!(sink.poisoned().is_some(), "the sink is terminal after the failure");
+    assert!(
+        sink.poisoned().is_some(),
+        "the sink is terminal after the failure"
+    );
 
     match sink.finalize() {
         Err(e) => {
-            let prior = e.prior().expect("the prior ambiguous poison reason is retained");
+            let prior = e
+                .prior()
+                .expect("the prior ambiguous poison reason is retained");
             assert_eq!(prior.tail_state(), TailState::DurabilityAmbiguous);
             let sync_failures = e
                 .sync_failures()

@@ -49,7 +49,10 @@ impl Schedule {
     /// without minting one directly.
     pub(crate) fn canonical_block(&self, cell_index: usize, block_index: u32) -> Result<BlockRun> {
         let &cell = self.cells.get(cell_index).with_context(|| {
-            format!("cell index {cell_index} out of range 0..{}", self.cells.len())
+            format!(
+                "cell index {cell_index} out of range 0..{}",
+                self.cells.len()
+            )
         })?;
         ensure!(
             block_index < Self::BLOCKS_PER_CELL,
@@ -64,7 +67,9 @@ impl Schedule {
     fn all_blocks(&self) -> Vec<BlockRun> {
         self.cells
             .iter()
-            .flat_map(|&cell| (0..Self::BLOCKS_PER_CELL).map(move |block_index| BlockRun::new(cell, block_index)))
+            .flat_map(|&cell| {
+                (0..Self::BLOCKS_PER_CELL).map(move |block_index| BlockRun::new(cell, block_index))
+            })
             .collect()
     }
 

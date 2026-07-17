@@ -8,21 +8,21 @@ use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
 use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
-use crate::plan::run_role::RunRole;
 use crate::observation::dose_coordinate::DoseCoordinate;
 use crate::observation::dose_evidence::DoseEvidence;
 use crate::observation::event_evidence::EventEvidence;
 use crate::observation::latency_summary::LatencySummary;
 use crate::observation::manifest_reference::ManifestReference;
 use crate::observation::raw_latencies::RawLatencies;
+use crate::plan::run_role::RunRole;
 
 /// The record *schema* for one cumulative dose: a reference to the immutable run manifest, the
 /// schedule/ladder coordinate, both physical table cardinalities, the lossless raw latency vector,
 /// its derived median/IQR summary, and the SDK logical event evidence. It is designed to be compact
 /// yet sufficient to reproduce every reported summary and classification (spec: "A per-dose object
 /// containing the full raw vector is compact while still sufficient to reproduce every summary").
-/// It is a skeleton until the measurement milestone: [`LatencySummary::from_raw`] is `todo!()` and
-/// no event transition yet populates the evidence.
+/// It is a skeleton until the measurement milestone: no run driver yet assembles one from real
+/// measured latencies and delivered SDK events.
 ///
 /// [`Self::assemble`] takes the real [`ValidatedRunManifest`] and derives the manifest reference and
 /// coordinate from it — there is no independent `reference`/`run` argument to mismatch — and
@@ -111,8 +111,9 @@ impl DoseObservation {
     }
 
     /// A deterministic, internally coherent test fixture observation for an arbitrary `manifest`'s run
-    /// and a specific `dose`. It builds the fields directly (not through [`Self::assemble`], which calls
-    /// the `todo!()` [`LatencySummary::from_raw`]) but derives the coordinate and cardinalities through
+    /// and a specific `dose`. It builds the fields directly (not through [`Self::assemble`], which
+    /// consumes a real [`DoseEvidence`] a no-I/O fixture cannot produce) but derives the coordinate and
+    /// cardinalities through
     /// the *same* production paths `assemble` uses — [`DoseCoordinate::new`] and
     /// [`CampaignDataset::physical_cardinalities`] over the run's real resolved dataset and the given
     /// dose — so no field encodes a state impossible in production. The dataset is resolved for the

@@ -60,13 +60,14 @@ impl BlockRunningRun {
     /// failure cannot be lifted into this block; a mismatch is a wiring bug and fails loud. The block
     /// holds at most one outstanding run, so exactly one run frontier is possible.
     pub(in crate::campaign) fn abort(self, incomplete: RunIncomplete) -> BlockIncomplete {
-        let (sink, frontier) = incomplete.into_parts();
+        let (sink, incompletion) = incomplete.into_parts();
         assert_eq!(
-            frontier.run(),
+            incompletion.run(),
             &self.run_coord,
             "the stopped run's coordinate must match the outstanding run's coordinate"
         );
-        let block_frontier = BlockFrontier::new(BlockCoordinate::of(&self.block_run), Some(frontier));
+        let block_frontier =
+            BlockFrontier::new(BlockCoordinate::of(&self.block_run), Some(incompletion));
         BlockIncomplete::new(sink, block_frontier)
     }
 }

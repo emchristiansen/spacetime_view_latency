@@ -22,11 +22,12 @@ impl ReleaseCommit {
     /// before decoding to keep the canonical-form invariant honest.
     pub(crate) fn parse(raw: &str) -> Result<Self> {
         ensure!(
-            raw.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            raw.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "release commit must be exact lowercase hex: {raw:?}"
         );
-        let bytes =
-            hex::decode(raw).with_context(|| format!("release commit is not valid hex: {raw:?}"))?;
+        let bytes = hex::decode(raw)
+            .with_context(|| format!("release commit is not valid hex: {raw:?}"))?;
         let bytes: [u8; 20] = bytes
             .as_slice()
             .try_into()

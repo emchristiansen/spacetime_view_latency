@@ -82,11 +82,9 @@ impl CampaignReady {
                     CampaignRunningBlock::new(self.seed, blocks, block_coord, self.progress);
                 CampaignStep::Running { block, resume }
             }
-            None => CampaignStep::Exhausted(CampaignExhausted::new(
-                self.sink,
-                self.seed,
-                self.progress,
-            )),
+            None => {
+                CampaignStep::Exhausted(CampaignExhausted::new(self.sink, self.seed, self.progress))
+            }
         }
     }
 }

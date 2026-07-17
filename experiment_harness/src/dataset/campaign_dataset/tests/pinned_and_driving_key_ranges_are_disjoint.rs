@@ -32,8 +32,11 @@ fn pinned_and_driving_key_ranges_are_disjoint() {
             .expect("measured and growth identities must be distinct");
         let dataset = CampaignDataset::resolve(cell.matched_runs()[0], &identities);
 
-        let pinned: BTreeSet<u64> =
-            dataset.background_operations().into_iter().map(message_key).collect();
+        let pinned: BTreeSet<u64> = dataset
+            .background_operations()
+            .into_iter()
+            .map(message_key)
+            .collect();
         let mut driving = BTreeSet::new();
         dataset
             .for_each_dose(|batch| {

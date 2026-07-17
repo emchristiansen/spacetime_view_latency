@@ -15,7 +15,10 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod confirmation_set;
 pub(crate) mod dose_coordinate;
+pub(crate) mod dose_event_counter;
+pub(crate) mod dose_event_counts;
 pub(crate) mod dose_evidence;
 pub(crate) mod dose_latency_accumulator;
 pub(crate) mod dose_observation;

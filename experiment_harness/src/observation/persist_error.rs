@@ -17,9 +17,15 @@ use crate::observation::tail_state::TailState;
 #[derive(Debug)]
 pub(crate) enum PersistError {
     /// The record could not be serialized; no bytes were written and it is definitely absent.
-    BeforeWrite { record: RecordId, diagnostic: String },
+    BeforeWrite {
+        record: RecordId,
+        diagnostic: String,
+    },
     /// A write/flush/sync step failed after serialization; the record's durability is unknown.
-    DurabilityAmbiguous { record: RecordId, diagnostic: String },
+    DurabilityAmbiguous {
+        record: RecordId,
+        diagnostic: String,
+    },
     /// The write was refused because a prior failure had already poisoned the sink. The refused
     /// successor wrote nothing and has no attempted record; the original poison reason is retained.
     SinkPoisoned { original: PoisonedTail },

@@ -14,18 +14,18 @@ use crate::campaign::campaign_cursor::CampaignReady;
 use crate::campaign::campaign_cursor::CampaignRunningBlock;
 use crate::campaign::campaign_cursor::CampaignStep;
 use crate::campaign::campaign_outcome::CampaignOutcome;
-use crate::campaign::disconnect_reported::DisconnectReported;
-use crate::campaign::run_cursor::RunDoseStep;
+use crate::campaign::run_cleanup;
 use crate::campaign::run_cursor::RunDone;
+use crate::campaign::run_cursor::RunDoseStep;
 use crate::campaign::run_cursor::RunManifestStep;
 use crate::campaign::run_cursor::RunObservationStep;
+use crate::campaign::run_cursor::RunSettled;
 use crate::campaign::run_cursor::RunWritingManifest;
-use crate::campaign::teardown_reported::TeardownReported;
 use crate::dataset::dose_index::DoseIndex;
 use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
-use crate::observation::durable_line_writer::DurableLineWriter;
 use crate::observation::dose_observation::DoseObservation;
+use crate::observation::durable_line_writer::DurableLineWriter;
 use crate::observation::observation_sink::ObservationSink;
 use crate::plan::schedule::BlockCoordinate;
 use crate::plan::schedule::BlockRun;
@@ -36,9 +36,11 @@ use crate::plan::schedule::Schedule;
 pub(super) const SEED: u64 = 0x5EED_C0DE;
 
 /// Drive one run from its manifest-writing state to a completed [`RunDone`] using an always-succeeding
-/// writer: write the manifest, write all ten dose observations in ladder order, then disconnect and tear
-/// down. The manifest and every observation are fixtures for `coord` under `seed`, so each cursor
-/// coordinate/manifest/dose binding must match.
+/// writer: write the manifest, write all ten dose observations in ladder order, then settle the exhausted
+/// run through a no-I/O **reported** clean cleanup. The manifest and every observation are fixtures for
+/// `coord` under `seed`, so each cursor coordinate/manifest/dose binding must match. The reported cleanup
+/// performs the terminal typestate move only — it opens no socket and tears down no server (see
+/// [`run_cleanup::settle_executed_reported`]).
 pub(super) fn drive_run_to_completion(
     writing: RunWritingManifest,
     coord: &RunCoordinate,
@@ -46,8 +48,8 @@ pub(super) fn drive_run_to_completion(
 ) -> RunDone {
     let manifest = ValidatedRunManifest::fixture_for(coord.clone(), seed);
     let mut dosing = match writing.write_manifest(&manifest) {
-        RunManifestStep::Dosing(dosing) => dosing,
-        RunManifestStep::Incomplete(_) => {
+        RunManifestStep::Seeding(seeding) => seeding.seeded().checked(),
+        RunManifestStep::Stopped(_) => {
             panic!("the always-ok writer must let the manifest write succeed")
         }
     };
@@ -61,17 +63,21 @@ pub(super) fn drive_run_to_completion(
         let observation = DoseObservation::fixture_for(&manifest, dose);
         dosing = match awaiting.write_observation(&observation) {
             RunObservationStep::Dosing(dosing) => dosing,
-            RunObservationStep::Incomplete(_) => {
+            RunObservationStep::Stopped(_) => {
                 panic!("the always-ok writer must let each dose write succeed")
             }
         };
     }
-    let disconnecting = match dosing.next_dose() {
-        RunDoseStep::Exhausted(disconnecting) => disconnecting,
+    let executed = match dosing.next_dose() {
+        RunDoseStep::Exhausted(executed) => executed,
         RunDoseStep::Awaiting(_) => panic!("the ladder must exhaust after exactly ten doses"),
     };
-    let teardown = disconnecting.disconnect(DisconnectReported::reported());
-    teardown.teardown(TeardownReported::reported())
+    match run_cleanup::settle_executed_reported(executed) {
+        RunSettled::Done(done) => done,
+        RunSettled::Incomplete(_) => {
+            panic!("a clean reported cleanup after full exhaustion completes the run")
+        }
+    }
 }
 
 /// Drive one block through its two runs to a completed [`BlockDone`], computing each run's coordinate
@@ -88,7 +94,10 @@ pub(super) fn drive_block(mut ready: BlockReady, block_run: &BlockRun, seed: u64
                 run_idx += 1;
             }
             BlockStep::Exhausted(done) => {
-                assert_eq!(run_idx, 2, "a block runs exactly its two runs before exhausting");
+                assert_eq!(
+                    run_idx, 2,
+                    "a block runs exactly its two runs before exhausting"
+                );
                 return done;
             }
         }

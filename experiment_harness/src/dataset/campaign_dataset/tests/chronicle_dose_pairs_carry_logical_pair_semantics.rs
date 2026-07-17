@@ -47,8 +47,7 @@ fn chronicle_dose_pairs_carry_logical_pair_semantics() {
             // Every op is a Chronicle pair; the op count is the LOGICAL pair count, not physical.
             let logical_pairs = ops.len();
             assert_eq!(
-                logical_pairs,
-                BATCH_SIZE as usize,
+                logical_pairs, BATCH_SIZE as usize,
                 "each dose is exactly BATCH_SIZE logical pairs"
             );
             assert_eq!(
@@ -61,8 +60,14 @@ fn chronicle_dose_pairs_carry_logical_pair_semantics() {
                 match op {
                     SeedOp::ChroniclePair { key, viewer } => {
                         assert_eq!(viewer, identities.growth(), "doses are attributed to G");
-                        assert!(key >= GROWTH_KEY_BASE, "pairs are keyed in the growth space");
-                        assert!(all_pair_keys.insert(key), "pair keys are unique across the ladder");
+                        assert!(
+                            key >= GROWTH_KEY_BASE,
+                            "pairs are keyed in the growth space"
+                        );
+                        assert!(
+                            all_pair_keys.insert(key),
+                            "pair keys are unique across the ladder"
+                        );
                     }
                     other => panic!("expected a Chronicle-family op, got {other:?}"),
                 }
@@ -92,7 +97,9 @@ fn chronicle_dose_pairs_carry_logical_pair_semantics() {
                         "the Chronicle tables carry equal counts"
                     );
                 }
-                other => panic!("Chronicle family must yield Chronicle cardinalities, got {other:?}"),
+                other => {
+                    panic!("Chronicle family must yield Chronicle cardinalities, got {other:?}")
+                }
             }
             assert_eq!(
                 cardinalities.total_physical_rows(),

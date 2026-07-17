@@ -42,7 +42,11 @@ fn resolve_maps_unrelated_regime_roles() {
     for op in &background {
         match *op {
             SeedOp::Message { id, sender } => {
-                assert_eq!(sender, identities.measured(), "background is attributed to M");
+                assert_eq!(
+                    sender,
+                    identities.measured(),
+                    "background is attributed to M"
+                );
                 assert!(
                     (MEASURED_KEY_BASE..MEASURED_KEY_BASE + M_SLICE_ROWS).contains(&id),
                     "background keys stay in M's slice"

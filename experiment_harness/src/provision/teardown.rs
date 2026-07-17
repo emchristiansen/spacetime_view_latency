@@ -48,16 +48,13 @@ pub(crate) fn reap_child(mut child: Child, errors: &mut Vec<Error>) {
         // uniquely owned and not yet reaped, so its pid cannot have been recycled; never leave a
         // possible survivor un-killed just because status inspection failed.
         Err(e) => {
-            errors.push(
-                Error::new(e)
-                    .context(format!("polling the server child process (pid {pid}) before kill")),
-            );
+            errors.push(Error::new(e).context(format!(
+                "polling the server child process (pid {pid}) before kill"
+            )));
             if let Err(e) = child.kill() {
-                errors.push(
-                    Error::new(e).context(format!(
-                        "killing the server child process (pid {pid}) after a poll error"
-                    )),
-                );
+                errors.push(Error::new(e).context(format!(
+                    "killing the server child process (pid {pid}) after a poll error"
+                )));
             }
         }
     }

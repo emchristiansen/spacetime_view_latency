@@ -19,8 +19,8 @@ fn write_observation_rejects_a_foreign_dose() {
     let first = drive::open_first_run(drive::SEED, DrivingWriter::always_ok());
     let manifest = ValidatedRunManifest::fixture_for(first.coord.clone(), drive::SEED);
     let dosing = match first.writing.write_manifest(&manifest) {
-        RunManifestStep::Dosing(dosing) => dosing,
-        RunManifestStep::Incomplete(_) => panic!("the manifest write must succeed"),
+        RunManifestStep::Seeding(seeding) => seeding.seeded().checked(),
+        RunManifestStep::Stopped(_) => panic!("the manifest write must succeed"),
     };
     let awaiting = match dosing.next_dose() {
         RunDoseStep::Awaiting(awaiting) => awaiting,

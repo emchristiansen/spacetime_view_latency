@@ -108,7 +108,10 @@ impl RunningPinnedServer {
     /// so every fallible step after that point routes its error(s) — together with an explicit
     /// child-reap (if spawned) and data-directory cleanup — through [`into_error`], and the
     /// asserting `Self` is built only on the fully-proven success path.
-    pub(crate) fn start(distribution: &VerifiedDistribution, listen: ListenAddress) -> Result<Self> {
+    pub(crate) fn start(
+        distribution: &VerifiedDistribution,
+        listen: ListenAddress,
+    ) -> Result<Self> {
         // No owned resource yet — a plain `?` is safe here (spec: "check the selected listen
         // address is free"). `--non-interactive` closes the residual TOCTOU window server-side.
         ensure_listen_addr_free(listen)?;
@@ -163,7 +166,9 @@ impl RunningPinnedServer {
             .arg(YES_FLAG)
             .arg(NO_CONFIG_FLAG)
             .output()
-            .with_context(|| format!("running {:?} {PUBLISH_SUBCOMMAND}", distribution.cli_exe()))?;
+            .with_context(|| {
+                format!("running {:?} {PUBLISH_SUBCOMMAND}", distribution.cli_exe())
+            })?;
 
         // Operational failure: lossy rendering is fine for diagnostics only.
         ensure!(
@@ -398,7 +403,8 @@ fn read_captured_stream(path: PathBuf, read_failures: &mut Vec<Error>) -> Option
     match fs::read_to_string(&path) {
         Ok(contents) => Some(contents),
         Err(e) => {
-            read_failures.push(Error::new(e).context(format!("reading captured server log {path:?}")));
+            read_failures
+                .push(Error::new(e).context(format!("reading captured server log {path:?}")));
             None
         }
     }
@@ -477,13 +483,15 @@ fn parse_published_identity(
 
     // Line 4: the prefix followed by exactly the identity (no trailing text), so the remainder
     // must be canonical lowercase hex with no surrounding whitespace.
-    let hex = lines[3].strip_prefix(PUBLISH_CREATED_IDENTITY_PREFIX).with_context(|| {
-        format!(
-            "publish stdout line 4 was {:?}, expected {PUBLISH_CREATED_IDENTITY_PREFIX:?} \
+    let hex = lines[3]
+        .strip_prefix(PUBLISH_CREATED_IDENTITY_PREFIX)
+        .with_context(|| {
+            format!(
+                "publish stdout line 4 was {:?}, expected {PUBLISH_CREATED_IDENTITY_PREFIX:?} \
              followed by the created database identity",
-            lines[3]
-        )
-    })?;
+                lines[3]
+            )
+        })?;
     ensure!(
         is_canonical_identity_hex(hex),
         "published identity {hex:?} is not canonical {IDENTITY_HEX_LEN}-char lowercase hex"

@@ -4,9 +4,9 @@
 //! envelope — so a wiring mistake between the assigned sequence, the returned receipt, and the bytes
 //! serialized into the line would be caught.
 
+use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::observation::dose_observation::DoseObservation;
 use crate::observation::observation_sink::ObservationSink;
-use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 
 use super::capturing_writer::CapturingWriter;
 
@@ -58,8 +58,7 @@ fn written_line_carries_the_assigned_record_identity() {
         serde_json::from_slice(&captured[1]).expect("the observation line is valid JSON");
     assert_eq!(
         observation_line["record"],
-        serde_json::to_value(observation_receipt.record())
-            .expect("the record identity serializes"),
+        serde_json::to_value(observation_receipt.record()).expect("the record identity serializes"),
         "the observation line serializes its assigned {{seq, Dose}} identity"
     );
 }

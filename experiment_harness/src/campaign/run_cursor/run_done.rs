@@ -1,5 +1,6 @@
 //! The terminal carrier for a completed run: the recovered sink plus the run's completion evidence.
 
+use crate::campaign::run_cleanup::CleanupMinted;
 use crate::observation::observation_sink::ObservationSink;
 
 use super::RunComplete;
@@ -14,9 +15,14 @@ pub(crate) struct RunDone {
 }
 
 impl RunDone {
-    /// Carry a completed run's recovered sink and completion evidence. `pub(in crate::campaign)` so only
-    /// the teardown transition builds one.
-    pub(in crate::campaign) fn new(sink: ObservationSink, complete: RunComplete) -> Self {
+    /// Carry a completed run's recovered sink and completion evidence. Takes a [`CleanupMinted`] witness,
+    /// so only the run's linear cleanup owner mints one after a clean cleanup; `pub(in crate::campaign)`
+    /// so that sibling-module owner can call it while the witness keeps it unmintable elsewhere.
+    pub(in crate::campaign) fn new(
+        sink: ObservationSink,
+        complete: RunComplete,
+        _mint: CleanupMinted,
+    ) -> Self {
         Self { sink, complete }
     }
 

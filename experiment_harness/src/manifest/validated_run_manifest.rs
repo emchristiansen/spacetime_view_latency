@@ -151,7 +151,9 @@ impl ValidatedRunManifest {
             server: ServerFacts {
                 pid: ServerPid::new(NonZeroU32::new(1).expect("1 is nonzero")),
                 resolved_exe: PathBuf::from("/fixture/nix/store/bin/spacetimedb-standalone"),
-                listen_addr: "127.0.0.1:3000".parse().expect("the fixture listen addr parses"),
+                listen_addr: "127.0.0.1:3000"
+                    .parse()
+                    .expect("the fixture listen addr parses"),
                 client_url: "http://127.0.0.1:3000".to_string(),
                 data_dir: PathBuf::from("/fixture/data"),
                 keys_dir: PathBuf::from("/fixture/data/keys"),

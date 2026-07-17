@@ -5,6 +5,8 @@
 use crate::module_artifact::bindings::*;
 use spacetimedb_sdk::Table;
 
+use crate::dataset::campaign_dataset::CampaignDataset;
+use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::seed_plan::SeedPlan;
 use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::plan::cell::Cell;
@@ -163,10 +165,32 @@ impl SubscribedTable {
         }
     }
 
+    /// The cumulative expected result set for this target once the doses `1..=through` have been applied
+    /// on top of the unmeasured pinned background slice — the post-dose analogue of [`Self::expected`]'s
+    /// single-rung seed set. Derived from the resolved [`CampaignDataset`] (its family, pinned baseline,
+    /// and driving key space) and this target's own [`Scope`], never from key arithmetic reconstructed in
+    /// the driver: a [`Scope::FullTable`] target grows by every completed driving batch, while a
+    /// [`Scope::MeasuredSlice`] target grows only when the driving role *is* its own measured slice (the
+    /// `OwnSliceGrowth` regime) and otherwise holds its pinned slice constant across the ladder.
+    pub(crate) fn expected_through_dose(
+        self,
+        dataset: &CampaignDataset,
+        through: DoseIndex,
+    ) -> SubscribedRows {
+        // Deriving the cumulative rows from the dataset's family, pinned baseline, driving key space, and
+        // this target's scope is the remaining effect-free logic for the measurement milestone.
+        todo!(
+            "cumulative expected-set derivation for {self:?} through dose {through:?} of {:?}",
+            dataset.source_run(),
+        )
+    }
+
     /// Read this target's currently-subscribed rows out of the client cache.
     pub(crate) fn read_back(self, conn: &DbConnection) -> SubscribedRows {
         match self {
-            SubscribedTable::MessageBase => SubscribedRows::Message(conn.db.message().iter().collect()),
+            SubscribedTable::MessageBase => {
+                SubscribedRows::Message(conn.db.message().iter().collect())
+            }
             SubscribedTable::MessageRangeView => {
                 SubscribedRows::Message(conn.db.message_range_view().iter().collect())
             }
