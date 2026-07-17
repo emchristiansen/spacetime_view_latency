@@ -7,6 +7,12 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub mod campaign_dataset;
+pub mod chronicle_physical_rows;
+pub mod dose_batch;
+pub mod dose_index;
+pub mod message_physical_rows;
+pub mod physical_cardinalities;
 pub mod role_slice;
 pub mod seed_op;
 pub mod seed_plan;
