@@ -8,6 +8,19 @@
 /// Rows written per dose batch.
 pub(crate) const BATCH_SIZE: u64 = 1_000;
 
+/// [`BATCH_SIZE`] as a `usize`, for use as an array length. The conversion is guarded by a
+/// compile-time round-trip assertion rather than a bare `as` cast, so a platform (or a future
+/// `BATCH_SIZE`) on which the value does not fit a `usize` fails to compile instead of silently
+/// truncating the array length.
+pub(crate) const BATCH_SIZE_USIZE: usize = {
+    let as_usize = BATCH_SIZE as usize;
+    assert!(
+        as_usize as u64 == BATCH_SIZE,
+        "BATCH_SIZE does not fit in usize on this platform"
+    );
+    as_usize
+};
+
 /// Number of cumulative doses (`1,000, 2,000, …, 10,000`).
 pub(crate) const NUM_DOSES: u64 = 10;
 

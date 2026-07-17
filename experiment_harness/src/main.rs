@@ -13,6 +13,7 @@ mod dataset;
 mod execute_run;
 mod manifest;
 mod module_artifact;
+mod observation;
 mod params;
 mod plan;
 mod provision;

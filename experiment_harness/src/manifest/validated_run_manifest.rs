@@ -86,10 +86,69 @@ impl ValidatedRunManifest {
         self.module.database_identity
     }
 
+    /// This run's schedule coordinate (cell, role, repetition block). Copied out so an observation
+    /// can carry an immutable reference back to this manifest.
+    pub(crate) fn run_coordinate(&self) -> RunCoordinate {
+        self.run.clone()
+    }
+
     /// The explicit schedule seed recorded for this run, used to derive deterministic role
     /// identities.
     pub(crate) fn schedule_seed(&self) -> ScheduleSeed {
         self.schedule_seed
+    }
+
+    /// A deterministic test fixture manifest, value-constructing every immutable fact directly rather
+    /// than reading them out of a live [`VerifiedDistribution`]/[`RunningPinnedServer`] — which would
+    /// require spawning the pinned 2.6.1 standalone. Test-only: it is **not** a production
+    /// construction path (production manifests come solely from [`Self::assemble`] over real live
+    /// capabilities) and mints no liveness claim — every fact is a fixed placeholder. It exists so the
+    /// sink's real [`write_manifest`](crate::observation::observation_sink::ObservationSink::write_manifest)
+    /// path can be exercised end-to-end.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        use std::num::NonZeroU32;
+
+        use spacetimedb_sdk::Identity;
+
+        use crate::manifest::database_identity::DatabaseIdentity;
+        use crate::manifest::run_coordinate::RunCoordinate;
+        use crate::manifest::server_pid::ServerPid;
+        use crate::manifest::wasm_sha256::WasmSha256;
+
+        Self {
+            run: RunCoordinate::fixture(),
+            schedule_seed: ScheduleSeed::new(0),
+            parameters: PreregisteredParameters::preregistered(),
+            distribution: DistributionFacts {
+                nix_store_bin_dir: PathBuf::from("/fixture/nix/store/bin"),
+                cli_exe: PathBuf::from("/fixture/nix/store/bin/spacetimedb-cli"),
+                cli_version: Version::new(2, 6, 1),
+                cli_release_commit: ReleaseCommit::parse(
+                    "052c83fe984a4c4eb7bb4f9afa5c6b1903891d87",
+                )
+                .expect("the fixture release commit is exact lowercase hex"),
+                cli_version_raw: "2.6.1".to_string(),
+                standalone_exe: PathBuf::from("/fixture/nix/store/bin/spacetimedb-standalone"),
+                standalone_version: Version::new(2, 6, 1),
+                standalone_version_raw: "2.6.1".to_string(),
+            },
+            server: ServerFacts {
+                pid: ServerPid::new(NonZeroU32::new(1).expect("1 is nonzero")),
+                resolved_exe: PathBuf::from("/fixture/nix/store/bin/spacetimedb-standalone"),
+                listen_addr: "127.0.0.1:3000".parse().expect("the fixture listen addr parses"),
+                client_url: "http://127.0.0.1:3000".to_string(),
+                data_dir: PathBuf::from("/fixture/data"),
+                keys_dir: PathBuf::from("/fixture/data/keys"),
+            },
+            module: ModuleFacts {
+                wasm_sha256: WasmSha256::new([0u8; 32]),
+                database_identity: DatabaseIdentity::new(Identity::from_claims(
+                    "view-read-set-experiment-fixture",
+                    "fixture-database",
+                )),
+            },
+        }
     }
 }
 

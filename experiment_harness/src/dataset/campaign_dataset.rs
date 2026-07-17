@@ -32,6 +32,10 @@ use crate::roles::role_identities::RoleIdentities;
 /// The deterministic dataset for one measured run: an unmeasured pinned background slice (the
 /// warm-up) and the driving role's cumulative dose ladder.
 pub(crate) struct CampaignDataset {
+    /// The run this dataset was resolved for, retained so record assembly can checked-match a
+    /// manifest's run shape against it — a structural-consistency check only; it asserts nothing was
+    /// measured.
+    run: Run,
     family: ControlTable,
     /// The role whose slice the dose ladder advances (G under `UnrelatedGrowth`, M2 under
     /// `OwnSliceGrowth`), retained for machine-readable evidence.
@@ -54,6 +58,7 @@ impl CampaignDataset {
         let family = run.control_table();
         match run.cell().growth_regime() {
             GrowthRegime::UnrelatedGrowth => Self {
+                run,
                 family,
                 driving_role: Role::GrowthDriver,
                 driving: identities.growth(),
@@ -63,6 +68,7 @@ impl CampaignDataset {
                 pinned_count: M_SLICE_ROWS,
             },
             GrowthRegime::OwnSliceGrowth => Self {
+                run,
                 family,
                 driving_role: Role::OwnSliceMeasured,
                 driving: identities.measured(),
@@ -72,6 +78,16 @@ impl CampaignDataset {
                 pinned_count: OWN_SLICE_BASELINE,
             },
         }
+    }
+
+    /// The block-independent *run shape* (cell, role, control table) this dataset was resolved for.
+    /// Dataset resolution does not depend on the repetition block, so this carries run shape, not a
+    /// full block coordinate. Exposed so record assembly can checked-match a manifest's run shape
+    /// against it, making a mismatched manifest/dataset pairing a structural error rather than a
+    /// documented discipline. Phase-1 structural-consistency accessor only; it asserts nothing was
+    /// measured.
+    pub(crate) fn source_run(&self) -> Run {
+        self.run
     }
 
     /// The control-table family shared by this run's arm and matched control.
@@ -142,7 +158,9 @@ impl CampaignDataset {
     }
 
     /// Deliver every cumulative dose to `f` exactly once, in monotonic `1..=NUM_DOSES` order,
-    /// stopping at the first error so no later dose is delivered.
+    /// stopping at the first error so no later dose is delivered. Generic over the error type so a
+    /// caller can carry typed failure evidence (e.g. a run frontier) out of the ladder rather than
+    /// erasing it into `anyhow`.
     ///
     /// The guarantee is one of *sequencing and delivery*: because the loop walks the fixed,
     /// module-owned [`DoseIndex::ALL`] and mints each [`DoseBatch`] from `self`, the callback
@@ -151,14 +169,23 @@ impl CampaignDataset {
     /// skipping ahead. It does **not** guarantee physical application: the closure still owns
     /// applying each batch's operations exactly once, and nothing here prevents a closure from
     /// ignoring or repeating the operations it is handed.
-    pub(crate) fn for_each_dose<F>(&self, mut f: F) -> Result<()>
+    pub(crate) fn try_each_dose<E, F>(&self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(DoseBatch) -> Result<()>,
+        F: FnMut(DoseBatch) -> Result<(), E>,
     {
         for &dose in &DoseIndex::ALL {
             f(DoseBatch::new(self, dose))?;
         }
         Ok(())
+    }
+
+    /// The `anyhow`-error convenience over [`Self::try_each_dose`] with identical sequencing and
+    /// fail-fast semantics.
+    pub(crate) fn for_each_dose<F>(&self, f: F) -> Result<()>
+    where
+        F: FnMut(DoseBatch) -> Result<()>,
+    {
+        self.try_each_dose(f)
     }
 }
 

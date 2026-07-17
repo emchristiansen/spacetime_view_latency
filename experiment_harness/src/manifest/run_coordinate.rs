@@ -15,7 +15,7 @@ use crate::plan::schedule::BlockRun;
 /// Only the non-redundant identity is stored: the growth regime, predicted response, and
 /// control table are all pure functions of the [`Cell`], so serializing them would add
 /// drift surface without information.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct RunCoordinate {
     /// The valid `(arm, growth-regime)` pairing under test.
     cell: Cell,
@@ -33,6 +33,34 @@ impl RunCoordinate {
             cell: block_run.cell(),
             role,
             repetition_block: block_run.block_index(),
+        }
+    }
+
+    /// The cell this run belongs to.
+    pub(crate) fn cell(&self) -> Cell {
+        self.cell
+    }
+
+    /// Whether this run is the arm or its matched control.
+    pub(crate) fn role(&self) -> RunRole {
+        self.role
+    }
+
+    /// A deterministic test fixture coordinate: the key-scoped point-filter arm (F) under own-slice
+    /// growth, the arm role, and the first repetition block. Builds the private fields directly so
+    /// tests needing a manifest/observation coordinate do not have to route through the schedule-owned
+    /// [`BlockRun`]. The own-slice regime is chosen deliberately: it is the sole regime in which the
+    /// driving role *is* the measured subscriber, so a whole internally coherent observation (the
+    /// measured slice's own brand-new inserts) can be assembled from it. Test-only — never a
+    /// production construction path.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        use crate::plan::key_scoped_arm::KeyScopedArm;
+
+        Self {
+            cell: Cell::KeyScopedOwnSlice(KeyScopedArm::PointFilter),
+            role: RunRole::Arm,
+            repetition_block: 0,
         }
     }
 }
