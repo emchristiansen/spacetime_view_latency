@@ -17,6 +17,8 @@ use crate::campaign::campaign_outcome::CampaignOutcome;
 use crate::campaign::run_cleanup;
 use crate::campaign::run_cursor::RunDone;
 use crate::campaign::run_cursor::RunDoseStep;
+use crate::campaign::run_cursor::RunExecuted;
+use crate::campaign::run_cursor::RunExecutionStopped;
 use crate::campaign::run_cursor::RunManifestStep;
 use crate::campaign::run_cursor::RunObservationStep;
 use crate::campaign::run_cursor::RunSettled;
@@ -30,6 +32,8 @@ use crate::observation::observation_sink::ObservationSink;
 use crate::plan::schedule::BlockCoordinate;
 use crate::plan::schedule::BlockRun;
 use crate::plan::schedule::Schedule;
+
+use super::driving_writer::DrivingWriter;
 
 /// A deliberately non-zero campaign seed, so the tests exercise the actual seed threading (manifest
 /// provenance, schedule permutation, arm/control order) rather than the degenerate `0`.
@@ -176,5 +180,58 @@ pub(super) fn open_first_run(seed: u64, writer: impl DurableLineWriter + 'static
         block_resume,
         coord,
         block,
+    }
+}
+
+/// Drive the seeded schedule's first run through the whole ten-dose ladder to its inert
+/// exhausted-execution carrier [`RunExecuted`], stopping *before* cleanup. Identical to
+/// [`drive_run_to_completion`] up to ladder exhaustion, but hands back the pre-cleanup carrier itself
+/// rather than settling it — so a cleanup-settlement test can apply a *synthetic*
+/// [`RunCleanupOutcome`](crate::campaign::run_cleanup_outcome::RunCleanupOutcome) to a genuinely
+/// exhausted run. There is no production path that fabricates a `RunExecuted`; this drives the real
+/// cursor through the always-ok no-I/O writer. `pub(in crate::campaign)` (test-only) so the sibling
+/// `run_cleanup` test tree — which is not a `campaign::tests` descendant — can reach it.
+pub(in crate::campaign) fn drive_first_run_to_executed() -> RunExecuted {
+    let first = open_first_run(SEED, DrivingWriter::always_ok());
+    let manifest = ValidatedRunManifest::fixture_for(first.coord.clone(), SEED);
+    let mut dosing = match first.writing.write_manifest(&manifest) {
+        RunManifestStep::Seeding(seeding) => seeding.seeded().checked(),
+        RunManifestStep::Stopped(_) => {
+            panic!("the always-ok writer must let the manifest write succeed")
+        }
+    };
+    for &dose in &DoseIndex::ALL {
+        let awaiting = match dosing.next_dose() {
+            RunDoseStep::Awaiting(awaiting) => awaiting,
+            RunDoseStep::Exhausted(_) => {
+                panic!("the ten-dose ladder must not exhaust before ten doses")
+            }
+        };
+        let observation = DoseObservation::fixture_for(&manifest, dose);
+        dosing = match awaiting.write_observation(&observation) {
+            RunObservationStep::Dosing(dosing) => dosing,
+            RunObservationStep::Stopped(_) => {
+                panic!("the always-ok writer must let each dose write succeed")
+            }
+        };
+    }
+    match dosing.next_dose() {
+        RunDoseStep::Exhausted(executed) => executed,
+        RunDoseStep::Awaiting(_) => panic!("the ladder must exhaust after exactly ten doses"),
+    }
+}
+
+/// Drive the seeded schedule's first run to an inert [`RunExecutionStopped`] by failing its very first
+/// sink write — the manifest record — with a writer scripted to fail immediately (`ok_for(0)`). The
+/// stopped carrier holds a [`RunStage::WritingManifest`](crate::campaign::run_stage::RunStage::WritingManifest)
+/// execution frontier, so a cleanup-settlement test can apply a synthetic failed cleanup to a genuinely
+/// stopped run and prove both the execution frontier and the cleanup failure are retained.
+/// `pub(in crate::campaign)` (test-only), like [`drive_first_run_to_executed`].
+pub(in crate::campaign) fn drive_first_run_to_stopped() -> RunExecutionStopped {
+    let first = open_first_run(SEED, DrivingWriter::ok_for(0));
+    let manifest = ValidatedRunManifest::fixture_for(first.coord.clone(), SEED);
+    match first.writing.write_manifest(&manifest) {
+        RunManifestStep::Stopped(stopped) => stopped,
+        RunManifestStep::Seeding(_) => panic!("ok_for(0) must fail the manifest write"),
     }
 }

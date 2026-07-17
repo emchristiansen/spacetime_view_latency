@@ -11,7 +11,7 @@
 //! internally-consistent evidence derived through the real dataset/dose APIs; they are never a success
 //! condition for any cursor transition.
 
-mod drive;
+pub(in crate::campaign) mod drive;
 mod driving_writer;
 
 mod dose_write_failure_yields_dosing_frontier;

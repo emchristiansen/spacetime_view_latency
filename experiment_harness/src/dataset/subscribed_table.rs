@@ -177,12 +177,24 @@ impl SubscribedTable {
         dataset: &CampaignDataset,
         through: DoseIndex,
     ) -> SubscribedRows {
-        // Deriving the cumulative rows from the dataset's family, pinned baseline, driving key space, and
-        // this target's scope is the remaining effect-free logic for the measurement milestone.
-        todo!(
-            "cumulative expected-set derivation for {self:?} through dose {through:?} of {:?}",
-            dataset.source_run(),
-        )
+        let measured = dataset.measured_slice_through(through);
+        let growth = dataset.growth_slice_through(through);
+        match self.row_family() {
+            ControlTable::Message => {
+                let mut rows = measured.expected_messages();
+                if self.scope() == Scope::FullTable {
+                    rows.extend(growth.expected_messages());
+                }
+                SubscribedRows::Message(rows)
+            }
+            ControlTable::ChronicleMessage => {
+                let mut rows = measured.expected_chronicle();
+                if self.scope() == Scope::FullTable {
+                    rows.extend(growth.expected_chronicle());
+                }
+                SubscribedRows::Chronicle(rows)
+            }
+        }
     }
 
     /// Read this target's currently-subscribed rows out of the client cache.
@@ -218,3 +230,6 @@ impl SubscribedTable {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

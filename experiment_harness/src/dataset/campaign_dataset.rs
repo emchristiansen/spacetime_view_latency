@@ -21,6 +21,7 @@ use crate::dataset::dose_batch::DoseBatch;
 use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::message_physical_rows::MessagePhysicalRows;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
+use crate::dataset::role_slice::RoleSlice;
 use crate::dataset::seed_op::SeedOp;
 use crate::params::{GROWTH_KEY_BASE, MEASURED_KEY_BASE, M_SLICE_ROWS, OWN_SLICE_BASELINE};
 use crate::plan::control_table::ControlTable;
@@ -155,6 +156,64 @@ impl CampaignDataset {
                 },
             })
             .collect()
+    }
+
+    /// The measured identity's cumulative result slice once doses `1..=through` have been applied.
+    /// Under `UnrelatedGrowth` the measured role M *is* the pinned background, so this holds constant
+    /// at its pinned-slice size across the whole ladder; under `OwnSliceGrowth` the measured role M2
+    /// *is* the driving role, so it grows to `through * BATCH_SIZE` rows. Either way it keys from the
+    /// measured key space. This is the cumulative analogue of
+    /// [`SeedPlan::measured`](super::seed_plan::SeedPlan::measured).
+    pub(crate) fn measured_slice_through(&self, through: DoseIndex) -> RoleSlice {
+        if self.measured_is_driving() {
+            self.driving_slice_through(through)
+        } else {
+            self.pinned_slice()
+        }
+    }
+
+    /// The growth driver G's cumulative slice once doses `1..=through` have been applied. The mirror
+    /// of [`Self::measured_slice_through`]: constant at G's pinned-slice size under `OwnSliceGrowth`,
+    /// grown to `through * BATCH_SIZE` rows under `UnrelatedGrowth`. This is the cumulative analogue
+    /// of [`SeedPlan::growth`](super::seed_plan::SeedPlan::growth).
+    pub(crate) fn growth_slice_through(&self, through: DoseIndex) -> RoleSlice {
+        if self.measured_is_driving() {
+            self.pinned_slice()
+        } else {
+            self.driving_slice_through(through)
+        }
+    }
+
+    /// Whether the measured identity (M or M2) is this dataset's driving role — true under
+    /// `OwnSliceGrowth` (M2 drives its own slice), false under `UnrelatedGrowth` (G drives while M
+    /// is the pinned background). Reads the [`Role`] discriminator [`Self::resolve`] recorded for the
+    /// driving role, which it sets in the same regime match arm as the driving identity and key
+    /// base. Exhaustive by design: [`Self::resolve`] only ever assigns [`Role::OwnSliceMeasured`] or
+    /// [`Role::GrowthDriver`] as a driving role, so a [`Role::Measured`] here is a construction drift
+    /// and fails loud rather than silently classifying as `false`.
+    fn measured_is_driving(&self) -> bool {
+        match self.driving_role {
+            Role::OwnSliceMeasured => true,
+            Role::GrowthDriver => false,
+            Role::Measured => panic!(
+                "resolve never assigns Role::Measured as a driving role; driving_role must be \
+                 OwnSliceMeasured (OwnSliceGrowth) or GrowthDriver (UnrelatedGrowth)"
+            ),
+        }
+    }
+
+    /// The pinned background role's slice, held constant across the entire dose ladder.
+    fn pinned_slice(&self) -> RoleSlice {
+        RoleSlice::new(self.pinned, self.pinned_key_base, self.pinned_count)
+    }
+
+    /// The driving role's cumulative slice once doses `1..=through` have been applied: its contiguous
+    /// key space grown to [`DoseBatch::cumulative_driving_rows`] rows. The cumulative row count is
+    /// taken from a [`DoseBatch`] minted from this dataset, so the ladder arithmetic lives in one
+    /// place and is never re-derived here.
+    fn driving_slice_through(&self, through: DoseIndex) -> RoleSlice {
+        let count = DoseBatch::new(self, through).cumulative_driving_rows();
+        RoleSlice::new(self.driving, self.driving_key_base, count)
     }
 
     /// Deliver every cumulative dose to `f` exactly once, in monotonic `1..=NUM_DOSES` order,
