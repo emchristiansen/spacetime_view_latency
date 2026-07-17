@@ -14,6 +14,7 @@ pub mod dose_index;
 pub mod message_physical_rows;
 pub mod physical_cardinalities;
 pub mod role_slice;
+pub mod run_dataset;
 pub mod seed_op;
 pub mod seed_plan;
 pub mod seeded_visibility;

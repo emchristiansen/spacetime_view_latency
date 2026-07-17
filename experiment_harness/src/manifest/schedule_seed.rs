@@ -11,7 +11,7 @@ use serde::Serialize;
 pub(crate) struct ScheduleSeed(u64);
 
 impl ScheduleSeed {
-    pub(crate) fn new(seed: u64) -> Self {
+    pub(crate) const fn new(seed: u64) -> Self {
         Self(seed)
     }
 

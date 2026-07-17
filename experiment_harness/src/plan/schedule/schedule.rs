@@ -3,6 +3,7 @@
 use anyhow::{ensure, Context, Result};
 use sha2::{Digest, Sha256};
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::params::{BLOCK_ORDER_DOMAIN, REPETITION_BLOCKS};
 use crate::plan::cell::Cell;
 
@@ -83,7 +84,7 @@ impl Schedule {
     /// can be dropped, so executing each block exactly once is a Phase 2 runtime/report
     /// obligation. The Phase 2 permutation must reorder without adding, dropping, or
     /// duplicating a block.
-    pub fn randomized_block_order(&self, seed: u64) -> Vec<BlockRun> {
+    pub fn randomized_block_order(&self, seed: ScheduleSeed) -> Vec<BlockRun> {
         Self::seeded_permutation(self.all_blocks(), seed)
     }
 
@@ -96,7 +97,7 @@ impl Schedule {
     /// enters only through the digest, so the same seed always yields the same order and
     /// a different seed almost always yields a different one. The `(tag, index)` tiebreak
     /// makes the order total without relying on digest uniqueness.
-    fn seeded_permutation(blocks: Vec<BlockRun>, seed: u64) -> Vec<BlockRun> {
+    fn seeded_permutation(blocks: Vec<BlockRun>, seed: ScheduleSeed) -> Vec<BlockRun> {
         let mut keyed: Vec<(BlockOrderKey, BlockRun)> = blocks
             .into_iter()
             .map(|block| (Self::block_order_key(&block, seed), block))
@@ -110,12 +111,15 @@ impl Schedule {
     /// a domain-separated subject built from stable canonical tags — never `Debug` output —
     /// so the derived order is reproducible against a recorded seed and cannot be moved by
     /// a Rust variant rename.
-    fn block_order_key(block: &BlockRun, seed: u64) -> BlockOrderKey {
+    fn block_order_key(block: &BlockRun, seed: ScheduleSeed) -> BlockOrderKey {
         let tag = block.cell().canonical_tag();
         let block_index = block.block_index();
         let subject = format!(
             "{};seed={};cell={};block={}",
-            BLOCK_ORDER_DOMAIN, seed, tag, block_index
+            BLOCK_ORDER_DOMAIN,
+            seed.get(),
+            tag,
+            block_index
         );
         let mut hasher = Sha256::new();
         hasher.update(subject.as_bytes());

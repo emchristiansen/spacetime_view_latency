@@ -1,34 +1,38 @@
-//! A dose-write failure part-way through the ladder aborts up to an execution-failure outcome whose
-//! frontier records the failing dose stage and the last record/dose whose writer contracts returned success.
+//! A dose-write failure part-way through the ladder stops the run at a `Dosing` execution frontier that
+//! records the failing dose stage and the last record/dose whose writer contracts returned success.
 
-use crate::campaign::campaign_incomplete::CampaignIncomplete;
-use crate::campaign::campaign_outcome::CampaignOutcome;
-use crate::campaign::finalization_outcome::FinalizationOutcome;
 use crate::campaign::run_cleanup;
 use crate::campaign::run_cleanup_outcome::RunCleanupOutcome;
 use crate::campaign::run_cursor::RunDoseStep;
 use crate::campaign::run_cursor::RunManifestStep;
 use crate::campaign::run_cursor::RunObservationStep;
+use crate::campaign::run_cursor::RunWritingManifest;
 use crate::campaign::run_incompletion::RunIncompletion;
 use crate::campaign::run_stage::RunStage;
 use crate::dataset::dose_index::DoseIndex;
-use crate::manifest::validated_run_manifest::ValidatedRunManifest;
-use crate::observation::dose_observation::DoseObservation;
+use crate::observation::dose_evidence::DoseEvidence;
+use crate::observation::observation_sink::ObservationSink;
 
 use super::drive;
 use super::driving_writer::DrivingWriter;
 
-/// The first run writes its manifest and the first two doses, then the third dose write fails. The run
-/// stops at a [`RunStage::Dosing`] frontier for the third dose, retaining the last record and dose whose
-/// writer contracts returned success (the second dose). The campaign aborts to
-/// [`CampaignIncomplete::Execution`], finalizing in the same transition (`Failed`, since the failed dose
-/// write poisoned the sink).
+/// The first run writes its manifest and the first two doses — each observation assembled by the cursor from
+/// its *own* owned context and drawn active dose — then the third dose write fails. The run stops at a
+/// [`RunStage::Dosing`] frontier for the third dose, retaining the last record and dose whose writer
+/// contracts returned success (the second dose). A reported clean cleanup settles it into a
+/// [`RunIncompletion::Execution`] whose frontier is keyed to the bound context's own run.
+///
+/// The successful writes of doses one and two are themselves positive proof that
+/// [`RunAwaitingDose::write_observation`](crate::campaign::run_cursor::RunAwaitingDose) derives each
+/// observation from the owned context and binds it to the run's own manifest — a foreign observation is
+/// unrepresentable, so it needs no rejection test.
 #[test]
 fn dose_write_failure_yields_dosing_frontier() {
+    let coord = drive::first_run_coordinate(drive::SEED);
+    let context = drive::resolve_context(&coord, drive::SEED);
     // `ok_for(3)`: manifest + dose 1 + dose 2 succeed; the dose-3 write fails.
-    let first = drive::open_first_run(drive::SEED, DrivingWriter::ok_for(3));
-    let manifest = ValidatedRunManifest::fixture_for(first.coord.clone(), drive::SEED);
-    let mut dosing = match first.writing.write_manifest(&manifest) {
+    let sink = ObservationSink::from_writer(Box::new(DrivingWriter::ok_for(3)));
+    let mut dosing = match RunWritingManifest::begin(sink).write_manifest(context) {
         RunManifestStep::Seeding(seeding) => seeding.seeded().checked(),
         RunManifestStep::Stopped(_) => {
             panic!("the manifest write must succeed with three ok writes")
@@ -36,15 +40,16 @@ fn dose_write_failure_yields_dosing_frontier() {
     };
 
     let mut stopped_execution = None;
-    for (index, &dose) in DoseIndex::ALL.iter().enumerate() {
+    for (index, _dose) in DoseIndex::ALL.iter().enumerate() {
         let awaiting = match dosing.next_dose() {
             RunDoseStep::Awaiting(awaiting) => awaiting,
             RunDoseStep::Exhausted(_) => {
                 panic!("the ladder must not exhaust before the failing dose")
             }
         };
-        let observation = DoseObservation::fixture_for(&manifest, dose);
-        match awaiting.write_observation(&observation) {
+        // The observation is assembled inside `write_observation` from the awaiting state's own context and
+        // drawn dose; the test supplies only the measured evidence.
+        match awaiting.write_observation(DoseEvidence::fixture()) {
             RunObservationStep::Dosing(next) => dosing = next,
             RunObservationStep::Stopped(stopped) => {
                 assert_eq!(
@@ -57,57 +62,39 @@ fn dose_write_failure_yields_dosing_frontier() {
         }
     }
     let stopped = stopped_execution.expect("the scripted writer must fail the third dose write");
-    // The failing edge yields only the inert stopped-execution carrier; the run's linear cleanup owner
-    // mints the RunIncomplete. A no-I/O reported *clean* cleanup settles it here, so the incompletion is
-    // an `Execution` variant carrying the execution frontier and a `Clean` cleanup outcome.
-    let run_incomplete = run_cleanup::settle_stopped_reported(stopped);
 
-    let block_incomplete = first.run_resume.abort(run_incomplete);
-    let outcome = first.block_resume.abort(block_incomplete);
-
-    match outcome {
-        CampaignOutcome::Incomplete(CampaignIncomplete::Execution {
-            frontier,
-            finalization,
-        }) => {
-            let block_frontier = frontier.block().expect("stopped inside a block");
-            assert_eq!(block_frontier.block(), first.block);
-            let run_incompletion = block_frontier.run().expect("stopped inside a run");
-            let run_frontier = match run_incompletion {
-                RunIncompletion::Execution { frontier, cleanup } => {
-                    assert!(
-                        matches!(cleanup, RunCleanupOutcome::Clean),
-                        "the reported cleanup after the execution failure is clean"
-                    );
-                    frontier
-                }
-                RunIncompletion::Cleanup { .. } => {
-                    panic!("execution failed, so this is an Execution incompletion, not Cleanup")
-                }
-            };
-            assert_eq!(run_frontier.run(), &first.coord);
-            assert_eq!(
-                run_frontier.stage(),
-                RunStage::Dosing(DoseIndex::ALL[2]),
-                "it stopped writing the third dose's observation"
-            );
+    // The run's linear cleanup owner mints the RunIncomplete; a no-I/O reported *clean* cleanup settles it
+    // into an `Execution` incompletion carrying the execution frontier and a `Clean` cleanup outcome.
+    let (_sink, incompletion) = run_cleanup::settle_stopped_reported(stopped).into_parts();
+    let frontier = match incompletion {
+        RunIncompletion::Execution { frontier, cleanup } => {
             assert!(
-                run_frontier.last_successful_record().is_some(),
-                "the manifest and first two dose writes returned success"
+                matches!(cleanup, RunCleanupOutcome::Clean),
+                "the reported cleanup after the execution failure is clean"
             );
-            assert_eq!(
-                run_frontier.last_durable_dose(),
-                Some(DoseIndex::ALL[1]),
-                "the second dose is the last whose observation write returned success"
-            );
-            match finalization {
-                FinalizationOutcome::Failed(error) => assert!(
-                    error.prior().is_some(),
-                    "the dose-write failure poisoned the sink"
-                ),
-                FinalizationOutcome::Sealed => panic!("a poisoned sink cannot finalize clean"),
-            }
+            frontier
         }
-        other => panic!("expected an execution-failure incomplete campaign, got {other:?}"),
-    }
+        RunIncompletion::Cleanup { .. } => {
+            panic!("execution failed, so this is an Execution incompletion, not Cleanup")
+        }
+    };
+    assert_eq!(
+        frontier.run(),
+        &coord,
+        "the frontier's coordinate is the bound context's own run"
+    );
+    assert_eq!(
+        frontier.stage(),
+        RunStage::Dosing(DoseIndex::ALL[2]),
+        "it stopped writing the third dose's observation"
+    );
+    assert!(
+        frontier.last_successful_record().is_some(),
+        "the manifest and first two dose writes returned success"
+    );
+    assert_eq!(
+        frontier.last_durable_dose(),
+        Some(DoseIndex::ALL[1]),
+        "the second dose is the last whose observation write returned success"
+    );
 }

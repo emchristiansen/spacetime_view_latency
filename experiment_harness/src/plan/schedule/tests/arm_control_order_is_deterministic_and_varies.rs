@@ -1,5 +1,6 @@
 //! The arm/control run order is a deterministic, seed-dependent, non-constant function.
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::plan::run_role::RunRole;
 use crate::plan::schedule::Schedule;
 
@@ -15,17 +16,19 @@ use crate::plan::schedule::Schedule;
 fn arm_control_order_is_deterministic_and_varies() {
     const SEED_A: u64 = 0xA5A5_5A5A;
     const SEED_B: u64 = 0x5A5A_A5A5;
+    let seed_a = ScheduleSeed::new(SEED_A);
+    let seed_b = ScheduleSeed::new(SEED_B);
 
     // Same 270-coordinate block set for both seeds (permutation order is irrelevant here;
     // `ordered_runs` is a pure function of the block coordinate and seed).
-    let blocks = Schedule::preregistered().randomized_block_order(SEED_A);
+    let blocks = Schedule::preregistered().randomized_block_order(seed_a);
 
     let mut arm_first = 0usize;
     let mut control_first = 0usize;
     let mut seed_sensitive = false;
     for block in &blocks {
-        let first = block.ordered_runs(SEED_A);
-        let again = block.ordered_runs(SEED_A);
+        let first = block.ordered_runs(seed_a);
+        let again = block.ordered_runs(seed_a);
         assert_eq!(
             first, again,
             "the arm/control order must be deterministic for a given seed"
@@ -34,7 +37,7 @@ fn arm_control_order_is_deterministic_and_varies() {
             RunRole::Arm => arm_first += 1,
             RunRole::Control => control_first += 1,
         }
-        if block.ordered_runs(SEED_B)[0].role() != first[0].role() {
+        if block.ordered_runs(seed_b)[0].role() != first[0].role() {
             seed_sensitive = true;
         }
     }

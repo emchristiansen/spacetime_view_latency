@@ -1,5 +1,6 @@
 //! Each block's ordered runs are exactly its matched arm and control, adjacent.
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::plan::run_role::RunRole;
 use crate::plan::schedule::Schedule;
 
@@ -10,9 +11,10 @@ use crate::plan::schedule::Schedule;
 #[test]
 fn each_block_pairs_its_arm_and_control() {
     const SEED: u64 = 7;
+    let seed = ScheduleSeed::new(SEED);
 
-    for block in &Schedule::preregistered().randomized_block_order(SEED) {
-        let runs = block.ordered_runs(SEED);
+    for block in &Schedule::preregistered().randomized_block_order(seed) {
+        let runs = block.ordered_runs(seed);
 
         for run in runs {
             assert_eq!(

@@ -10,6 +10,7 @@ use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::manifest::wasm_sha256::WasmSha256;
 use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
+use crate::provision::provision_failure::ProvisionFailure;
 use crate::provision::provisioned_run::ProvisionedRun;
 use crate::provision::run_resources::RunResources;
 use crate::provision::running_pinned_server::RunningPinnedServer;
@@ -39,8 +40,9 @@ pub(crate) fn provision_and_run<T>(
     seed: ScheduleSeed,
     body: impl FnOnce(&RunningPinnedServer, &ValidatedRunManifest) -> Result<T>,
 ) -> Result<T> {
-    let (resources, manifest) =
-        provision_run_resources(listen, module_wasm, run, seed)?.into_parts();
+    let (resources, manifest) = provision_run_resources(listen, module_wasm, run, seed)
+        .map_err(ProvisionFailure::into_anyhow)?
+        .into_parts();
 
     // Borrow the live server and immutable manifest to `body`, then tear the resources down
     // unconditionally and aggregate `body`'s error (if any) with any teardown error.
@@ -94,37 +96,42 @@ pub(crate) fn provision_run(
 /// both loud capabilities *escapes* this scope by move, to be owned for the duration of measurement
 /// by the run's linear cleanup owner ([`RunCleanup`](crate::campaign::run_cleanup::RunCleanup)),
 /// which performs the obligatory teardown exactly once at settle. Every path that does **not** hand
-/// ownership onward still tears down whatever loud capability is live, aggregating each error, so
-/// nothing live is ever stranded.
+/// ownership onward still tears down whatever loud capability is live and retains the failed stage plus
+/// each attempted teardown's result as a typed [`ProvisionFailure`], so nothing live is ever stranded and
+/// no dual evidence is flattened into a single message. The borrowed-capability adapter
+/// [`provision_and_run`] renders that typed failure to an aggregate `anyhow::Error` at its own boundary;
+/// the campaign acquisition path keeps it typed.
 pub(crate) fn provision_run_resources(
     listen: ListenAddress,
     module_wasm: &Path,
     run: RunCoordinate,
     seed: ScheduleSeed,
-) -> Result<ProvisionedRun> {
-    let distribution = VerifiedDistribution::resolve()?;
+) -> Result<ProvisionedRun, ProvisionFailure> {
+    let distribution =
+        VerifiedDistribution::resolve().map_err(ProvisionFailure::ResolveDistribution)?;
 
     // Stage first: a hash mismatch must abort before any server is provisioned. No loud-Drop
     // capability is live before this succeeds, so a plain `?` cannot strand one.
-    let staged = StagedModuleWasm::load(module_wasm, WasmSha256::new(MODULE_WASM_SHA256))?;
+    let staged = StagedModuleWasm::load(module_wasm, WasmSha256::new(MODULE_WASM_SHA256))
+        .map_err(ProvisionFailure::StageWasm)?;
 
     // `staged` is loud from here. If the server fails to start, it is the only outstanding
-    // teardown.
+    // teardown — attempt it and retain its result verbatim in the typed failure.
     let server = match RunningPinnedServer::start(&distribution, listen) {
         Ok(server) => server,
-        Err(primary) => {
-            let mut errors = vec![primary];
-            if let Err(e) = staged.cleanup() {
-                errors.push(e);
-            }
-            return Err(into_error(errors));
+        Err(error) => {
+            return Err(ProvisionFailure::StartServer {
+                error,
+                staged_cleanup: staged.cleanup(),
+            });
         }
     };
 
     // Both `server` and `staged` are loud. Publish and assemble the manifest while the server is
     // alive (the manifest value-copies, retaining no handle). On success, ownership of both
     // resources escapes by move via `ProvisionedRun` — no scope-exit teardown. On failure, tear
-    // both down unconditionally, mirroring `provision_and_run`'s discipline.
+    // both down unconditionally (server shutdown first, then staged cleanup, matching
+    // `provision_and_run`'s order) and retain both results verbatim in the typed failure.
     match server.publish(&distribution, &staged) {
         Ok(artifact) => {
             let manifest =
@@ -134,15 +141,10 @@ pub(crate) fn provision_run_resources(
                 manifest,
             ))
         }
-        Err(primary) => {
-            let mut errors = vec![primary];
-            if let Err(e) = server.shutdown() {
-                errors.push(e);
-            }
-            if let Err(e) = staged.cleanup() {
-                errors.push(e);
-            }
-            Err(into_error(errors))
-        }
+        Err(error) => Err(ProvisionFailure::Publish {
+            error,
+            server_shutdown: server.shutdown(),
+            staged_cleanup: staged.cleanup(),
+        }),
     }
 }

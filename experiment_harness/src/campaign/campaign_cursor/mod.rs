@@ -15,14 +15,16 @@
 //! the execution frontier and the finalization outcome, or the typed finalize error, so no failure is
 //! discarded. This entry file is declarative module declarations and re-exports only.
 
+mod campaign_block_outcome;
+mod campaign_block_pending;
 mod campaign_complete;
 mod campaign_exhausted;
 mod campaign_ready;
-mod campaign_running_block;
 mod campaign_step;
 
+pub(crate) use campaign_block_outcome::CampaignBlockOutcome;
+pub(crate) use campaign_block_pending::CampaignBlockPending;
 pub(crate) use campaign_complete::CampaignComplete;
 pub(crate) use campaign_exhausted::CampaignExhausted;
 pub(crate) use campaign_ready::CampaignReady;
-pub(crate) use campaign_running_block::CampaignRunningBlock;
 pub(crate) use campaign_step::CampaignStep;

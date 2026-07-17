@@ -27,4 +27,28 @@ impl DoseEvidence {
     pub(crate) fn into_parts(self) -> (RawLatencies, EventEvidence) {
         (self.latencies, self.events)
     }
+
+    /// A deterministic, internally coherent test fixture: a full [`RawLatencies`] of all-1 ns samples and
+    /// a checked [`EventEvidence`] whose insert/delete/update counts satisfy the net-delta identity
+    /// (`BATCH_SIZE` inserts, net `+BATCH_SIZE`). Mirrors the latency/event construction
+    /// [`DoseObservation::fixture_for`](super::dose_observation::DoseObservation) uses; it lets a
+    /// no-I/O run-cursor test supply the measured evidence a real dose would return, so
+    /// [`RunAwaitingDose::write_observation`](crate::campaign::run_cursor::RunAwaitingDose) can assemble
+    /// the observation from its *own* owned context and drawn dose. It is coherent evidence, not an
+    /// injected coordinate/dose: the carrier bears no run identity, so it cannot foreign-supply one.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        use std::time::Duration;
+
+        use crate::observation::latency_sample::LatencySample;
+        use crate::params::{BATCH_SIZE, BATCH_SIZE_USIZE};
+
+        let samples = vec![LatencySample::from_elapsed(Duration::from_nanos(1)); BATCH_SIZE_USIZE];
+        let latencies =
+            RawLatencies::sealed(samples).expect("the fixture supplies exactly BATCH_SIZE samples");
+        let net_delta = i64::try_from(BATCH_SIZE).expect("BATCH_SIZE fits i64");
+        let events = EventEvidence::checked(BATCH_SIZE, 0, 0, net_delta)
+            .expect("the fixture event counts satisfy the net-delta identity");
+        Self { latencies, events }
+    }
 }

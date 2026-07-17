@@ -2,6 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::params::ARM_CONTROL_ORDER_DOMAIN;
 use crate::plan::cell::Cell;
 use crate::plan::run::Run;
@@ -47,7 +48,7 @@ impl BlockRun {
     /// arm/control order within each block is randomized, and the two runs are adjacent
     /// except for the fresh-server reset"). The pair is always exactly `{Arm, Control}`
     /// for this block's cell; only their order varies with the seed.
-    pub fn ordered_runs(&self, seed: u64) -> [Run; 2] {
+    pub fn ordered_runs(&self, seed: ScheduleSeed) -> [Run; 2] {
         let [arm, control] = self.cell.matched_runs();
         if self.control_first(seed) {
             [control, arm]
@@ -60,12 +61,15 @@ impl BlockRun {
     /// deterministically from `seed` and the block's coordinate under a domain distinct
     /// from the global block-order permutation, so the run-order bit is a distinct
     /// domain-separated derivation rather than a reuse of that permutation's key.
-    fn control_first(&self, seed: u64) -> bool {
+    fn control_first(&self, seed: ScheduleSeed) -> bool {
         let tag = self.cell.canonical_tag();
         let block_index = self.block_index;
         let subject = format!(
             "{};seed={};cell={};block={}",
-            ARM_CONTROL_ORDER_DOMAIN, seed, tag, block_index
+            ARM_CONTROL_ORDER_DOMAIN,
+            seed.get(),
+            tag,
+            block_index
         );
         let mut hasher = Sha256::new();
         hasher.update(subject.as_bytes());

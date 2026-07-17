@@ -25,10 +25,14 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use crate::campaign::run_campaign;
+use crate::campaign::CampaignOutcome;
 use crate::execute_run::execute_run;
 use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::schedule_seed::ScheduleSeed;
+use crate::observation::observation_sink::ObservationSink;
+use crate::observation::output_path::OutputPath;
 use crate::plan::run_role::RunRole;
 use crate::plan::schedule::Schedule;
 use crate::provision::provision::{provision_and_run, provision_run};
@@ -92,6 +96,25 @@ enum Command {
         #[arg(long, value_enum)]
         role: RunRole,
     },
+    /// Run the whole preregistered campaign: every scheduled block and adjacent arm/control pair, in the
+    /// seed's global order, provisioning a fresh isolated server per run and streaming one NDJSON
+    /// observation per dose to the required output path. This is the full effectful measurement path.
+    Campaign {
+        /// Explicit `host:port` listen address every run's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Explicit seed driving both the global block/arm-first order and every run's deterministic
+        /// dataset — one seed, so the schedule and the seeded data cannot diverge.
+        #[arg(long)]
+        seed: u64,
+        /// Required output path for the durable NDJSON observation stream (records go to a file, never
+        /// stdout); created exclusively, so a pre-existing path fails fast.
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -152,6 +175,34 @@ fn main() -> Result<()> {
                 |server, manifest| execute_run(server, manifest, run),
             )?;
             Ok(())
+        }
+        Command::Campaign {
+            server,
+            module_wasm,
+            seed,
+            output,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            // Create the one required output file exclusively before any provisioning, so a bad path or a
+            // pre-existing file fails fast rather than after standing up a server.
+            let sink = ObservationSink::create(&OutputPath::new(output)).map_err(|e| {
+                anyhow::anyhow!("creating the campaign output sink: {}", e.diagnostic())
+            })?;
+            // Drive the whole campaign. A completed campaign reports its affine completion evidence; an
+            // incomplete outcome or a pre-cleanup acquisition abort is a loud failure carrying its typed
+            // evidence — the durable records already written remain on disk regardless.
+            match run_campaign(listen, &module_wasm, ScheduleSeed::new(seed), sink) {
+                Ok(CampaignOutcome::Complete(complete)) => {
+                    println!("campaign complete: {complete:?}");
+                    Ok(())
+                }
+                Ok(CampaignOutcome::Incomplete(incomplete)) => {
+                    Err(anyhow::anyhow!("campaign incomplete: {incomplete:?}"))
+                }
+                Err(aborted) => Err(anyhow::anyhow!(
+                    "campaign aborted during run acquisition: {aborted:?}"
+                )),
+            }
         }
     }
 }

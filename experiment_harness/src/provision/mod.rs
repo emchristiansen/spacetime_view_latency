@@ -6,6 +6,7 @@
 
 pub(crate) mod fresh_data_dir;
 pub(crate) mod provision;
+pub(crate) mod provision_failure;
 pub(crate) mod provisioned_run;
 pub(crate) mod run_resources;
 pub(crate) mod running_pinned_server;

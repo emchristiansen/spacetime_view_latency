@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::plan::cell::Cell;
 use crate::plan::schedule::Schedule;
 
@@ -20,7 +21,7 @@ fn covers_every_block_exactly_once() {
         })
         .collect();
 
-    let order = Schedule::preregistered().randomized_block_order(SEED);
+    let order = Schedule::preregistered().randomized_block_order(ScheduleSeed::new(SEED));
     let produced: BTreeSet<(&'static str, u32)> = order
         .iter()
         .map(|block| (block.cell().canonical_tag(), block.block_index()))

@@ -13,10 +13,7 @@ use crate::campaign::run_cursor::RunSettled;
 use crate::campaign::run_frontier::RunFrontier;
 use crate::campaign::run_incompletion::RunIncompletion;
 use crate::client::connected_client::ConnectedClient;
-use crate::manifest::run_coordinate::RunCoordinate;
-use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::provision::run_resources::RunResources;
-use crate::provision::teardown::into_error;
 
 use super::cleanup_minted::CleanupMinted;
 use super::must_disconnect::MustDisconnect;
@@ -37,37 +34,26 @@ use super::must_disconnect::MustDisconnect;
 pub(crate) struct RunCleanup {
     client: MustDisconnect,
     resources: RunResources,
-    coord: RunCoordinate,
 }
 
 impl RunCleanup {
-    /// Connect the measured subscriber to the provisioned run and take linear ownership of both the client
-    /// and the resources. The owner's run coordinate is **derived** from the immutable manifest
-    /// ([`ValidatedRunManifest::run_coordinate`]), not supplied separately, so the manifest and the
-    /// coordinate the owner later asserts against the cursor state cannot disagree — there is no
-    /// caller-provided duplicate to drift. Derives the server URL from the live server and the database
-    /// identity from the manifest. If the connection fails the resources are torn down (aggregating the
-    /// connect error with any teardown error) so nothing live escapes — the client is never left running.
-    pub(in crate::campaign) fn connect(
-        resources: RunResources,
-        manifest: &ValidatedRunManifest,
-    ) -> Result<Self> {
-        let coord = manifest.run_coordinate();
-        let server_url = resources.server().listen().client_url();
-        let database_identity = manifest.database_identity().identity().to_hex().to_string();
-        match ConnectedClient::connect(&server_url, &database_identity) {
-            Ok(client) => Ok(Self {
-                client: MustDisconnect::new(client),
-                resources,
-                coord,
-            }),
-            Err(connect_error) => {
-                let mut errors = vec![connect_error.context("connecting the measured subscriber")];
-                if let Err(teardown_error) = resources.teardown() {
-                    errors.push(teardown_error);
-                }
-                Err(into_error(errors))
-            }
+    /// Arm the run's linear cleanup owner from an **already-connected** measured client and the run's
+    /// provisioned resources, taking linear ownership of both. Infallible by construction: connecting the
+    /// client and resolving its authenticated role identities are the fallible acquisition steps, and both
+    /// run *before* this arming so a resolution failure can disconnect the client and tear the resources
+    /// down without a cleanup owner to strand (see
+    /// [`RunAcquisitionFailure`](crate::campaign::run_acquisition_failure::RunAcquisitionFailure)). Once
+    /// armed, this owner is the "bomb": no path may `?`-early-return or panic while it is owned, and its
+    /// consuming [`Self::settle_executed`]/[`Self::settle_stopped`] are the sole minters of the run's
+    /// terminal. The owner holds **no** run coordinate: a settled run's terminal coordinate comes solely
+    /// from the [`RunExecuted`]/[`RunExecutionStopped`] carrier being settled, so there is no duplicate here
+    /// to cross-check against it. `pub(in crate::campaign)` confines arming to the campaign module subtree —
+    /// not the acquisition path alone, which the visibility does not single out; the sole implemented caller
+    /// is that path (`acquire_and_drive`).
+    pub(in crate::campaign) fn arm(client: ConnectedClient, resources: RunResources) -> Self {
+        Self {
+            client: MustDisconnect::new(client),
+            resources,
         }
     }
 
@@ -76,38 +62,22 @@ impl RunCleanup {
         self.client.client()
     }
 
-    /// Settle an exhausted run through real cleanup. Asserts the owner's bound coordinate matches the
-    /// exhausted run's, attempts the ordered disconnect-then-teardown, and mints the terminal: [`RunDone`]
-    /// on a clean cleanup, or a cleanup-stage [`RunIncomplete`] retaining the typed failure.
+    /// Settle an exhausted run through real cleanup: attempt the ordered disconnect-then-teardown and mint
+    /// the terminal — [`RunDone`] on a clean cleanup, or a cleanup-stage [`RunIncomplete`] retaining the
+    /// typed failure. The terminal coordinate is the one the exhausted carrier already holds; the owner
+    /// keeps no separate coordinate to reconcile.
     pub(in crate::campaign) fn settle_executed(self, executed: RunExecuted) -> RunSettled {
-        let Self {
-            client,
-            resources,
-            coord,
-        } = self;
-        assert_eq!(
-            executed.coord(),
-            &coord,
-            "the cleanup owner's run coordinate must match the exhausted run's coordinate"
-        );
+        let Self { client, resources } = self;
         let outcome = run_cleanup(client, resources);
         settle_executed_with(executed, outcome)
     }
 
-    /// Settle a run that stopped short during execution through real cleanup. Asserts the coordinate match,
-    /// attempts the ordered disconnect-then-teardown, and mints a [`RunIncomplete`] whose
-    /// [`RunIncompletion::Execution`] retains *both* the execution frontier and the cleanup outcome.
+    /// Settle a run that stopped short during execution through real cleanup: attempt the ordered
+    /// disconnect-then-teardown and mint a [`RunIncomplete`] whose [`RunIncompletion::Execution`] retains
+    /// *both* the execution frontier and the cleanup outcome. The frontier's coordinate is the one the
+    /// stopped carrier already holds; the owner keeps no separate coordinate to reconcile.
     pub(in crate::campaign) fn settle_stopped(self, stopped: RunExecutionStopped) -> RunIncomplete {
-        let Self {
-            client,
-            resources,
-            coord,
-        } = self;
-        assert_eq!(
-            stopped.coord(),
-            &coord,
-            "the cleanup owner's run coordinate must match the stopped run's coordinate"
-        );
+        let Self { client, resources } = self;
         let outcome = run_cleanup(client, resources);
         settle_stopped_with(stopped, outcome)
     }
@@ -175,23 +145,14 @@ fn settle_stopped_with(stopped: RunExecutionStopped, outcome: RunCleanupOutcome)
     RunIncomplete::new(sink, incompletion, CleanupMinted::new())
 }
 
-/// Settle an exhausted run with an always-clean **reported** cleanup, for no-I/O cursor tests.
+/// Settle a stopped run with an always-clean **reported** cleanup, for no-I/O cursor tests.
 ///
 /// **Reported, not effected.** This performs the exact terminal typestate settlement a real
-/// [`RunCleanup::settle_executed`] would on a clean cleanup, but it does **not** open a socket, disconnect
-/// a client, or tear down a server — there is no [`RunCleanup`], [`MustDisconnect`], or [`RunResources`]
-/// anywhere in reach. It merely reports the `Clean` outcome a successful real cleanup would have produced,
-/// standing in for the retired `DisconnectReported`/`TeardownReported` tokens at the relocated cleanup
-/// boundary. Gated `#[cfg(test)]`, so no production path can settle a run without performing real cleanup.
-#[cfg(test)]
-pub(in crate::campaign) fn settle_executed_reported(executed: RunExecuted) -> RunSettled {
-    settle_executed_with(executed, RunCleanupOutcome::Clean)
-}
-
-/// Settle a stopped run with an always-clean **reported** cleanup, for no-I/O cursor tests. Reported, not
-/// effected — see [`settle_executed_reported`]. Retains the execution frontier with a `Clean` cleanup, so
-/// a failure test can assert the run's execution frontier exactly while the cleanup boundary is honest
-/// about not having performed real I/O.
+/// [`RunCleanup::settle_stopped`] would on a clean cleanup, but it does **not** open a socket, disconnect a
+/// client, or tear down a server — there is no [`RunCleanup`], [`MustDisconnect`], or [`RunResources`]
+/// anywhere in reach. It retains the execution frontier with a `Clean` cleanup, so a failure test can assert
+/// the run's execution frontier exactly while the cleanup boundary is honest about not having performed real
+/// I/O. Gated `#[cfg(test)]`, so no production path can settle a run without performing real cleanup.
 #[cfg(test)]
 pub(in crate::campaign) fn settle_stopped_reported(stopped: RunExecutionStopped) -> RunIncomplete {
     settle_stopped_with(stopped, RunCleanupOutcome::Clean)

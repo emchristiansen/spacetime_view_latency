@@ -1,14 +1,18 @@
 //! The single table a run subscribes to, and how its rows are named, expected, and read.
 
+use std::sync::Arc;
+
 #[rustfmt::skip]
 #[allow(unused_imports)]
 use crate::module_artifact::bindings::*;
 use spacetimedb_sdk::Table;
+use spacetimedb_sdk::TableWithPrimaryKey;
 
 use crate::dataset::campaign_dataset::CampaignDataset;
 use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::seed_plan::SeedPlan;
 use crate::dataset::subscribed_rows::SubscribedRows;
+use crate::observation::dose_event_counter::DoseEventCounter;
 use crate::plan::cell::Cell;
 use crate::plan::control_table::ControlTable;
 use crate::plan::key_scoped_arm::KeyScopedArm;
@@ -197,6 +201,89 @@ impl SubscribedTable {
         }
     }
 
+    /// The seed-derived expected result set for this target *before any dose*, once only the
+    /// unmeasured pinned background slice has been applied — the pre-dose baseline the initial-set
+    /// check asserts. The cumulative-ladder analogue of [`Self::expected`] at zero applied doses:
+    /// derived from the resolved [`CampaignDataset`]'s initial slices (the driving role contributes
+    /// zero rows, the pinned role its held-constant baseline) and this target's [`Scope`], never from
+    /// key arithmetic reconstructed in the driver. Identical scope/family projection to
+    /// [`Self::expected_through_dose`], only over the initial slices.
+    pub(crate) fn expected_initial(self, dataset: &CampaignDataset) -> SubscribedRows {
+        let measured = dataset.measured_slice_initial();
+        let growth = dataset.growth_slice_initial();
+        match self.row_family() {
+            ControlTable::Message => {
+                let mut rows = measured.expected_messages();
+                if self.scope() == Scope::FullTable {
+                    rows.extend(growth.expected_messages());
+                }
+                SubscribedRows::Message(rows)
+            }
+            ControlTable::ChronicleMessage => {
+                let mut rows = measured.expected_chronicle();
+                if self.scope() == Scope::FullTable {
+                    rows.extend(growth.expected_chronicle());
+                }
+                SubscribedRows::Chronicle(rows)
+            }
+        }
+    }
+
+    /// Register the per-dose SDK row-event callbacks for this target's cache table, each incrementing
+    /// the shared [`DoseEventCounter`] as the SDK delivers a client-visible insert/delete/update. The
+    /// same per-variant table dispatch as [`Self::read_back`], so the counted table can never drift
+    /// from the subscribed one. Insert and delete are registered for every target; **update** is
+    /// registered only for the targets whose generated handle implements
+    /// [`TableWithPrimaryKey`](spacetimedb_sdk::TableWithPrimaryKey) (the primary-keyed base tables and
+    /// query views) — the primary-key-less procedural range/point views deliver only insert/delete, and
+    /// their handles have no `on_update`, so a spurious update registration is unrepresentable rather
+    /// than merely unused. The returned callback ids are intentionally dropped: the SDK removes a
+    /// callback only on an explicit `remove_on_*`, so the callbacks persist for the run's lifetime.
+    ///
+    /// Registered by the driver only **after** the subscription's `on_applied` snapshot, the
+    /// initial-set verification, and the unmeasured warm-up — the warm-up is seeded *before* the
+    /// subscription, so its rows arrive in the snapshot rather than as incremental events, and are
+    /// excluded along with the rest of the snapshot. So neither snapshot nor warm-up inserts are
+    /// counted toward any dose (see
+    /// [`EventEvidence`](crate::observation::event_evidence::EventEvidence)).
+    pub(crate) fn register_events(self, conn: &DbConnection, counter: &Arc<DoseEventCounter>) {
+        match self {
+            SubscribedTable::MessageBase => {
+                register_insert_delete(&conn.db.message(), counter);
+                register_update(&conn.db.message(), counter);
+            }
+            SubscribedTable::MessageRangeView => {
+                register_insert_delete(&conn.db.message_range_view(), counter);
+            }
+            SubscribedTable::MessageQueryView => {
+                register_insert_delete(&conn.db.message_query_view(), counter);
+                register_update(&conn.db.message_query_view(), counter);
+            }
+            SubscribedTable::MessageQueryPkView => {
+                register_insert_delete(&conn.db.message_query_pk_view(), counter);
+                register_update(&conn.db.message_query_pk_view(), counter);
+            }
+            SubscribedTable::MessagesPointView => {
+                register_insert_delete(&conn.db.messages_point_view(), counter);
+            }
+            SubscribedTable::ChronicleBase => {
+                register_insert_delete(&conn.db.chronicle_message(), counter);
+                register_update(&conn.db.chronicle_message(), counter);
+            }
+            SubscribedTable::ChronicleQueryView => {
+                register_insert_delete(&conn.db.chronicle_query_view(), counter);
+                register_update(&conn.db.chronicle_query_view(), counter);
+            }
+            SubscribedTable::ChronicleQueryPkView => {
+                register_insert_delete(&conn.db.chronicle_query_pk_view(), counter);
+                register_update(&conn.db.chronicle_query_pk_view(), counter);
+            }
+            SubscribedTable::ChroniclePointView => {
+                register_insert_delete(&conn.db.chronicle_point_view(), counter);
+            }
+        }
+    }
+
     /// Read this target's currently-subscribed rows out of the client cache.
     pub(crate) fn read_back(self, conn: &DbConnection) -> SubscribedRows {
         match self {
@@ -229,6 +316,30 @@ impl SubscribedTable {
             }
         }
     }
+}
+
+/// Register insert and delete counter callbacks on one cache table handle. Generic over any
+/// [`Table`] so the same body serves every target; each callback owns its own [`Arc`] clone of the
+/// shared counter and ignores the delivered context/row — only the event's occurrence is counted.
+fn register_insert_delete<T: Table>(table: &T, counter: &Arc<DoseEventCounter>) {
+    table.on_insert({
+        let counter = counter.clone();
+        move |_ctx, _row| counter.record_insert()
+    });
+    table.on_delete({
+        let counter = counter.clone();
+        move |_ctx, _row| counter.record_delete()
+    });
+}
+
+/// Register the update counter callback on one primary-keyed cache table handle. Generic over
+/// [`TableWithPrimaryKey`] so only the targets whose generated handle actually delivers updates can be
+/// passed — the primary-key-less views have no such handle and cannot reach this function.
+fn register_update<T: TableWithPrimaryKey>(table: &T, counter: &Arc<DoseEventCounter>) {
+    table.on_update({
+        let counter = counter.clone();
+        move |_ctx, _old, _new| counter.record_update()
+    });
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! A connected measured-subscriber client: connect, seed, subscribe, read back.
 
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,7 @@ use crate::module_artifact::bindings::{
     ReducerEventContext,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
+use crate::observation::dose_event_counter::DoseEventCounter;
 use crate::observation::dose_latency_accumulator::DoseLatencyAccumulator;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::raw_latencies::RawLatencies;
@@ -168,6 +170,38 @@ impl ConnectedClient {
     pub(crate) fn subscribe_and_read(&self, target: SubscribedTable) -> Result<SubscribedRows> {
         self.subscribe_and_await_applied(target.subscription_sql())?;
         Ok(target.read_back(&self.conn))
+    }
+
+    /// Subscribe to `target` and block until its initial snapshot is applied, **without** reading. The
+    /// measured driver subscribes only *after* the unmeasured warm-up slice has been seeded, so the
+    /// snapshot already carries the warm-up rows. It then reads the pre-dose baseline via
+    /// [`Self::read_current`] for the initial-set check and registers its dose event callbacks (via
+    /// [`Self::register_dose_events`]) only *after* that check — so the snapshot, and with it the
+    /// warm-up, is excluded from every dose's counts. This split (subscribe without reading) is what
+    /// [`Self::subscribe_and_read`], which reads immediately, cannot express.
+    pub(crate) fn subscribe(&self, target: SubscribedTable) -> Result<()> {
+        self.subscribe_and_await_applied(target.subscription_sql())
+    }
+
+    /// Read `target`'s currently-subscribed rows out of the live client cache, issuing no new
+    /// subscription. Lets the driver sample the result set after each measured dose confirms, to
+    /// compute the queried net delta and the post-dose expected-set check.
+    pub(crate) fn read_current(&self, target: SubscribedTable) -> SubscribedRows {
+        target.read_back(&self.conn)
+    }
+
+    /// Register `target`'s per-dose SDK row-event callbacks against the shared [`DoseEventCounter`].
+    /// Thin wrapper over [`SubscribedTable::register_events`] supplying the private connection, so the
+    /// counted table cannot drift from the subscribed one. Called once, after the subscription
+    /// snapshot, the initial-set verification, **and** the unmeasured warm-up (which is seeded before
+    /// the subscription, so its rows arrive in the snapshot rather than as incremental events) — so
+    /// neither snapshot nor warm-up events are ever counted toward a dose.
+    pub(crate) fn register_dose_events(
+        &self,
+        target: SubscribedTable,
+        counter: &Arc<DoseEventCounter>,
+    ) {
+        target.register_events(&self.conn, counter);
     }
 
     /// Subscribe to the full `message_visibility` table, wait for its snapshot, and read every

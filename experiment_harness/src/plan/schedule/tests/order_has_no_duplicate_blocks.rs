@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::plan::schedule::Schedule;
 
 /// Uniqueness: a permutation neither drops nor duplicates. Every
@@ -11,7 +12,7 @@ use crate::plan::schedule::Schedule;
 fn order_has_no_duplicate_blocks() {
     const SEED: u64 = 42;
 
-    let order = Schedule::preregistered().randomized_block_order(SEED);
+    let order = Schedule::preregistered().randomized_block_order(ScheduleSeed::new(SEED));
 
     let mut seen = HashSet::new();
     for block in &order {

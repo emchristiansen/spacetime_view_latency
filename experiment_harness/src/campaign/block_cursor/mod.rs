@@ -12,12 +12,14 @@ mod block_complete;
 mod block_done;
 mod block_incomplete;
 mod block_ready;
-mod block_running_run;
+mod block_run_outcome;
+mod block_run_pending;
 mod block_step;
 
 pub(crate) use block_complete::BlockComplete;
 pub(crate) use block_done::BlockDone;
 pub(crate) use block_incomplete::BlockIncomplete;
 pub(crate) use block_ready::BlockReady;
-pub(crate) use block_running_run::BlockRunningRun;
+pub(crate) use block_run_outcome::BlockRunOutcome;
+pub(crate) use block_run_pending::BlockRunPending;
 pub(crate) use block_step::BlockStep;

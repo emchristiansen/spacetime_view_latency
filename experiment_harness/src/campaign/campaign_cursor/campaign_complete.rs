@@ -1,6 +1,7 @@
 //! Unforgeable, affine evidence that a whole campaign ran every block and finalized cleanly.
 
 use crate::campaign::latest_progress::LatestProgress;
+use crate::manifest::schedule_seed::ScheduleSeed;
 
 /// Evidence that a campaign executed every scheduled block to completion *and* finalized its single
 /// required output stream cleanly: the schedule seed that fixed the block order and the typed
@@ -15,19 +16,19 @@ use crate::campaign::latest_progress::LatestProgress;
 /// file/directory sync returned success; it is not a claim of physical crash persistence.
 #[derive(Debug)]
 pub(crate) struct CampaignComplete {
-    seed: u64,
+    seed: ScheduleSeed,
     progress: LatestProgress,
 }
 
 impl CampaignComplete {
     /// Mint campaign-completion evidence. `pub(super)` so only the campaign cursor module (via the
     /// finalize transition, and only on a clean finalize) constructs one.
-    pub(super) fn new(seed: u64, progress: LatestProgress) -> Self {
+    pub(super) fn new(seed: ScheduleSeed, progress: LatestProgress) -> Self {
         Self { seed, progress }
     }
 
     /// The schedule seed that fixed the block order this campaign executed.
-    pub(crate) fn seed(&self) -> u64 {
+    pub(crate) fn seed(&self) -> ScheduleSeed {
         self.seed
     }
 

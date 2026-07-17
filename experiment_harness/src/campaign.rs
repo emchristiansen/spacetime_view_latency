@@ -26,12 +26,14 @@
 //! This entry file is declarative module declarations only.
 
 mod block_frontier;
+mod campaign_aborted;
 mod campaign_frontier;
 mod campaign_incomplete;
 mod campaign_outcome;
 mod effect_stage;
 mod finalization_outcome;
 mod latest_progress;
+mod run_acquisition_failure;
 mod run_cleanup_failure;
 mod run_cleanup_outcome;
 mod run_frontier;
@@ -42,9 +44,13 @@ mod sink_write_stage;
 
 mod block_cursor;
 mod campaign_cursor;
+mod run_campaign;
 mod run_cleanup;
 mod run_cursor;
 mod run_driver;
+
+pub(crate) use campaign_outcome::CampaignOutcome;
+pub(crate) use run_campaign::run_campaign;
 
 #[cfg(test)]
 mod tests;

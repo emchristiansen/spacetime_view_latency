@@ -33,10 +33,6 @@ use crate::roles::role_identities::RoleIdentities;
 /// The deterministic dataset for one measured run: an unmeasured pinned background slice (the
 /// warm-up) and the driving role's cumulative dose ladder.
 pub(crate) struct CampaignDataset {
-    /// The run this dataset was resolved for, retained so record assembly can checked-match a
-    /// manifest's run shape against it — a structural-consistency check only; it asserts nothing was
-    /// measured.
-    run: Run,
     family: ControlTable,
     /// The role whose slice the dose ladder advances (G under `UnrelatedGrowth`, M2 under
     /// `OwnSliceGrowth`), retained for machine-readable evidence.
@@ -59,7 +55,6 @@ impl CampaignDataset {
         let family = run.control_table();
         match run.cell().growth_regime() {
             GrowthRegime::UnrelatedGrowth => Self {
-                run,
                 family,
                 driving_role: Role::GrowthDriver,
                 driving: identities.growth(),
@@ -69,7 +64,6 @@ impl CampaignDataset {
                 pinned_count: M_SLICE_ROWS,
             },
             GrowthRegime::OwnSliceGrowth => Self {
-                run,
                 family,
                 driving_role: Role::OwnSliceMeasured,
                 driving: identities.measured(),
@@ -79,16 +73,6 @@ impl CampaignDataset {
                 pinned_count: OWN_SLICE_BASELINE,
             },
         }
-    }
-
-    /// The block-independent *run shape* (cell, role, control table) this dataset was resolved for.
-    /// Dataset resolution does not depend on the repetition block, so this carries run shape, not a
-    /// full block coordinate. Exposed so record assembly can checked-match a manifest's run shape
-    /// against it, making a mismatched manifest/dataset pairing a structural error rather than a
-    /// documented discipline. Phase-1 structural-consistency accessor only; it asserts nothing was
-    /// measured.
-    pub(crate) fn source_run(&self) -> Run {
-        self.run
     }
 
     /// The control-table family shared by this run's arm and matched control.
@@ -184,6 +168,31 @@ impl CampaignDataset {
         }
     }
 
+    /// The measured identity's cumulative result slice *before any dose* — the pre-dose baseline once
+    /// only the unmeasured pinned background slice has been applied. Under `UnrelatedGrowth` the
+    /// measured role M is the pinned background, so this is its held-constant pinned slice; under
+    /// `OwnSliceGrowth` the measured role M2 is the driving role, which has written zero rows yet, so
+    /// this is its empty initial slice. The zero-dose analogue of [`Self::measured_slice_through`].
+    pub(crate) fn measured_slice_initial(&self) -> RoleSlice {
+        if self.measured_is_driving() {
+            self.driving_slice_initial()
+        } else {
+            self.pinned_slice()
+        }
+    }
+
+    /// The growth driver G's cumulative slice *before any dose*. The mirror of
+    /// [`Self::measured_slice_initial`]: G's held-constant pinned slice under `OwnSliceGrowth`, and its
+    /// empty initial driving slice under `UnrelatedGrowth`. The zero-dose analogue of
+    /// [`Self::growth_slice_through`].
+    pub(crate) fn growth_slice_initial(&self) -> RoleSlice {
+        if self.measured_is_driving() {
+            self.pinned_slice()
+        } else {
+            self.driving_slice_initial()
+        }
+    }
+
     /// Whether the measured identity (M or M2) is this dataset's driving role — true under
     /// `OwnSliceGrowth` (M2 drives its own slice), false under `UnrelatedGrowth` (G drives while M
     /// is the pinned background). Reads the [`Role`] discriminator [`Self::resolve`] recorded for the
@@ -205,6 +214,14 @@ impl CampaignDataset {
     /// The pinned background role's slice, held constant across the entire dose ladder.
     fn pinned_slice(&self) -> RoleSlice {
         RoleSlice::new(self.pinned, self.pinned_key_base, self.pinned_count)
+    }
+
+    /// The driving role's slice before any dose is applied: its contiguous key space with zero rows.
+    /// The zero-dose base of [`Self::driving_slice_through`], expressed directly because the ladder
+    /// arithmetic ([`DoseBatch`]) is only defined for the ten valid one-based dose rungs, not for a
+    /// zeroth dose.
+    fn driving_slice_initial(&self) -> RoleSlice {
+        RoleSlice::new(self.driving, self.driving_key_base, 0)
     }
 
     /// The driving role's cumulative slice once doses `1..=through` have been applied: its contiguous

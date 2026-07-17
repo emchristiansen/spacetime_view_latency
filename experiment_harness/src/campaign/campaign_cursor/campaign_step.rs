@@ -1,20 +1,16 @@
 //! The outcome of drawing the next block from a campaign's schedule.
 
-use crate::campaign::block_cursor::BlockReady;
-
+use super::CampaignBlockPending;
 use super::CampaignExhausted;
-use super::CampaignRunningBlock;
 
-/// What drawing the next block yields: either a block remains and is starting its runs ([`BlockReady`])
-/// with the campaign's continuation held in a [`CampaignRunningBlock`], or the schedule's block iterator
-/// is drained and execution is complete ([`CampaignExhausted`], which alone performs the mandatory
-/// finalize). Exhaustion of the block iterator — not a count — is what ends execution.
+/// What drawing the next block yields: either a block remains, handed out as a [`CampaignBlockPending`]
+/// that owns the block cursor to drive and the campaign's private continuation and loops the concrete block
+/// runs itself; or the schedule's block iterator is drained and execution is complete ([`CampaignExhausted`],
+/// which alone performs the mandatory finalize). Exhaustion of the block iterator — not a count — is what
+/// ends execution.
 pub(crate) enum CampaignStep {
-    /// A block remains; it is starting its runs, and `resume` holds the campaign's continuation.
-    Running {
-        block: BlockReady,
-        resume: CampaignRunningBlock,
-    },
+    /// A block remains, carried as the paired [`CampaignBlockPending`] that drives it.
+    Running(CampaignBlockPending),
     /// The schedule's block iterator is drained; execution is complete and awaits finalize.
     Exhausted(CampaignExhausted),
 }

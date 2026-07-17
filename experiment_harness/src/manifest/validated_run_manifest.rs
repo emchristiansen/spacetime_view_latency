@@ -106,7 +106,7 @@ impl ValidatedRunManifest {
     pub(crate) fn fixture() -> Self {
         use crate::manifest::run_coordinate::RunCoordinate;
 
-        Self::fixture_for(RunCoordinate::fixture(), 0)
+        Self::fixture_for(RunCoordinate::fixture(), ScheduleSeed::new(0))
     }
 
     /// A deterministic test fixture manifest for an arbitrary `run` under an explicit campaign
@@ -122,7 +122,7 @@ impl ValidatedRunManifest {
     /// [`write_manifest`](crate::observation::observation_sink::ObservationSink::write_manifest) binding
     /// can be exercised for any scheduled run, not only the fixture coordinate.
     #[cfg(test)]
-    pub(crate) fn fixture_for(run: RunCoordinate, schedule_seed: u64) -> Self {
+    pub(crate) fn fixture_for(run: RunCoordinate, schedule_seed: ScheduleSeed) -> Self {
         use std::num::NonZeroU32;
 
         use spacetimedb_sdk::Identity;
@@ -133,7 +133,7 @@ impl ValidatedRunManifest {
 
         Self {
             run,
-            schedule_seed: ScheduleSeed::new(schedule_seed),
+            schedule_seed,
             parameters: PreregisteredParameters::preregistered(),
             distribution: DistributionFacts {
                 nix_store_bin_dir: PathBuf::from("/fixture/nix/store/bin"),

@@ -3,6 +3,7 @@
 use crate::campaign::campaign_incomplete::CampaignIncomplete;
 use crate::campaign::campaign_outcome::CampaignOutcome;
 use crate::campaign::latest_progress::LatestProgress;
+use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::observation::observation_sink::ObservationSink;
 
 use super::CampaignComplete;
@@ -20,7 +21,7 @@ use super::CampaignComplete;
 /// claim of physical crash persistence.
 pub(crate) struct CampaignExhausted {
     sink: ObservationSink,
-    seed: u64,
+    seed: ScheduleSeed,
     progress: LatestProgress,
 }
 
@@ -29,7 +30,7 @@ impl CampaignExhausted {
     /// state. `pub(super)` so only [`CampaignReady::next_block`](super::CampaignReady), at the block
     /// iterator's exhaustion edge, mints one — no other caller can assemble this state from arbitrary
     /// sink/seed/progress parts.
-    pub(super) fn new(sink: ObservationSink, seed: u64, progress: LatestProgress) -> Self {
+    pub(super) fn new(sink: ObservationSink, seed: ScheduleSeed, progress: LatestProgress) -> Self {
         Self {
             sink,
             seed,

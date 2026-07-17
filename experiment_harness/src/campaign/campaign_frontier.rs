@@ -1,5 +1,7 @@
 //! The structural record of where and how a campaign's execution stopped short of completion.
 
+use crate::manifest::schedule_seed::ScheduleSeed;
+
 use super::block_frontier::BlockFrontier;
 
 /// Where a campaign's execution stopped: the schedule seed that fixed its block order, and the frontier
@@ -13,19 +15,19 @@ use super::block_frontier::BlockFrontier;
 /// executing.
 #[derive(Debug)]
 pub(crate) struct CampaignFrontier {
-    seed: u64,
+    seed: ScheduleSeed,
     block: Option<BlockFrontier>,
 }
 
 impl CampaignFrontier {
     /// Record a campaign frontier from the schedule seed and the outstanding block's frontier, if any.
     /// `pub(in crate::campaign)` so only a campaign cursor's transition builds one.
-    pub(in crate::campaign) fn new(seed: u64, block: Option<BlockFrontier>) -> Self {
+    pub(in crate::campaign) fn new(seed: ScheduleSeed, block: Option<BlockFrontier>) -> Self {
         Self { seed, block }
     }
 
     /// The schedule seed that fixed the block order this campaign was executing.
-    pub(crate) fn seed(&self) -> u64 {
+    pub(crate) fn seed(&self) -> ScheduleSeed {
         self.seed
     }
 

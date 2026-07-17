@@ -2,11 +2,12 @@
 
 use serde::Serialize;
 
-use crate::dataset::campaign_dataset::CampaignDataset;
 use crate::dataset::dose_batch::DoseBatch;
 use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
+use crate::dataset::run_dataset::RunDataset;
 use crate::manifest::run_coordinate::RunCoordinate;
+#[cfg(test)]
 use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::observation::dose_coordinate::DoseCoordinate;
 use crate::observation::dose_evidence::DoseEvidence;
@@ -14,6 +15,7 @@ use crate::observation::event_evidence::EventEvidence;
 use crate::observation::latency_summary::LatencySummary;
 use crate::observation::manifest_reference::ManifestReference;
 use crate::observation::raw_latencies::RawLatencies;
+#[cfg(test)]
 use crate::plan::run_role::RunRole;
 
 /// The record *schema* for one cumulative dose: a reference to the immutable run manifest, the
@@ -24,15 +26,12 @@ use crate::plan::run_role::RunRole;
 /// It is a skeleton until the measurement milestone: no run driver yet assembles one from real
 /// measured latencies and delivered SDK events.
 ///
-/// [`Self::assemble`] takes the real [`ValidatedRunManifest`] and derives the manifest reference and
-/// coordinate from it — there is no independent `reference`/`run` argument to mismatch — and
-/// checked-matches the manifest's run against the [`CampaignDataset`]'s retained source run. Because
-/// dataset resolution is block-independent, the strongest meaningful correspondence is *run shape*
-/// (cell, role, control table): the assertion proves the manifest and dataset agree on the run
-/// shape, while the manifest alone supplies the repetition-block identity the dataset does not
-/// carry. This makes the record structurally consistent — reference, coordinate, and
-/// family-specific cardinality all come from one manifest/dataset pair of matching run shape. It is
-/// a consistency guarantee, not a claim that the samples were actually measured under that manifest.
+/// [`Self::assemble`] takes the bound [`RunDataset`] and derives the manifest reference, coordinate, and
+/// cardinality from the *same* manifest/dataset pair — there is no independent `reference`/`run` argument
+/// to mismatch, and no cross-check to run: the [`RunDataset`] can only have been built by resolving the
+/// dataset from that manifest's own coordinate, so reference, coordinate, and family-specific cardinality
+/// are single-sourced by construction. It is a consistency guarantee, not a claim that the samples were
+/// actually measured under that manifest.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DoseObservation {
     manifest_ref: ManifestReference,
@@ -44,30 +43,19 @@ pub(crate) struct DoseObservation {
 }
 
 impl DoseObservation {
-    /// Assemble the record from the manifest and the dataset resolved for the same run shape. The
-    /// reference, coordinate, and cardinalities are derived here; only the raw latencies and event
-    /// evidence come from the typed [`DoseEvidence`]. Fails loud (a wiring bug) if the manifest's
-    /// run shape and the dataset's source run disagree — compared via full [`Run`](crate::plan::run::Run)
-    /// equality so a future `Run` field cannot be silently forgotten from the correspondence.
+    /// Assemble the record from the bound [`RunDataset`] — one manifest and the dataset resolved from its
+    /// own coordinate. The reference, coordinate, and cardinalities are derived here from that single pair;
+    /// only the raw latencies and event evidence come from the typed [`DoseEvidence`]. No manifest/dataset
+    /// cross-check is needed or possible: the [`RunDataset`] binds them at resolution, so a mismatched pair
+    /// is unrepresentable rather than a runtime assertion.
     pub(crate) fn assemble(
-        manifest: &ValidatedRunManifest,
-        dataset: &CampaignDataset,
+        context: &RunDataset,
         batch: &DoseBatch,
         evidence: DoseEvidence,
     ) -> Self {
+        let manifest = context.manifest();
+        let dataset = context.dataset();
         let run = manifest.run_coordinate();
-        // Reconstruct the manifest's run from its (cell, role) and compare the whole `Run` — cell,
-        // role, and control table — against the dataset's retained source run.
-        let [arm, control] = run.cell().matched_runs();
-        let manifest_run = match run.role() {
-            RunRole::Arm => arm,
-            RunRole::Control => control,
-        };
-        let source = dataset.source_run();
-        assert_eq!(
-            manifest_run, source,
-            "manifest run shape {manifest_run:?} and dataset source run {source:?} disagree"
-        );
 
         let reference = ManifestReference::of(manifest);
         let cardinalities = dataset.physical_cardinalities(batch);

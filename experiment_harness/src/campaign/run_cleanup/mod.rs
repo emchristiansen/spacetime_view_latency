@@ -6,13 +6,17 @@
 //! structural proof that no other code can mint a run terminal. This entry file is declarative only.
 
 mod cleanup_minted;
+mod connect_failure;
 mod must_disconnect;
+mod resolution_failure;
 mod run_cleanup;
 
 pub(crate) use cleanup_minted::CleanupMinted;
+pub(crate) use connect_failure::ConnectFailure;
+pub(crate) use resolution_failure::ResolutionFailure;
 pub(crate) use run_cleanup::RunCleanup;
 
-/// No-I/O reported-cleanup settlement stand-ins for the cursor tests. Reported, not effected — see their
-/// docs; gated `#[cfg(test)]` so no production path can reach them.
+/// No-I/O reported-cleanup settlement stand-in for the cursor tests. Reported, not effected — see its doc;
+/// gated `#[cfg(test)]` so no production path can reach it.
 #[cfg(test)]
-pub(in crate::campaign) use run_cleanup::{settle_executed_reported, settle_stopped_reported};
+pub(in crate::campaign) use run_cleanup::settle_stopped_reported;

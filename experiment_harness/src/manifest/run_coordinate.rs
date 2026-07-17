@@ -3,6 +3,7 @@
 use serde::Serialize;
 
 use crate::plan::cell::Cell;
+use crate::plan::run::Run;
 use crate::plan::run_role::RunRole;
 use crate::plan::schedule::BlockRun;
 
@@ -44,6 +45,19 @@ impl RunCoordinate {
     /// Whether this run is the arm or its matched control.
     pub(crate) fn role(&self) -> RunRole {
         self.role
+    }
+
+    /// The single [`Run`] this coordinate identifies: the cell's matched arm or control, selected by
+    /// [`Self::role`]. The `(cell, role)` a coordinate already carries *fully determines* the run — the
+    /// control table is a pure function of the cell — so this is the sole derivation, letting the
+    /// coordinate be the one carrier of run identity rather than emitting a parallel [`Run`] value that
+    /// could drift from it.
+    pub(crate) fn run(&self) -> Run {
+        let [arm, control] = self.cell.matched_runs();
+        match self.role {
+            RunRole::Arm => arm,
+            RunRole::Control => control,
+        }
     }
 
     /// A deterministic test fixture coordinate: the key-scoped point-filter arm (F) under own-slice
