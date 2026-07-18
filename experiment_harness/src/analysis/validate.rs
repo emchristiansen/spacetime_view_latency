@@ -29,12 +29,23 @@
 //! One public entity per file; this entry file is declarative re-exports only.
 
 pub(crate) mod arm_run;
+pub(crate) mod block_census_fault;
+pub(crate) mod campaign_stable_fact;
+pub(crate) mod cell_census_fault;
 pub(crate) mod cell_dataset;
 pub(crate) mod control_run;
+pub(crate) mod coordinate_reference_fault;
+pub(crate) mod dose_census_fault;
 pub(crate) mod integrity_error;
 pub(crate) mod integrity_error_category;
+pub(crate) mod malformed_stable_fault;
+pub(crate) mod manifest_reference_fault;
+pub(crate) mod manifest_reference_identity;
 pub(crate) mod matched_block;
+pub(crate) mod record_coordinate_fault;
 pub(crate) mod run_kind;
+pub(crate) mod server_provenance_fault;
+pub(crate) mod stable_fact_contradiction;
 pub(crate) mod trusted_dose;
 pub(crate) mod trusted_run;
 pub(crate) mod validated_campaign;

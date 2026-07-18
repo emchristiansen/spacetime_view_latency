@@ -60,4 +60,11 @@ impl TrustedDose {
             events,
         }
     }
+
+    /// Test-only read of the 1-based ladder index, for asserting the minted graph's canonical dose
+    /// order. `#[cfg(test)]` so it never widens the production API.
+    #[cfg(test)]
+    pub(super) fn dose(&self) -> DoseIndex {
+        self.dose
+    }
 }

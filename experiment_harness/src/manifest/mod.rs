@@ -3,10 +3,13 @@
 //! Binary-internal: entities are crate-visible (`pub(crate)`), not broadly public. This
 //! entry file is declarative re-exports only.
 
+pub(crate) mod canonical_hex_shape_error;
 pub(crate) mod database_identity;
+pub(crate) mod database_identity_parse_error;
 pub(crate) mod listen_address;
 pub(crate) mod preregistered_parameters;
 pub(crate) mod release_commit;
+pub(crate) mod release_commit_parse_error;
 pub(crate) mod repetition_block_index;
 pub(crate) mod repetition_block_index_out_of_range;
 pub(crate) mod run_coordinate;
@@ -20,3 +23,4 @@ pub(crate) mod verified_module_artifact;
 pub(crate) mod verified_server_process;
 pub(crate) mod verified_standalone;
 pub(crate) mod wasm_sha256;
+pub(crate) mod wasm_sha256_parse_error;

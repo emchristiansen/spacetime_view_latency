@@ -156,7 +156,7 @@ impl ValidatedRunManifest {
                     .expect("the fixture listen addr parses"),
                 client_url: "http://127.0.0.1:3000".to_string(),
                 data_dir: PathBuf::from("/fixture/data"),
-                keys_dir: PathBuf::from("/fixture/data/keys"),
+                keys_dir: PathBuf::from("/fixture/keys"),
             },
             module: ModuleFacts {
                 wasm_sha256: WasmSha256::new([0u8; 32]),

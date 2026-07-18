@@ -26,7 +26,10 @@ pub(crate) struct TrustedRun<R> {
     /// This run's schedule coordinate, proven to agree with its manifest reference and its doses.
     coordinate: RunCoordinate,
     /// The complete monotonic dose ladder, doses `1..=NUM_DOSES` each present exactly once, in order.
-    doses: [TrustedDose; NUM_DOSES_USIZE],
+    /// Heap-owned as a boxed fixed array so the ten-dose cardinality remains a property of the type while
+    /// the run's by-value footprint is one pointer — keeping the fold's stack frame bounded regardless of
+    /// [`NUM_DOSES`](crate::params::NUM_DOSES).
+    doses: Box<[TrustedDose; NUM_DOSES_USIZE]>,
     /// The compile-time role marker; carries no data, only the type-level arm/control distinction.
     role: PhantomData<R>,
 }
@@ -40,19 +43,36 @@ impl<R: RunKind> TrustedRun<R> {
     /// monotonicity.
     pub(super) fn mint(
         coordinate: RunCoordinate,
-        doses: [TrustedDose; NUM_DOSES_USIZE],
+        doses: Box<[TrustedDose; NUM_DOSES_USIZE]>,
     ) -> Result<Self, IntegrityError> {
         if coordinate.role() != R::ROLE {
-            return Err(IntegrityError::run_role_mismatch(format!(
+            let diagnostic = format!(
                 "run coordinate role {:?} does not match the {:?} position it was matched into",
                 coordinate.role(),
                 R::ROLE,
-            )));
+            );
+            return Err(IntegrityError::run_role_mismatch(coordinate, R::ROLE, diagnostic));
         }
         Ok(Self {
             coordinate,
             doses,
             role: PhantomData,
         })
+    }
+}
+
+/// Test-only read accessors for asserting the minted graph shape. `#[cfg(test)]` so they never widen
+/// the production API — and role-agnostic (`impl<R>`, no [`RunKind`] bound) since reading the coordinate
+/// and doses does not depend on the role marker.
+#[cfg(test)]
+impl<R> TrustedRun<R> {
+    /// The run's schedule coordinate.
+    pub(super) fn coordinate(&self) -> &RunCoordinate {
+        &self.coordinate
+    }
+
+    /// The run's complete dose ladder.
+    pub(super) fn doses(&self) -> &[TrustedDose; NUM_DOSES_USIZE] {
+        &self.doses
     }
 }

@@ -68,13 +68,13 @@ impl CampaignDataset {
 
     /// The role whose slice the dose ladder advances, a total function of the cell's growth regime:
     /// the growth driver G under `UnrelatedGrowth`, the own-slice measured role M2 under
-    /// `OwnSliceGrowth`. Derived from [`Cell`] rather than stored so it cannot drift from the regime
-    /// that also fixes the driving/pinned identity assignment.
+    /// `OwnSliceGrowth`. Delegates to the single canonical identity-free owner
+    /// [`GrowthRegime::driving_role`] — the same mapping the analysis validation pass uses to prove an
+    /// observation's serialized driving-role tag — so runtime and analysis cannot assign a regime a
+    /// different driving role. Derived from [`Cell`] rather than stored so it cannot drift from the
+    /// regime that also fixes the driving/pinned identity assignment.
     fn driving_role(&self) -> Role {
-        match self.cell.growth_regime() {
-            GrowthRegime::UnrelatedGrowth => Role::GrowthDriver,
-            GrowthRegime::OwnSliceGrowth => Role::OwnSliceMeasured,
-        }
+        self.cell.growth_regime().driving_role()
     }
 
     /// The held-constant pinned background slice size, derived from the cell's growth regime via the

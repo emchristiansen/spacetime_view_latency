@@ -1,6 +1,7 @@
 //! Growth regime — the outer experimental axis.
 
 use crate::params::{M_SLICE_ROWS, OWN_SLICE_BASELINE};
+use crate::roles::role::Role;
 
 /// The two mutually exclusive growth regimes.
 ///
@@ -31,6 +32,21 @@ impl GrowthRegime {
         match self {
             GrowthRegime::UnrelatedGrowth => M_SLICE_ROWS,
             GrowthRegime::OwnSliceGrowth => OWN_SLICE_BASELINE,
+        }
+    }
+
+    /// The role whose slice the dose ladder advances in this regime — the growth driver G under
+    /// `UnrelatedGrowth`, the own-slice measured role M2 under `OwnSliceGrowth`. This is the single
+    /// canonical, identity-free growth-regime→driving-role owner: runtime dataset resolution
+    /// ([`CampaignDataset::driving_role`](crate::dataset::campaign_dataset::CampaignDataset)) and the
+    /// analysis validation pass (which proves an observation's serialized driving-role tag) both derive
+    /// the driving role here, so the two cannot assign the regime a different driving role. It maps only
+    /// the regime to the role and requires no run identities, so it can validate the wire tag without
+    /// reconstructing a run's identities.
+    pub(crate) fn driving_role(self) -> Role {
+        match self {
+            GrowthRegime::UnrelatedGrowth => Role::GrowthDriver,
+            GrowthRegime::OwnSliceGrowth => Role::OwnSliceMeasured,
         }
     }
 }

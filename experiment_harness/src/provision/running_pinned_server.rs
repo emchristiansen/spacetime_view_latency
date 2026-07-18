@@ -9,7 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Error, Result};
-use spacetimedb_sdk::Identity;
 
 use crate::manifest::database_identity::DatabaseIdentity;
 use crate::manifest::listen_address::ListenAddress;
@@ -68,9 +67,6 @@ const PUBLISH_MODULE_LINE: &str = "Publishing module...";
 const PUBLISH_CREATED_IDENTITY_PREFIX: &str = "Created new database with identity: ";
 /// Exact number of stdout lines the ordered grammar above accounts for.
 const EXPECTED_PUBLISH_LINE_COUNT: usize = 4;
-
-/// Canonical identity hex length: a 32-byte SpacetimeDB identity as lowercase hex.
-const IDENTITY_HEX_LEN: usize = 64;
 
 /// Readiness polling against an **absolute** deadline: probe the listen socket until it connects
 /// or `READINESS_DEADLINE` elapses. Each *requested* connect timeout and retry delay is capped by
@@ -189,11 +185,11 @@ impl RunningPinnedServer {
             )
         })?;
 
-        let identity = parse_published_identity(&stdout, staged.bin_path(), &server_url)
+        let database_identity = parse_published_identity(&stdout, staged.bin_path(), &server_url)
             .with_context(|| format!("parsing publish stdout:\n{stdout}"))?;
         Ok(VerifiedModuleArtifact::new(
             staged.sha256(),
-            DatabaseIdentity::new(identity),
+            database_identity,
         ))
     }
 
@@ -434,7 +430,7 @@ fn parse_published_identity(
     stdout: &str,
     staged_bin_path: &Path,
     server_url: &str,
-) -> Result<Identity> {
+) -> Result<DatabaseIdentity> {
     // Strictly LF-terminated: a carriage return anywhere means the output is not the exact
     // grammar (reject CRLF outright rather than tolerating it).
     ensure!(
@@ -492,19 +488,10 @@ fn parse_published_identity(
                 lines[3]
             )
         })?;
-    ensure!(
-        is_canonical_identity_hex(hex),
-        "published identity {hex:?} is not canonical {IDENTITY_HEX_LEN}-char lowercase hex"
-    );
-    Identity::from_hex(hex)
-        .map_err(|e| anyhow!(e))
-        .with_context(|| format!("decoding the published database identity {hex:?}"))
-}
-
-/// Whether `s` is exactly a canonical lowercase-hex SpacetimeDB identity (no `0x`, no padding,
-/// no surrounding whitespace).
-fn is_canonical_identity_hex(s: &str) -> bool {
-    s.len() == IDENTITY_HEX_LEN
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    DatabaseIdentity::parse_canonical_hex(hex).map_err(|error| {
+        anyhow!(
+            "published identity {hex:?} is not canonical {}-char lowercase hex: {error}",
+            DatabaseIdentity::CANONICAL_HEX_LEN
+        )
+    })
 }

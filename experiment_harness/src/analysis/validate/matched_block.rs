@@ -31,4 +31,17 @@ impl MatchedBlock {
     pub(super) fn new(arm: TrustedRun<ArmRun>, control: TrustedRun<ControlRun>) -> Self {
         Self { arm, control }
     }
+
+    /// Test-only read of the arm run, for asserting the minted graph shape. `#[cfg(test)]` so it never
+    /// widens the production API.
+    #[cfg(test)]
+    pub(super) fn arm(&self) -> &TrustedRun<ArmRun> {
+        &self.arm
+    }
+
+    /// Test-only read of the matched control run, for asserting the minted graph shape.
+    #[cfg(test)]
+    pub(super) fn control(&self) -> &TrustedRun<ControlRun> {
+        &self.control
+    }
 }

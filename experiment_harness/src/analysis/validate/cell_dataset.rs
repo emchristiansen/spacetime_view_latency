@@ -30,8 +30,11 @@ const BLOCKS_PER_CELL: usize = {
 pub(crate) struct CellDataset {
     /// The preregistered `(arm, growth-regime)` pairing this dataset covers.
     cell: Cell,
-    /// The complete fixed sample of matched arm/control blocks for this cell.
-    blocks: [MatchedBlock; BLOCKS_PER_CELL],
+    /// The complete fixed sample of matched arm/control blocks for this cell. Heap-owned as a boxed fixed
+    /// array so the thirty-block cardinality remains a property of the type while the dataset's by-value
+    /// footprint is one pointer — keeping the fold's stack frame bounded regardless of
+    /// [`REPETITION_BLOCKS`].
+    blocks: Box<[MatchedBlock; BLOCKS_PER_CELL]>,
 }
 
 impl CellDataset {
@@ -39,7 +42,21 @@ impl CellDataset {
     /// caller (the validation pass) owns proving block-index completeness and arm/control presence;
     /// this constructor only binds the proven parts so the private fields cannot be populated from
     /// outside the validation boundary.
-    pub(super) fn new(cell: Cell, blocks: [MatchedBlock; BLOCKS_PER_CELL]) -> Self {
+    pub(super) fn new(cell: Cell, blocks: Box<[MatchedBlock; BLOCKS_PER_CELL]>) -> Self {
         Self { cell, blocks }
+    }
+
+    /// Test-only read of the cell this dataset covers, for asserting the minted graph shape.
+    /// `#[cfg(test)]` so it never widens the production API — production consumers get their own
+    /// accessors when they need them.
+    #[cfg(test)]
+    pub(super) fn cell(&self) -> Cell {
+        self.cell
+    }
+
+    /// Test-only read of the complete matched-block sample, for asserting the minted graph shape.
+    #[cfg(test)]
+    pub(super) fn blocks(&self) -> &[MatchedBlock; BLOCKS_PER_CELL] {
+        &self.blocks
     }
 }

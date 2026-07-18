@@ -45,7 +45,10 @@ pub(crate) enum IntegrityErrorCategory {
     SampleCount,
     /// A dose's recorded median/IQR summary is not the exact R-1 recomputation of its raw latencies.
     SummaryRecomputationMismatch,
-    /// A dose's event evidence violates the insert/delete/net-delta identity or the deterministic expected
-    /// net delta for its role.
+    /// A dose's event evidence violates the recorded insert/delete/net-delta algebraic identity
+    /// (`inserts − deletes = net delta`). It asserts *only* that identity through
+    /// [`EventEvidence::checked`](crate::observation::event_evidence::EventEvidence); it never asserts
+    /// role-specific absolute event counts, which subscription coalescing makes non-deterministic
+    /// (spec: "Record observed counts; assert only the event/net-delta identity").
     EventIdentityViolation,
 }
