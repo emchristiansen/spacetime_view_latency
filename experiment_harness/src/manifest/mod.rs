@@ -7,6 +7,8 @@ pub(crate) mod database_identity;
 pub(crate) mod listen_address;
 pub(crate) mod preregistered_parameters;
 pub(crate) mod release_commit;
+pub(crate) mod repetition_block_index;
+pub(crate) mod repetition_block_index_out_of_range;
 pub(crate) mod run_coordinate;
 pub(crate) mod schedule_seed;
 pub(crate) mod server_pid;

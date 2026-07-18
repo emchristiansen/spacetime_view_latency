@@ -43,12 +43,12 @@ impl DoseBatch {
         self.dose
     }
 
-    /// The driving role's cumulative **logical** row count once this dose is applied
-    /// (`dose * BATCH_SIZE`) — the preregistered ladder x-axis. For the Chronicle family one
-    /// logical row is a visibility/message pair, so the physical table footprint is twice this;
-    /// this value is the logical x-axis, not a physical row count.
+    /// The driving role's cumulative **logical** row count once this dose is applied — the
+    /// preregistered ladder x-axis. Delegates to the canonical
+    /// [`DoseIndex::cumulative_driving_rows`] so the ladder x-value is defined in exactly one place;
+    /// see it for the logical-vs-physical distinction.
     pub(crate) fn cumulative_driving_rows(&self) -> u64 {
-        self.dose.get() * BATCH_SIZE
+        self.dose.cumulative_driving_rows()
     }
 
     /// The half-open primary-key range this dose writes: exactly [`BATCH_SIZE`] contiguous keys

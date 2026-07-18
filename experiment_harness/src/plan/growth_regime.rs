@@ -1,5 +1,7 @@
 //! Growth regime — the outer experimental axis.
 
+use crate::params::{M_SLICE_ROWS, OWN_SLICE_BASELINE};
+
 /// The two mutually exclusive growth regimes.
 ///
 /// Never grow unrelated total size and the measured identity's own slice on the same
@@ -14,4 +16,21 @@ pub enum GrowthRegime {
     /// G and unrelated table size are pinned; M2 alone drives `N_own`; the x-axis is
     /// M2's own result-slice size. Reachable only by the key-scoped arms F/F′.
     OwnSliceGrowth,
+}
+
+impl GrowthRegime {
+    /// The held-constant pinned background baseline logical-row count for this regime — the rows the
+    /// unmeasured pinned role holds fixed across the entire dose ladder. `UnrelatedGrowth` pins the
+    /// measured slice M at [`M_SLICE_ROWS`]; `OwnSliceGrowth` pins the growth driver G at
+    /// [`OWN_SLICE_BASELINE`]. This is the single canonical source of the pinned baseline, shared by
+    /// dataset resolution ([`CampaignDataset::resolve`](crate::dataset::campaign_dataset::CampaignDataset::resolve))
+    /// and the analysis cardinality expectation
+    /// ([`PhysicalCardinalities::expected`](crate::dataset::physical_cardinalities::PhysicalCardinalities::expected)),
+    /// so the two cannot drift.
+    pub(crate) fn pinned_baseline_rows(self) -> u64 {
+        match self {
+            GrowthRegime::UnrelatedGrowth => M_SLICE_ROWS,
+            GrowthRegime::OwnSliceGrowth => OWN_SLICE_BASELINE,
+        }
+    }
 }

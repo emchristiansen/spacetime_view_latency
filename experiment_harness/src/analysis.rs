@@ -20,4 +20,6 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod ingest;
 pub(crate) mod stats;
+pub(crate) mod validate;

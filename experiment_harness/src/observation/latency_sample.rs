@@ -22,8 +22,18 @@ impl LatencySample {
         }
     }
 
+    /// Reconstruct a sample from its raw nanosecond count — the analysis validation pass's path to a
+    /// trusted sample from a validated wire value. Lossless: the stored representation is already
+    /// `u128` nanoseconds, so a value above `u64::MAX` is retained exactly with no narrowing.
+    pub(crate) fn from_nanos(nanos: u128) -> Self {
+        Self { nanos }
+    }
+
     /// The round-trip latency in nanoseconds.
     pub(crate) fn nanos(self) -> u128 {
         self.nanos
     }
 }
+
+#[cfg(test)]
+mod tests;

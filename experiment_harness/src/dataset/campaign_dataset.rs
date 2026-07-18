@@ -16,14 +16,13 @@
 use anyhow::Result;
 use spacetimedb_sdk::Identity;
 
-use crate::dataset::chronicle_physical_rows::ChroniclePhysicalRows;
 use crate::dataset::dose_batch::DoseBatch;
 use crate::dataset::dose_index::DoseIndex;
-use crate::dataset::message_physical_rows::MessagePhysicalRows;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
 use crate::dataset::role_slice::RoleSlice;
 use crate::dataset::seed_op::SeedOp;
-use crate::params::{GROWTH_KEY_BASE, MEASURED_KEY_BASE, M_SLICE_ROWS, OWN_SLICE_BASELINE};
+use crate::params::{GROWTH_KEY_BASE, MEASURED_KEY_BASE};
+use crate::plan::cell::Cell;
 use crate::plan::control_table::ControlTable;
 use crate::plan::growth_regime::GrowthRegime;
 use crate::plan::run::Run;
@@ -33,51 +32,62 @@ use crate::roles::role_identities::RoleIdentities;
 /// The deterministic dataset for one measured run: an unmeasured pinned background slice (the
 /// warm-up) and the driving role's cumulative dose ladder.
 pub(crate) struct CampaignDataset {
-    family: ControlTable,
-    /// The role whose slice the dose ladder advances (G under `UnrelatedGrowth`, M2 under
-    /// `OwnSliceGrowth`), retained for machine-readable evidence.
-    driving_role: Role,
+    /// The `(arm, growth-regime)` pairing this dataset resolves. It is the single stored source of
+    /// both the control-table family ([`Cell::control_table`]) and the identity-free
+    /// physical-cardinality expectation ([`PhysicalCardinalities::expected`]), so neither is a
+    /// separately stored field that could drift from the cell.
+    cell: Cell,
     driving: Identity,
-    driving_key_base: u64,
     pinned: Identity,
-    pinned_key_base: u64,
-    pinned_count: u64,
 }
 
 impl CampaignDataset {
     /// Resolve the dataset for `run` from its role identities — the sole constructor.
     ///
     /// Total over the regime: `UnrelatedGrowth` pins M and drives with G; `OwnSliceGrowth` pins G
-    /// and drives with M2. The family is taken from the run's control table. Because the only
-    /// inputs are the whole [`Run`] and [`RoleIdentities`], no caller can misassign the pinned and
-    /// driving roles, their key spaces, or the family.
+    /// and drives with M2. Only the resolved [`Cell`] and the two role identities are stored; the
+    /// control-table family, the pinned/driving key spaces, and the pinned baseline are all pure
+    /// functions of the [`Cell`], derived on demand rather than stored, so none can drift from it.
+    /// Because the only inputs are the whole [`Run`] and [`RoleIdentities`], no caller can misassign
+    /// the pinned and driving roles, their key spaces, or the family.
     pub(crate) fn resolve(run: Run, identities: &RoleIdentities) -> Self {
-        let family = run.control_table();
-        match run.cell().growth_regime() {
+        let cell = run.cell();
+        match cell.growth_regime() {
             GrowthRegime::UnrelatedGrowth => Self {
-                family,
-                driving_role: Role::GrowthDriver,
+                cell,
                 driving: identities.growth(),
-                driving_key_base: GROWTH_KEY_BASE,
                 pinned: identities.measured(),
-                pinned_key_base: MEASURED_KEY_BASE,
-                pinned_count: M_SLICE_ROWS,
             },
             GrowthRegime::OwnSliceGrowth => Self {
-                family,
-                driving_role: Role::OwnSliceMeasured,
+                cell,
                 driving: identities.measured(),
-                driving_key_base: MEASURED_KEY_BASE,
                 pinned: identities.growth(),
-                pinned_key_base: GROWTH_KEY_BASE,
-                pinned_count: OWN_SLICE_BASELINE,
             },
         }
     }
 
-    /// The control-table family shared by this run's arm and matched control.
+    /// The role whose slice the dose ladder advances, a total function of the cell's growth regime:
+    /// the growth driver G under `UnrelatedGrowth`, the own-slice measured role M2 under
+    /// `OwnSliceGrowth`. Derived from [`Cell`] rather than stored so it cannot drift from the regime
+    /// that also fixes the driving/pinned identity assignment.
+    fn driving_role(&self) -> Role {
+        match self.cell.growth_regime() {
+            GrowthRegime::UnrelatedGrowth => Role::GrowthDriver,
+            GrowthRegime::OwnSliceGrowth => Role::OwnSliceMeasured,
+        }
+    }
+
+    /// The held-constant pinned background slice size, derived from the cell's growth regime via the
+    /// canonical [`GrowthRegime::pinned_baseline_rows`] rather than stored, so it is the same single
+    /// source the analysis cardinality expectation uses.
+    fn pinned_count(&self) -> u64 {
+        self.cell.growth_regime().pinned_baseline_rows()
+    }
+
+    /// The control-table family shared by this run's arm and matched control, derived from the cell so
+    /// it can never diverge from a separately stored copy.
     pub(crate) fn family(&self) -> ControlTable {
-        self.family
+        self.cell.control_table()
     }
 
     /// The driving role's identity — the attribution every cumulative dose write carries. Exposed
@@ -87,39 +97,40 @@ impl CampaignDataset {
         self.driving
     }
 
-    /// The driving role's contiguous primary-key base, from which each dose's key range advances.
+    /// The driving role's contiguous primary-key base, from which each dose's key range advances. A
+    /// total function of the growth regime — the growth key space (G) under `UnrelatedGrowth`, the
+    /// measured key space (M2) under `OwnSliceGrowth` — derived rather than stored so the driving and
+    /// pinned key spaces cannot be assigned inconsistently with the regime.
     pub(crate) fn driving_key_base(&self) -> u64 {
-        self.driving_key_base
+        match self.cell.growth_regime() {
+            GrowthRegime::UnrelatedGrowth => GROWTH_KEY_BASE,
+            GrowthRegime::OwnSliceGrowth => MEASURED_KEY_BASE,
+        }
+    }
+
+    /// The pinned background role's primary-key base — the exact complement of
+    /// [`Self::driving_key_base`]: the measured key space under `UnrelatedGrowth`, the growth key
+    /// space under `OwnSliceGrowth`. Also derived from the regime so the two key spaces stay disjoint
+    /// by construction.
+    fn pinned_key_base(&self) -> u64 {
+        match self.cell.growth_regime() {
+            GrowthRegime::UnrelatedGrowth => MEASURED_KEY_BASE,
+            GrowthRegime::OwnSliceGrowth => GROWTH_KEY_BASE,
+        }
     }
 
     /// The canonical tag of the driving role, for machine-readable evidence.
     pub(crate) fn driving_role_tag(&self) -> &'static str {
-        self.driving_role.canonical_tag()
+        self.driving_role().canonical_tag()
     }
 
-    /// The physical table cardinalities once `dose` has been applied: the held-constant pinned
-    /// background baseline plus this dose's cumulative driving logical rows, projected onto the
-    /// family's actual tables. The `message` family occupies a single table (physical == logical);
-    /// the Chronicle family occupies two equal tables — one `message_visibility` and one
-    /// `chronicle_message` row per logical pair — for a 2× physical footprint. The count is a
-    /// property of the resolved dataset (its family and pinned baseline) and the dose, so no
-    /// caller can record a family-inconsistent cardinality.
+    /// The physical table cardinalities once `dose` has been applied. Delegates to the identity-free,
+    /// role-independent [`PhysicalCardinalities::expected`] keyed by this dataset's [`Cell`] and the
+    /// dose — the single canonical expectation shared with the analysis validation pass — so the
+    /// pinned-baseline-plus-cumulative-driving formula and its family projection live in exactly one
+    /// place and this dataset holds no duplicate of them.
     pub(crate) fn physical_cardinalities(&self, dose: &DoseBatch) -> PhysicalCardinalities {
-        // Checked, not assumed: the preregistered constants keep this far below `u64::MAX`, but a
-        // checked add fails loud and identically in debug and release rather than silently wrapping
-        // if a constant is ever changed out from under this invariant.
-        let logical_rows = self
-            .pinned_count
-            .checked_add(dose.cumulative_driving_rows())
-            .expect("dataset logical-row count must not overflow u64");
-        match self.family {
-            ControlTable::Message => {
-                PhysicalCardinalities::Message(MessagePhysicalRows::from_logical_rows(logical_rows))
-            }
-            ControlTable::ChronicleMessage => PhysicalCardinalities::Chronicle(
-                ChroniclePhysicalRows::from_logical_pairs(logical_rows),
-            ),
-        }
+        PhysicalCardinalities::expected(self.cell, dose.dose())
     }
 
     /// The unmeasured warm-up writes: the pinned background slice, attributed to the pinned
@@ -128,8 +139,9 @@ impl CampaignDataset {
     /// dose x-axis. The pinned identity is confined to this method — it is never handed to a
     /// [`DoseBatch`](super::dose_batch::DoseBatch).
     pub(crate) fn background_operations(&self) -> Vec<SeedOp> {
-        (self.pinned_key_base..self.pinned_key_base + self.pinned_count)
-            .map(|key| match self.family {
+        let pinned_key_base = self.pinned_key_base();
+        (pinned_key_base..pinned_key_base + self.pinned_count())
+            .map(|key| match self.family() {
                 ControlTable::Message => SeedOp::Message {
                     id: key,
                     sender: self.pinned,
@@ -195,25 +207,19 @@ impl CampaignDataset {
 
     /// Whether the measured identity (M or M2) is this dataset's driving role — true under
     /// `OwnSliceGrowth` (M2 drives its own slice), false under `UnrelatedGrowth` (G drives while M
-    /// is the pinned background). Reads the [`Role`] discriminator [`Self::resolve`] recorded for the
-    /// driving role, which it sets in the same regime match arm as the driving identity and key
-    /// base. Exhaustive by design: [`Self::resolve`] only ever assigns [`Role::OwnSliceMeasured`] or
-    /// [`Role::GrowthDriver`] as a driving role, so a [`Role::Measured`] here is a construction drift
-    /// and fails loud rather than silently classifying as `false`.
+    /// is the pinned background). Derived directly from the cell's growth regime, the same total
+    /// function that fixes the driving/pinned identity and key-space assignment, so it cannot classify
+    /// inconsistently with them.
     fn measured_is_driving(&self) -> bool {
-        match self.driving_role {
-            Role::OwnSliceMeasured => true,
-            Role::GrowthDriver => false,
-            Role::Measured => panic!(
-                "resolve never assigns Role::Measured as a driving role; driving_role must be \
-                 OwnSliceMeasured (OwnSliceGrowth) or GrowthDriver (UnrelatedGrowth)"
-            ),
+        match self.cell.growth_regime() {
+            GrowthRegime::OwnSliceGrowth => true,
+            GrowthRegime::UnrelatedGrowth => false,
         }
     }
 
     /// The pinned background role's slice, held constant across the entire dose ladder.
     fn pinned_slice(&self) -> RoleSlice {
-        RoleSlice::new(self.pinned, self.pinned_key_base, self.pinned_count)
+        RoleSlice::new(self.pinned, self.pinned_key_base(), self.pinned_count())
     }
 
     /// The driving role's slice before any dose is applied: its contiguous key space with zero rows.
@@ -221,7 +227,7 @@ impl CampaignDataset {
     /// arithmetic ([`DoseBatch`]) is only defined for the ten valid one-based dose rungs, not for a
     /// zeroth dose.
     fn driving_slice_initial(&self) -> RoleSlice {
-        RoleSlice::new(self.driving, self.driving_key_base, 0)
+        RoleSlice::new(self.driving, self.driving_key_base(), 0)
     }
 
     /// The driving role's cumulative slice once doses `1..=through` have been applied: its contiguous
@@ -230,7 +236,7 @@ impl CampaignDataset {
     /// place and is never re-derived here.
     fn driving_slice_through(&self, through: DoseIndex) -> RoleSlice {
         let count = DoseBatch::new(self, through).cumulative_driving_rows();
-        RoleSlice::new(self.driving, self.driving_key_base, count)
+        RoleSlice::new(self.driving, self.driving_key_base(), count)
     }
 
     /// Deliver every cumulative dose to `f` exactly once, in monotonic `1..=NUM_DOSES` order,

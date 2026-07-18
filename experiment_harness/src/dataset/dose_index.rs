@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::params::NUM_DOSES;
+use crate::params::{BATCH_SIZE, NUM_DOSES};
 
 /// The 1-based position of a cumulative dose in the preregistered ladder.
 ///
@@ -38,4 +38,19 @@ impl DoseIndex {
     pub(crate) fn get(self) -> u64 {
         self.0
     }
+
+    /// The driving role's cumulative **logical** row count once doses `1..=self` have been applied
+    /// (`self * BATCH_SIZE`) — the preregistered ladder x-axis. This is the single canonical definition
+    /// of the ladder x-value: [`DoseBatch::cumulative_driving_rows`](super::dose_batch::DoseBatch::cumulative_driving_rows)
+    /// and the analysis cardinality expectation
+    /// ([`PhysicalCardinalities::expected`](super::physical_cardinalities::PhysicalCardinalities::expected))
+    /// both delegate here so the formula lives in exactly one place and runtime and analysis cannot
+    /// drift. For the Chronicle family one logical row is a visibility/message pair, so the physical
+    /// footprint is twice this; this value is the logical x-axis, not a physical row count.
+    pub(crate) fn cumulative_driving_rows(self) -> u64 {
+        self.0 * BATCH_SIZE
+    }
 }
+
+#[cfg(test)]
+mod tests;

@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::manifest::repetition_block_index::RepetitionBlockIndex;
 use crate::plan::cell::Cell;
 use crate::plan::run::Run;
 use crate::plan::run_role::RunRole;
@@ -22,18 +23,38 @@ pub(crate) struct RunCoordinate {
     cell: Cell,
     /// Whether this run exercises the arm or its matched direct-table control.
     role: RunRole,
-    /// 0-based repetition-block index within the cell's fixed block sample (in range by
-    /// construction of [`BlockRun`]).
-    repetition_block: u32,
+    /// Validated 0-based repetition-block index within the cell's fixed block sample.
+    repetition_block: RepetitionBlockIndex,
 }
 
 impl RunCoordinate {
-    /// Snapshot the identity of a single run within a scheduled block.
+    /// Snapshot the identity of a single run within a scheduled block. A [`BlockRun`]'s index is in
+    /// `0..REPETITION_BLOCKS` by construction, so wrapping it as a [`RepetitionBlockIndex`] cannot
+    /// fail here; a failure would be a schedule-construction bug and fails loud.
     pub(crate) fn new(block_run: &BlockRun, role: RunRole) -> Self {
-        Self {
-            cell: block_run.cell(),
+        Self::from_parts(
+            block_run.cell(),
             role,
-            repetition_block: block_run.block_index(),
+            RepetitionBlockIndex::try_new(block_run.block_index())
+                .expect("a scheduled BlockRun's index is in 0..REPETITION_BLOCKS by construction"),
+        )
+    }
+
+    /// Reconstruct a run coordinate from its already-validated identity parts. Total: every argument
+    /// is a typed value that cannot express an invalid coordinate — the [`Cell`] rules out impossible
+    /// arm/regime pairings, [`RunRole`] selects the arm or its matched control, and
+    /// [`RepetitionBlockIndex`] is proven in range. This is the sole path the analysis validation pass
+    /// uses to rebuild a trusted coordinate from wire primitives, mirroring [`Self::new`]'s
+    /// schedule-sourced construction without routing through a [`BlockRun`].
+    pub(crate) fn from_parts(
+        cell: Cell,
+        role: RunRole,
+        repetition_block: RepetitionBlockIndex,
+    ) -> Self {
+        Self {
+            cell,
+            role,
+            repetition_block,
         }
     }
 
@@ -61,8 +82,8 @@ impl RunCoordinate {
     }
 
     /// A deterministic test fixture coordinate: the key-scoped point-filter arm (F) under own-slice
-    /// growth, the arm role, and the first repetition block. Builds the private fields directly so
-    /// tests needing a manifest/observation coordinate do not have to route through the schedule-owned
+    /// growth, the arm role, and the first repetition block. Routes through [`Self::from_parts`] so
+    /// tests needing a manifest/observation coordinate do not have to go through the schedule-owned
     /// [`BlockRun`]. The own-slice regime is chosen deliberately: it is the sole regime in which the
     /// driving role *is* the measured subscriber, so a whole internally coherent observation (the
     /// measured slice's own brand-new inserts) can be assembled from it. Test-only — never a
@@ -71,10 +92,10 @@ impl RunCoordinate {
     pub(crate) fn fixture() -> Self {
         use crate::plan::key_scoped_arm::KeyScopedArm;
 
-        Self {
-            cell: Cell::KeyScopedOwnSlice(KeyScopedArm::PointFilter),
-            role: RunRole::Arm,
-            repetition_block: 0,
-        }
+        Self::from_parts(
+            Cell::KeyScopedOwnSlice(KeyScopedArm::PointFilter),
+            RunRole::Arm,
+            RepetitionBlockIndex::try_new(0).expect("0 is a valid repetition-block index"),
+        )
     }
 }
