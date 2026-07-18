@@ -8,6 +8,7 @@
 //! unused-code is allowed crate-wide for the skeleton.
 #![allow(dead_code)]
 
+mod analysis;
 mod campaign;
 mod client;
 mod dataset;
