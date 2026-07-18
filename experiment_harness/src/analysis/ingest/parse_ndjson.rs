@@ -20,3 +20,6 @@ pub(crate) fn parse_ndjson(contents: &str) -> std::result::Result<Vec<WireRecord
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

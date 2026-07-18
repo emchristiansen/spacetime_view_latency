@@ -1,8 +1,12 @@
 //! The whole-line wire envelope: a record identity plus its kind-dispatched body.
 
+use serde::Deserialize;
+use serde_json::value::RawValue;
+
 use crate::analysis::ingest::manifest_body_dto::ManifestBodyDto;
 use crate::analysis::ingest::observation_body_dto::ObservationBodyDto;
 use crate::analysis::ingest::record_id_dto::RecordIdDto;
+use crate::analysis::ingest::record_kind_dto::RecordKindDto;
 
 /// One decoded NDJSON line: the record identity and the body whose shape its
 /// [`kind`](crate::analysis::ingest::record_kind_dto::RecordKindDto) selects.
@@ -13,6 +17,7 @@ use crate::analysis::ingest::record_id_dto::RecordIdDto;
 /// which reads the kind first and then decodes the body into exactly the matching DTO. That keeps the
 /// closed-contract guarantees — unknown/duplicate/missing-field rejection on both the outer envelope
 /// and the body — while routing by kind.
+#[derive(Debug)]
 pub(crate) enum WireRecordDto {
     /// A `Manifest`-kind line carrying the reference + immutable manifest body.
     Manifest {
@@ -27,21 +32,35 @@ pub(crate) enum WireRecordDto {
 }
 
 impl WireRecordDto {
-    /// Decode one NDJSON line, reading the record kind first and then the kind-matched body under the
-    /// closed wire contract (unknown, duplicate, and missing fields all rejected on both the envelope
-    /// and the body). On failure, the human-readable diagnostic is returned for
-    /// [`parse_ndjson`](super::parse_ndjson::parse_ndjson) to tag with the line's position.
+    /// Decode one NDJSON line under the closed wire contract, returning the record identity and the
+    /// body decoded into exactly the DTO its kind selects. On failure, serde's own message is returned
+    /// for [`parse_ndjson`](super::parse_ndjson::parse_ndjson) to tag with the line's position. That
+    /// message may quote the offending token — an unknown field name or variant tag, whose bytes do
+    /// come from the line — plus a position, but this method never appends or interpolates the complete
+    /// source line itself.
     ///
-    /// The concrete dispatch mechanism — a closed derived envelope of the typed
-    /// [`RecordIdDto`](super::record_id_dto::RecordIdDto) plus a borrowed
-    /// `serde_json::value::RawValue` body, then a kind-dispatched typed decode of the retained raw body
-    /// (preserving the body's duplicate/unknown-field detection, field-order-independent, no
-    /// duplicate-erasing `serde_json::Value` staging) — is filled in the behavior phase, so this is a
-    /// stub. The placeholder deliberately does not embed the untrusted line, so a reachable panic can
-    /// never dump an entire evidence line.
+    /// Dispatch is two closed passes, not one derived enum (serde would need the kind discriminant to
+    /// be a sibling of the variant payloads, but it is nested inside `record`). First the envelope is
+    /// decoded into the typed [`RecordIdDto`] plus its body retained verbatim as a
+    /// `Box<serde_json::value::RawValue>`, so the kind is read while the body is neither parsed nor
+    /// staged through a duplicate-erasing `serde_json::Value`. Then the retained raw body is decoded
+    /// into the kind-matched DTO. Both passes are `#[serde(deny_unknown_fields)]` derived struct
+    /// visitors, so unknown, duplicate, and missing fields are rejected structurally on the envelope
+    /// and the body alike, and both are field-order-independent — the body may precede `record` on the
+    /// line, and the retained raw body is decoded only after the whole envelope (hence its kind) is read.
     pub(crate) fn parse(line: &str) -> std::result::Result<Self, String> {
-        let _ = line;
-        todo!("kind-dispatch the wire line body under the closed wire contract")
+        let Envelope { record, body } =
+            serde_json::from_str(line).map_err(|error| error.to_string())?;
+        match record.kind {
+            RecordKindDto::Manifest => {
+                let body = serde_json::from_str(body.get()).map_err(|error| error.to_string())?;
+                Ok(WireRecordDto::Manifest { record, body })
+            }
+            RecordKindDto::Dose(_) => {
+                let body = serde_json::from_str(body.get()).map_err(|error| error.to_string())?;
+                Ok(WireRecordDto::Dose { record, body })
+            }
+        }
     }
 
     /// This line's record identity (sequence and kind), regardless of body shape.
@@ -51,3 +70,17 @@ impl WireRecordDto {
         }
     }
 }
+
+/// The closed outer-envelope surface: the typed record identity and the body retained verbatim, so
+/// the kind can be read without parsing or `serde_json::Value`-staging the body. `deny_unknown_fields`
+/// plus serde's derived struct visitor reject unknown, duplicate, and missing envelope fields, and the
+/// visitor is field-order-independent, so `body` may appear before `record` on the line.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    record: RecordIdDto,
+    body: Box<RawValue>,
+}
+
+#[cfg(test)]
+mod tests;
