@@ -60,3 +60,6 @@ impl EquivalenceMargin {
         self.delta.to_f64() / 1_000_000.0
     }
 }
+
+#[cfg(test)]
+mod tests;

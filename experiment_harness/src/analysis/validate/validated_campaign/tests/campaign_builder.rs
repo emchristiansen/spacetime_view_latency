@@ -73,7 +73,7 @@ const SERVER_PID: u32 = 4242;
 /// Owns the complete, spec-correct campaign records and is the sole handle the proofs use to read,
 /// mutate, and surrender them. A category proof builds a [`Self::valid`] fixture, mutates one record via
 /// [`Self::records_mut`] (or drops a cell and [`Self::renumber`]s), and folds [`Self::into_records`].
-pub(super) struct CampaignFixture {
+pub(crate) struct CampaignFixture {
     records: Vec<WireRecordDto>,
 }
 
@@ -87,7 +87,7 @@ impl CampaignFixture {
     /// each run's manifest followed by its ten cumulative doses in canonical ladder order. Building through
     /// the production [`Schedule`] — never a parallel test-only grammar — means a spec-correct campaign is
     /// one the stage accepts record-for-record, so an ordering proof perturbs this true order to fail it.
-    pub(super) fn valid() -> Self {
+    pub(crate) fn valid() -> Self {
         let latencies = latency_nanos();
         let summary = summary_dto(&latencies);
         let seed = Self::schedule_seed();
@@ -230,7 +230,7 @@ impl CampaignFixture {
     }
 
     /// Surrender the records to the fold under test.
-    pub(super) fn into_records(self) -> Vec<WireRecordDto> {
+    pub(crate) fn into_records(self) -> Vec<WireRecordDto> {
         self.records
     }
 

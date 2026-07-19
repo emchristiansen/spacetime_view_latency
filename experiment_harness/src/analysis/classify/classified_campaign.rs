@@ -202,3 +202,6 @@ fn total_change_over_ladder(points: &[(i128, i128)]) -> Rational {
 fn median_nanos_i128(median_nanos: u128) -> i128 {
     i128::try_from(median_nanos).expect("a nanosecond latency median fits i128")
 }
+
+#[cfg(test)]
+mod tests;

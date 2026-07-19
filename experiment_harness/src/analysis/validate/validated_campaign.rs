@@ -1642,5 +1642,7 @@ fn mint_run<R: RunKind>(
     TrustedRun::<R>::mint(coordinate, doses, manifest_seq)
 }
 
+// `pub(crate)` (test-only) so the `campaign_builder` fixture reachable through it is nameable from the
+// campaign classifier's graph-level tests; the category-proof submodules remain private.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

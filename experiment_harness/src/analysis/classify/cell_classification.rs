@@ -55,3 +55,6 @@ impl CellClassification {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

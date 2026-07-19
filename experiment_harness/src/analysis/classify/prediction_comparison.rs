@@ -39,3 +39,6 @@ impl PredictionComparison {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

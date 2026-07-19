@@ -2,7 +2,10 @@
 //! [`campaign_builder`] constructs a complete, spec-correct campaign programmatically; the success
 //! proof folds it, and each category proof applies one minimal mutation and asserts the typed failure.
 
-mod campaign_builder;
+// `pub(crate)` (test-only, gated by this module's `#[cfg(test)]` parent) so the campaign classifier's
+// graph-level tests can reuse this validation-owned fixture without duplicating the complete-campaign
+// record builder. The category-proof submodules below stay private.
+pub(crate) mod campaign_builder;
 mod staged_ladder;
 
 mod a_complete_valid_campaign_folds;

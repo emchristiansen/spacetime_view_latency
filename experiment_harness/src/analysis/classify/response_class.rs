@@ -43,3 +43,6 @@ impl ResponseClass {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
