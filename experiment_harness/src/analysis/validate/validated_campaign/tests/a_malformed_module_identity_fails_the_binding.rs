@@ -17,12 +17,13 @@ fn a_malformed_module_identity_fails_the_binding() {
     let malformed_hex = "not-canonical-hex".to_string();
 
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    match &mut records[0] {
+    // Locate the cell0/arm/block0 manifest by identity; corrupt its module database identity.
+    let index = fixture.manifest_index(Cell::all()[0], RunRole::Arm, 0);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.module.database_identity = malformed_hex.clone();
         }
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

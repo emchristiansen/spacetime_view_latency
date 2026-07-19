@@ -16,6 +16,13 @@ impl RecordSeq {
         Self(0)
     }
 
+    /// The sequence at an explicit campaign position, for reconstructing a [`RecordSeq`] from a value
+    /// already proven a valid campaign sequence number — e.g. a staged manifest's `seq` carried into the
+    /// trusted graph as its run's collection-order anchor.
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     /// The next sequence after this one. Checked so exhausting `u64` fails loud and identically in
     /// debug and release rather than wrapping; the finite campaign never approaches this bound.
     pub(crate) fn next(self) -> Self {

@@ -13,6 +13,7 @@ use crate::analysis::validate::integrity_error_category::IntegrityErrorCategory;
 use crate::analysis::validate::malformed_stable_fault::MalformedStableFault;
 use crate::analysis::validate::manifest_reference_fault::ManifestReferenceFault;
 use crate::analysis::validate::record_coordinate_fault::RecordCoordinateFault;
+use crate::analysis::validate::schedule_order_fault::ScheduleOrderFault;
 use crate::analysis::validate::server_provenance_fault::ServerProvenanceFault;
 use crate::analysis::validate::stable_fact_contradiction::StableFactContradiction;
 use crate::dataset::dose_index::DoseIndex;
@@ -191,6 +192,14 @@ pub(crate) enum IntegrityError {
         observed: EventEvidenceDto,
         expected_net_delta: i128,
         observed_net_delta: i64,
+        diagnostic: String,
+    },
+    /// A record's sequence position does not match the seed-derived preregistered schedule grammar (the
+    /// global `Cell × block` permutation, the seed-selected adjacent arm/control order, or the
+    /// manifest-then-canonical-doses within-run order). The typed [`ScheduleOrderFault`] carries the
+    /// campaign position and the first-differing block, role, or within-run record slot.
+    ScheduleOrderMismatch {
+        fault: ScheduleOrderFault,
         diagnostic: String,
     },
 }
@@ -438,6 +447,11 @@ impl IntegrityError {
         }
     }
 
+    /// A record's sequence position does not match the seed-derived preregistered schedule grammar.
+    pub(super) fn schedule_order_mismatch(fault: ScheduleOrderFault, diagnostic: String) -> Self {
+        Self::ScheduleOrderMismatch { fault, diagnostic }
+    }
+
     /// The closed typed obligation category this failure belongs to.
     pub(crate) fn category(&self) -> IntegrityErrorCategory {
         match self {
@@ -470,6 +484,7 @@ impl IntegrityError {
                 IntegrityErrorCategory::SummaryRecomputationMismatch
             }
             Self::EventIdentityViolation { .. } => IntegrityErrorCategory::EventIdentityViolation,
+            Self::ScheduleOrderMismatch { .. } => IntegrityErrorCategory::ScheduleOrderMismatch,
         }
     }
 
@@ -494,7 +509,8 @@ impl IntegrityError {
             | Self::PhysicalCardinalityMismatch { diagnostic, .. }
             | Self::SampleCount { diagnostic, .. }
             | Self::SummaryRecomputationMismatch { diagnostic, .. }
-            | Self::EventIdentityViolation { diagnostic, .. } => diagnostic,
+            | Self::EventIdentityViolation { diagnostic, .. }
+            | Self::ScheduleOrderMismatch { diagnostic, .. } => diagnostic,
         }
     }
 }

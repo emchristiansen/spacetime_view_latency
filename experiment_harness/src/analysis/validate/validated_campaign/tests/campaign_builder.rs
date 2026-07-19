@@ -31,9 +31,11 @@ use crate::analysis::ingest::server_facts_dto::ServerFactsDto;
 use crate::analysis::ingest::table_scoped_arm_dto::TableScopedArmDto;
 use crate::analysis::ingest::validated_run_manifest_dto::ValidatedRunManifestDto;
 use crate::analysis::ingest::wire_record_dto::WireRecordDto;
+use crate::analysis::validate::record_slot::RecordSlot;
 use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
 use crate::manifest::database_identity::DatabaseIdentity;
+use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
 use crate::observation::latency_sample::LatencySample;
@@ -46,6 +48,7 @@ use crate::params::{
 use crate::plan::cell::Cell;
 use crate::plan::key_scoped_arm::KeyScopedArm;
 use crate::plan::run_role::RunRole;
+use crate::plan::schedule::Schedule;
 use crate::plan::table_scoped_arm::TableScopedArm;
 
 /// The one schedule seed shared by every run (proven homogeneous by the fold).
@@ -76,29 +79,38 @@ pub(super) struct CampaignFixture {
 
 impl CampaignFixture {
     /// The complete, spec-correct campaign: 9 cells × 30 blocks × 2 roles manifests, each followed by
-    /// its ten cumulative-dose observations, with contiguous sequence numbers over `0..5940`.
+    /// its ten cumulative-dose observations, with contiguous sequence numbers over `0..5940`, emitted in
+    /// the exact production schedule order.
+    ///
+    /// Records are laid down in the same order the fold's schedule-order stage reconstructs from the seed:
+    /// the seed-permuted global block order, each block's seed-selected adjacent arm/control order, and
+    /// each run's manifest followed by its ten cumulative doses in canonical ladder order. Building through
+    /// the production [`Schedule`] — never a parallel test-only grammar — means a spec-correct campaign is
+    /// one the stage accepts record-for-record, so an ordering proof perturbs this true order to fail it.
     pub(super) fn valid() -> Self {
         let latencies = latency_nanos();
         let summary = summary_dto(&latencies);
+        let seed = Self::schedule_seed();
         let mut records = Vec::new();
         let mut seq = 0u64;
-        for cell in Cell::all() {
-            for block in 0..REPETITION_BLOCKS {
-                for role in [RunRole::Arm, RunRole::Control] {
-                    records.push(manifest_record(seq, cell, role, block));
+        for block in Schedule::preregistered().randomized_block_order(seed) {
+            let cell = block.cell();
+            let block_index = block.block_index();
+            for run in block.ordered_runs(seed) {
+                let role = run.role();
+                records.push(manifest_record(seq, cell, role, block_index));
+                seq += 1;
+                for dose in DoseIndex::ALL {
+                    records.push(dose_record(
+                        seq,
+                        cell,
+                        role,
+                        block_index,
+                        dose,
+                        latencies.clone(),
+                        summary,
+                    ));
                     seq += 1;
-                    for dose in DoseIndex::ALL {
-                        records.push(dose_record(
-                            seq,
-                            cell,
-                            role,
-                            block,
-                            dose,
-                            latencies.clone(),
-                            summary,
-                        ));
-                        seq += 1;
-                    }
                 }
             }
         }
@@ -134,6 +146,87 @@ impl CampaignFixture {
             WireRecordDto::Dose { body, .. } => &body.observation.coordinate.run,
         };
         super::super::cell_from_dto(coordinate.cell)
+    }
+
+    /// The index of the manifest record for the canonical `(cell, role, block)`, located by decoding each
+    /// record's wire coordinate rather than assuming emission order — so an ordering-sensitive proof
+    /// addresses a run by identity and stays correct under the seed-randomized record order [`Self::valid`]
+    /// emits.
+    pub(super) fn manifest_index(&self, cell: Cell, role: RunRole, block: u32) -> usize {
+        self.records
+            .iter()
+            .position(|record| match record {
+                WireRecordDto::Manifest { body, .. } => {
+                    Self::coordinate_is(&body.manifest.run, cell, role, block)
+                }
+                WireRecordDto::Dose { .. } => false,
+            })
+            .expect("the fixture carries a manifest for every canonical (cell, role, block)")
+    }
+
+    /// The index of the cumulative-dose observation for the canonical `(cell, role, block, dose)`, located
+    /// by identity for the same reason as [`Self::manifest_index`].
+    pub(super) fn dose_index(&self, cell: Cell, role: RunRole, block: u32, dose: DoseIndex) -> usize {
+        self.records
+            .iter()
+            .position(|record| match record {
+                WireRecordDto::Dose { body, .. } => {
+                    Self::coordinate_is(&body.observation.coordinate.run, cell, role, block)
+                        && body.observation.coordinate.dose == dose.get()
+                }
+                WireRecordDto::Manifest { .. } => false,
+            })
+            .expect("the fixture carries an observation for every canonical (cell, role, block, dose)")
+    }
+
+    /// The record index of the `n`-th manifest in emission (sequence) order, 0-based — for a proof that
+    /// must address the fold's reference (first) manifest and a distinct later one without assuming which
+    /// run the seed schedule places at either position.
+    pub(super) fn nth_manifest_index(&self, n: usize) -> usize {
+        self.records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| match record {
+                WireRecordDto::Manifest { .. } => Some(index),
+                WireRecordDto::Dose { .. } => None,
+            })
+            .nth(n)
+            .expect("the fixture carries one manifest per canonical run")
+    }
+
+    /// The full schedule identity a record carries: its trusted run coordinate `(cell, role, block)`, its
+    /// 0-based repetition block, and its within-run slot — decoded from the wire coordinate. An ordering
+    /// proof captures a pristine expected identity with this *before* perturbing the record order, so the
+    /// expected descriptor is derived from the record itself rather than re-encoded and able to drift from
+    /// the fold's own decode.
+    pub(super) fn record_identity(record: &WireRecordDto) -> (RunCoordinate, u32, RecordSlot) {
+        match record {
+            WireRecordDto::Manifest { body, .. } => {
+                let run = &body.manifest.run;
+                (Self::decode_coordinate(run), run.repetition_block, RecordSlot::Manifest)
+            }
+            WireRecordDto::Dose { body, .. } => {
+                let coordinate = &body.observation.coordinate;
+                (
+                    Self::decode_coordinate(&coordinate.run),
+                    coordinate.run.repetition_block,
+                    RecordSlot::Dose(DoseIndex::ALL[(coordinate.dose - 1) as usize]),
+                )
+            }
+        }
+    }
+
+    /// Whether a wire run coordinate decodes to the trusted `(cell, role, block)`.
+    fn coordinate_is(run: &RunCoordinateDto, cell: Cell, role: RunRole, block: u32) -> bool {
+        let coordinate = Self::decode_coordinate(run);
+        coordinate.cell() == cell && coordinate.role() == role && run.repetition_block == block
+    }
+
+    /// The trusted run coordinate a well-formed wire coordinate decodes to, through the fold's own
+    /// `build_coordinate`. The fixture's coordinates are all spec-correct, so its range check never fails
+    /// here.
+    fn decode_coordinate(run: &RunCoordinateDto) -> RunCoordinate {
+        super::super::build_coordinate(run).expect("the fixture's coordinates are all well-formed")
     }
 
     /// Surrender the records to the fold under test.

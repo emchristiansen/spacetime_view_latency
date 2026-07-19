@@ -3,6 +3,7 @@
 use crate::analysis::validate::arm_run::ArmRun;
 use crate::analysis::validate::control_run::ControlRun;
 use crate::analysis::validate::trusted_run::TrustedRun;
+use crate::observation::record_seq::RecordSeq;
 
 /// One repetition block of a cell: exactly its two matched runs — the arm under test and its matched
 /// direct-base-table control. The arm and control are role-indexed [`TrustedRun`] types ([`ArmRun`] and
@@ -30,6 +31,16 @@ impl MatchedBlock {
     /// coordinates agree on their shared block index and that it matches the array position.
     pub(super) fn new(arm: TrustedRun<ArmRun>, control: TrustedRun<ControlRun>) -> Self {
         Self { arm, control }
+    }
+
+    /// This block's position in the durable collection order: the earlier of its two runs' manifest
+    /// sequences. Temporal analyses (collection-order plots, lag-1 autocorrelation) order blocks by this
+    /// key to recover when each block was actually recorded, independent of the canonical
+    /// cell→role→block traversal that the trusted-graph shape imposes.
+    // Phase 1 scaffolding: consumed by the Phase 2 classify/report temporal layer; allow until then.
+    #[allow(dead_code)]
+    pub(crate) fn collection_order_key(&self) -> RecordSeq {
+        self.arm.manifest_seq().min(self.control.manifest_seq())
     }
 
     /// Test-only read of the arm run, for asserting the minted graph shape. `#[cfg(test)]` so it never

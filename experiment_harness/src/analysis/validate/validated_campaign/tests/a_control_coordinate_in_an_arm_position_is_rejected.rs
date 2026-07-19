@@ -9,6 +9,7 @@ use super::staged_ladder::StagedLadder;
 use crate::analysis::validate::arm_run::ArmRun;
 use crate::analysis::validate::integrity_error::IntegrityError;
 use crate::analysis::validate::trusted_run::TrustedRun;
+use crate::observation::record_seq::RecordSeq;
 use crate::plan::cell::Cell;
 use crate::plan::run_role::RunRole;
 
@@ -21,7 +22,9 @@ fn a_control_coordinate_in_an_arm_position_is_rejected() {
     let control_coordinate = super::super::canonical_coordinate(cell, RunRole::Control, 0);
     let doses = StagedLadder::trusted_doses(cell);
 
-    let Err(error) = TrustedRun::<ArmRun>::mint(control_coordinate.clone(), doses) else {
+    // The role check fails before the manifest sequence is consulted, so any sequence serves here.
+    let Err(error) = TrustedRun::<ArmRun>::mint(control_coordinate.clone(), doses, RecordSeq::zero())
+    else {
         panic!("minting a control-role coordinate into an arm position must fail");
     };
 

@@ -6,6 +6,7 @@ use crate::analysis::validate::integrity_error::IntegrityError;
 use crate::analysis::validate::run_kind::RunKind;
 use crate::analysis::validate::trusted_dose::TrustedDose;
 use crate::manifest::run_coordinate::RunCoordinate;
+use crate::observation::record_seq::RecordSeq;
 use crate::params::NUM_DOSES_USIZE;
 
 /// One run of a matched block, its role lifted into the type parameter `R` (an
@@ -25,6 +26,10 @@ use crate::params::NUM_DOSES_USIZE;
 pub(crate) struct TrustedRun<R> {
     /// This run's schedule coordinate, proven to agree with its manifest reference and its doses.
     coordinate: RunCoordinate,
+    /// The campaign sequence assigned to this run's manifest record — the run's position in the durable
+    /// collection order, retained so temporal analyses (collection-order plots, lag-1 autocorrelation)
+    /// can recover when each block was actually recorded rather than only its canonical coordinate.
+    manifest_seq: RecordSeq,
     /// The complete monotonic dose ladder, doses `1..=NUM_DOSES` each present exactly once, in order.
     /// Heap-owned as a boxed fixed array so the ten-dose cardinality remains a property of the type while
     /// the run's by-value footprint is one pointer — keeping the fold's stack frame bounded regardless of
@@ -44,6 +49,7 @@ impl<R: RunKind> TrustedRun<R> {
     pub(super) fn mint(
         coordinate: RunCoordinate,
         doses: Box<[TrustedDose; NUM_DOSES_USIZE]>,
+        manifest_seq: RecordSeq,
     ) -> Result<Self, IntegrityError> {
         if coordinate.role() != R::ROLE {
             let diagnostic = format!(
@@ -55,9 +61,21 @@ impl<R: RunKind> TrustedRun<R> {
         }
         Ok(Self {
             coordinate,
+            manifest_seq,
             doses,
             role: PhantomData,
         })
+    }
+}
+
+/// Production read accessor available beyond tests, role-agnostic (`impl<R>`, no [`RunKind`] bound) since
+/// the manifest sequence does not depend on the role marker.
+impl<R> TrustedRun<R> {
+    /// The campaign sequence of this run's manifest record — its position in the durable collection
+    /// order, the anchor a [`MatchedBlock`](super::matched_block::MatchedBlock) folds into its temporal
+    /// collection-order key.
+    pub(crate) fn manifest_seq(&self) -> RecordSeq {
+        self.manifest_seq
     }
 }
 

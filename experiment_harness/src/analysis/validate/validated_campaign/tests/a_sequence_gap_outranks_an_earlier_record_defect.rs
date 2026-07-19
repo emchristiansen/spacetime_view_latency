@@ -7,6 +7,8 @@ use super::super::ValidatedCampaign;
 use crate::analysis::ingest::wire_record_dto::WireRecordDto;
 use crate::analysis::validate::integrity_error::IntegrityError;
 use crate::dataset::dose_index::DoseIndex;
+use crate::plan::cell::Cell;
+use crate::plan::run_role::RunRole;
 
 /// A campaign with an earlier record's off-formula `logical_n` (a stage-2 per-record defect) *and* a
 /// later record's out-of-range sequence (a stage-1 discontinuity) fails with `SequenceNotContiguous`: the
@@ -20,14 +22,16 @@ fn a_sequence_gap_outranks_an_earlier_record_defect() {
     let gap_seq = total as u64;
     let corrupted_logical_n = DoseIndex::ALL[0].cumulative_driving_rows() + 1;
 
-    let records = fixture.records_mut();
     // Earlier per-record defect: corrupt the cell0/arm/block0 dose-1 observation's cumulative logical
     // count off its preregistered `dose * BATCH_SIZE` value — a stage-2 record-coordinate contradiction.
-    match &mut records[1] {
+    // Located by identity: under the seed record order it sits at some earlier sequence than the gap below.
+    let defect_index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, DoseIndex::ALL[0]);
+    let records = fixture.records_mut();
+    match &mut records[defect_index] {
         WireRecordDto::Dose { body, .. } => {
             body.observation.coordinate.logical_n = corrupted_logical_n;
         }
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     }
     // Later sequence discontinuity: push the highest-sequence record one past the end — a stage-1 gap.
     let last = records.len() - 1;

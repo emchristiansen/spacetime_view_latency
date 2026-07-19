@@ -18,19 +18,19 @@ use crate::plan::run_role::RunRole;
 #[test]
 fn a_wrong_physical_cardinality_is_rejected() {
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    // The second record is the cell0/arm/block0 dose-1 observation; bump its message-row count.
-    match &mut records[1] {
+    // Locate the cell0/arm/block0 dose-1 observation by identity; bump its message-row count.
+    let index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, DoseIndex::ALL[0]);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Dose { body, .. } => match &mut body.observation.cardinalities {
             PhysicalCardinalitiesDto::Message(rows) => rows.message_rows += 1,
             PhysicalCardinalitiesDto::Chronicle(rows) => rows.message_rows += 1,
         },
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     }
     // Capture the corrupted wire value the fold will report as observed.
-    let observed_dto = match &fixture.records()[1] {
+    let observed_dto = match &fixture.records()[index] {
         WireRecordDto::Dose { body, .. } => body.observation.cardinalities,
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     };
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

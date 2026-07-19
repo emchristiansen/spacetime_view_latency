@@ -8,8 +8,6 @@ use super::super::ValidatedCampaign;
 use crate::analysis::ingest::wire_record_dto::WireRecordDto;
 use crate::analysis::validate::integrity_error::IntegrityError;
 use crate::analysis::validate::stable_fact_contradiction::StableFactContradiction;
-use crate::plan::cell::Cell;
-use crate::plan::run_role::RunRole;
 
 /// Diverging the second manifest's pinned nix-store bin dir from the reference (first) manifest's leaves
 /// a well-formed but non-homogeneous campaign, so the fold fails with a typed `CampaignFactHeterogeneity`
@@ -20,19 +18,26 @@ fn a_heterogeneous_nix_store_bin_dir_is_rejected() {
     let divergent_bin_dir = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-stdb/bin".to_string();
 
     let mut fixture = CampaignFixture::valid();
-    // Capture the reference run's pinned bin dir (the first manifest) before diverging a later one.
-    let reference_bin_dir = match &fixture.records()[0] {
+    // The fold's homogeneity reference is the first manifest in sequence order; the diverging run is the
+    // second. Locate both by manifest ordinal and derive their expected run coordinates from the records
+    // themselves — under the seed record order neither is a fixed canonical (cell, role, block).
+    let reference_index = fixture.nth_manifest_index(0);
+    let diverging_index = fixture.nth_manifest_index(1);
+    let (expected_reference_run, ..) =
+        CampaignFixture::record_identity(&fixture.records()[reference_index]);
+    let (expected_diverging_run, ..) =
+        CampaignFixture::record_identity(&fixture.records()[diverging_index]);
+    // Capture the reference run's pinned bin dir before diverging the second manifest's.
+    let reference_bin_dir = match &fixture.records()[reference_index] {
         WireRecordDto::Manifest { body, .. } => body.manifest.distribution.nix_store_bin_dir.clone(),
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     };
 
-    // The second manifest is the cell0/block0/control run: one manifest plus its ten doses precede it.
-    let records = fixture.records_mut();
-    match &mut records[11] {
+    match &mut fixture.records_mut()[diverging_index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.distribution.nix_store_bin_dir = divergent_bin_dir.clone();
         }
-        WireRecordDto::Dose { .. } => panic!("record 11 must be the second manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {
@@ -47,14 +52,12 @@ fn a_heterogeneous_nix_store_bin_dir_is_rejected() {
             ..
         } => {
             assert_eq!(
-                run,
-                super::super::canonical_coordinate(Cell::all()[0], RunRole::Control, 0),
-                "the diverging run is the second manifest's control run"
+                run, expected_diverging_run,
+                "the diverging run is the second manifest's run"
             );
             assert_eq!(
-                reference_run,
-                super::super::canonical_coordinate(Cell::all()[0], RunRole::Arm, 0),
-                "the reference run is the first manifest's arm run"
+                reference_run, expected_reference_run,
+                "the reference run is the first manifest's run"
             );
             assert_eq!(
                 expected,

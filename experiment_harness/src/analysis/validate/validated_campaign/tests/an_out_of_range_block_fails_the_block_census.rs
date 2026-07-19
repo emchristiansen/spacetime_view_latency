@@ -17,13 +17,13 @@ use crate::plan::run_role::RunRole;
 #[test]
 fn an_out_of_range_block_fails_the_block_census() {
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    // The first record is the cell0/arm/block0 manifest; push its block one past the valid range.
-    match &mut records[0] {
+    // Locate the cell0/arm/block0 manifest by identity; push its block one past the valid range.
+    let index = fixture.manifest_index(Cell::all()[0], RunRole::Arm, 0);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.run.repetition_block = REPETITION_BLOCKS;
         }
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

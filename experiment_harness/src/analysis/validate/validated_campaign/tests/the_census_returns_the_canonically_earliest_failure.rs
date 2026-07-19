@@ -6,7 +6,7 @@ use super::campaign_builder::CampaignFixture;
 use super::super::ValidatedCampaign;
 use crate::analysis::validate::dose_census_fault::DoseCensusFault;
 use crate::analysis::validate::integrity_error::IntegrityError;
-use crate::params::NUM_DOSES;
+use crate::dataset::dose_index::DoseIndex;
 use crate::plan::cell::Cell;
 use crate::plan::run_role::RunRole;
 
@@ -26,13 +26,21 @@ const LATE_MISSING_DOSE: u64 = 8;
 #[test]
 fn the_census_returns_the_canonically_earliest_failure() {
     let mut fixture = CampaignFixture::valid();
+    // Locate the two canonical holes by identity: cell0/arm/block0's dose 4 (canonically first) and
+    // cell0/control/block0's dose 8 (canonically later). Under the seed record order either run may sit
+    // first, so remove the higher record index first to keep the lower one valid.
+    let early_dose = DoseIndex::ALL[(EARLY_MISSING_DOSE - 1) as usize];
+    let late_dose = DoseIndex::ALL[(LATE_MISSING_DOSE - 1) as usize];
+    let early_index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, early_dose);
+    let late_index = fixture.dose_index(Cell::all()[0], RunRole::Control, 0, late_dose);
     let records = fixture.records_mut();
-    // cell0/block0 layout: arm manifest at 0, its dose d at index d; control manifest at NUM_DOSES+1, its
-    // dose d at index (NUM_DOSES+1)+d. Remove the higher index first so the lower index stays valid.
-    let early_index = EARLY_MISSING_DOSE as usize;
-    let late_index = (NUM_DOSES as usize + 1) + LATE_MISSING_DOSE as usize;
-    records.remove(late_index);
-    records.remove(early_index);
+    let (higher, lower) = if early_index > late_index {
+        (early_index, late_index)
+    } else {
+        (late_index, early_index)
+    };
+    records.remove(higher);
+    records.remove(lower);
     // Reverse the record order so the canonically-later control failure is folded ahead of the
     // canonically-earlier arm failure; renumber restores contiguous sequences over the reversed order.
     records.reverse();

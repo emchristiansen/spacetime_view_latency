@@ -15,12 +15,13 @@ use crate::plan::run_role::RunRole;
 #[test]
 fn a_zero_server_pid_fails_provenance_shape() {
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    match &mut records[0] {
+    // Locate the cell0/arm/block0 manifest by identity; zero its server pid.
+    let index = fixture.manifest_index(Cell::all()[0], RunRole::Arm, 0);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.server.pid = 0;
         }
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

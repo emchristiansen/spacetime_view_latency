@@ -27,7 +27,9 @@ use crate::analysis::validate::manifest_reference_fault::ManifestReferenceFault;
 use crate::analysis::validate::manifest_reference_identity::ManifestReferenceIdentity;
 use crate::analysis::validate::matched_block::MatchedBlock;
 use crate::analysis::validate::record_coordinate_fault::RecordCoordinateFault;
+use crate::analysis::validate::record_slot::RecordSlot;
 use crate::analysis::validate::run_kind::RunKind;
+use crate::analysis::validate::schedule_order_fault::ScheduleOrderFault;
 use crate::analysis::validate::server_provenance_fault::ServerProvenanceFault;
 use crate::analysis::validate::stable_fact_contradiction::StableFactContradiction;
 use crate::analysis::validate::trusted_dose::TrustedDose;
@@ -46,6 +48,7 @@ use crate::observation::event_evidence::EventEvidence;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::latency_summary::LatencySummary;
 use crate::observation::raw_latencies::RawLatencies;
+use crate::observation::record_seq::RecordSeq;
 use crate::params::{
     BATCH_DELAY_MS, BATCH_SIZE, BATCH_SIZE_USIZE, CONFIRMED_READS, EXPECTED_RELEASE_COMMIT,
     EXPECTED_VERSION, NUM_DOSES, NUM_DOSES_USIZE, REPETITION_BLOCKS,
@@ -53,6 +56,7 @@ use crate::params::{
 use crate::plan::cell::Cell;
 use crate::plan::key_scoped_arm::KeyScopedArm;
 use crate::plan::run_role::RunRole;
+use crate::plan::schedule::{BlockCoordinate, BlockRun, Schedule};
 use crate::plan::table_scoped_arm::TableScopedArm;
 
 /// The number of preregistered cells — five table-scoped arms under unrelated growth plus the two
@@ -88,6 +92,12 @@ const RUN_SLOTS: usize = CELL_COUNT * ROLE_COUNT * REPETITION_BLOCKS_USIZE;
 
 /// The number of canonical dose slots: every run slot × the ten-dose ladder (5,400).
 const DOSE_SLOTS: usize = RUN_SLOTS * NUM_DOSES_USIZE;
+
+/// The number of records in a complete campaign: each of the [`RUN_SLOTS`] runs contributes its one
+/// manifest plus its ten cumulative-dose observations (5,940 = 540 × 11). It fixes the reconstructed
+/// schedule grammar's cardinality, so the grammar is a heap-owned fixed array rather than a `Vec` whose
+/// length must be checked at runtime.
+const RECORD_COUNT: usize = RUN_SLOTS * (1 + NUM_DOSES_USIZE);
 
 /// A complete campaign proven structurally sound: one schedule seed, the preregistered parameters, and
 /// exactly the nine preregistered cells, each a fully validated [`CellDataset`]. This is the only value
@@ -194,12 +204,20 @@ impl ValidatedCampaign {
         // Stage 5 — exact cell/block/dose census over the canonical slots.
         census(&manifests, &dose_slots)?;
 
-        // Stage 6 — monotonic per-run and matched arm/control cardinality ladders.
+        // Stage 6 — schedule-order grammar binding. Bind each record's sequence position to the
+        // seed-derived preregistered schedule grammar (the global `Cell × block` permutation, the
+        // seed-selected adjacent arm/control order, and the manifest-then-canonical-doses within-run
+        // order), so the trusted collection order provably reflects the randomized schedule rather than
+        // the generator's emission order. Runs after census, which has proven the canonical population is
+        // complete, and before minting, so a block key is minted only once its schedule order is proven.
+        validate_schedule_order(&ordered, &manifests)?;
+
+        // Stage 7 — monotonic per-run and matched arm/control cardinality ladders.
         validate_ladders(&dose_slots)?;
 
-        // Stage 7 — mint the trusted graph. Every earlier stage has passed, so each canonical slot holds
+        // Stage 8 — mint the trusted graph. Every earlier stage has passed, so each canonical slot holds
         // exactly one validated value; the canonical loop mints the fixed-cardinality tree.
-        let cells = mint_cells(&mut dose_slots)?;
+        let cells = mint_cells(&mut dose_slots, &manifests)?;
 
         // Seed and parameters are the campaign-stable facts proven homogeneous in stage 4; take the
         // reference run's seed (all runs equal it) and snapshot the preregistered parameters.
@@ -1261,7 +1279,215 @@ fn canonical_coordinate(cell: Cell, role: RunRole, block: usize) -> RunCoordinat
     )
 }
 
-/// Stage 6: prove each run's cumulative logical ladder strictly monotonic and each block's arm and
+/// Stage 6: bind each record's sequence position to the seed-derived preregistered schedule grammar, so
+/// the trusted collection order provably reflects the randomized schedule (the global `Cell × block`
+/// permutation, the seed-selected adjacent arm/control order, and the manifest-then-canonical-doses
+/// within-run order) rather than the generator's emission order. Reconstructs the grammar from the
+/// campaign's proven-homogeneous schedule seed and compares it against the ascending-sequence records,
+/// reporting the first divergence as a typed [`ScheduleOrderMismatch`] classified by the narrowest
+/// differing structure (block coordinate, then role, then within-run record slot).
+///
+/// [`ScheduleOrderMismatch`]: super::integrity_error::IntegrityError
+fn validate_schedule_order(
+    ordered: &[&WireRecordDto],
+    manifests: &[StagedManifest],
+) -> std::result::Result<(), IntegrityError> {
+    // The schedule seed is proven homogeneous across every manifest in stage 4, so any manifest's seed is
+    // the campaign's seed; take the first in sequence order.
+    let seed = ScheduleSeed::new(
+        manifests
+            .first()
+            .expect("a complete campaign has 540 manifests, so at least one")
+            .body
+            .manifest
+            .schedule_seed,
+    );
+
+    // Reconstruct the preregistered grammar from the production schedule — never a parallel definition of
+    // it: the seed-derived global block permutation, each block's seed-selected adjacent run order, and the
+    // manifest-then-canonical-doses within-run order.
+    let schedule = Schedule::preregistered();
+    let permutation = schedule.randomized_block_order(seed);
+    let grammar = schedule_grammar(&permutation, seed);
+
+    // Census (stage 5) proved exactly one manifest per canonical run and one observation per run dose, so
+    // the campaign holds exactly [`RECORD_COUNT`] records. Convert the ascending-sequence slice to a fixed
+    // array of that cardinality — a fail-loud invariant check, not a campaign fault: census precedes this
+    // stage, so a regressed count is a stage bug — so zipping it against the equally-fixed grammar pairs
+    // every record with its expected slot, with neither side silently truncated.
+    let ordered: &[&WireRecordDto; RECORD_COUNT] = ordered
+        .try_into()
+        .expect("census proved the campaign holds exactly RECORD_COUNT records");
+
+    // Compare each record, in ascending sequence position, against the grammar record that position must
+    // hold, reporting the first divergence classified by the narrowest differing structure: block
+    // coordinate, then run role, then within-run slot.
+    for (position, (record, expected)) in ordered.iter().copied().zip(grammar.iter()).enumerate() {
+        let position =
+            RecordSeq::new(u64::try_from(position).expect("a campaign record position fits u64"));
+        let (observed_role, observed_block, observed_slot) =
+            decode_scheduled_record(record, &permutation);
+
+        // Priority 1 — block coordinate. A swapped block, or a run torn out of its matched pair, puts a
+        // foreign block's record where this position's block belongs.
+        if observed_block != expected.block {
+            return Err(IntegrityError::schedule_order_mismatch(
+                ScheduleOrderFault::BlockOutOfScheduleOrder {
+                    position,
+                    expected: expected.block,
+                    observed: observed_block,
+                },
+                format!(
+                    "record at sequence position {} belongs to a block the seed-derived schedule \
+                     does not place there",
+                    position.get()
+                ),
+            ));
+        }
+
+        // Priority 2 — run role. Within the correct block, the two matched runs execute in the
+        // seed-selected adjacent order.
+        if observed_role != expected.role {
+            return Err(IntegrityError::schedule_order_mismatch(
+                ScheduleOrderFault::RoleOutOfScheduleOrder {
+                    position,
+                    block: expected.block,
+                    expected: expected.role,
+                    observed: observed_role,
+                },
+                format!(
+                    "record at sequence position {} carries the {:?} role where the seed-selected \
+                     order expects {:?}",
+                    position.get(),
+                    observed_role,
+                    expected.role
+                ),
+            ));
+        }
+
+        // Priority 3 — within-run slot. The run's manifest leads, then its ten cumulative doses in
+        // canonical ladder order.
+        if observed_slot != expected.slot {
+            return Err(IntegrityError::schedule_order_mismatch(
+                ScheduleOrderFault::RunRecordOutOfScheduleOrder {
+                    position,
+                    run: expected.run.clone(),
+                    expected: expected.slot,
+                    observed: observed_slot,
+                },
+                format!(
+                    "record at sequence position {} is out of the manifest-then-doses within-run \
+                     order",
+                    position.get()
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// One record the seed-derived schedule grammar expects at a single campaign sequence position: its block
+/// coordinate, its run role, the canonical run coordinate, and the within-run slot. Reconstructed in
+/// grammar order from the production schedule and compared position-for-position against the
+/// sequence-sorted wire records, so the trusted collection order is bound to the preregistered randomized
+/// schedule rather than to the generator's emission order.
+struct ScheduledRecord {
+    block: BlockCoordinate,
+    role: RunRole,
+    run: RunCoordinate,
+    slot: RecordSlot,
+}
+
+/// Reconstruct the flat expected record grammar from the seed-permuted block order: for each block in the
+/// seed permutation, for each run in the block's seed-selected order, the run's manifest followed by its
+/// ten cumulative doses in canonical ladder order. The complete campaign has fixed cardinality
+/// [`RECORD_COUNT`], so the grammar is sealed heap-first into a boxed fixed array — the count is a
+/// property of the type, not a runtime-checked `Vec` length.
+fn schedule_grammar(
+    permutation: &[BlockRun],
+    seed: ScheduleSeed,
+) -> Box<[ScheduledRecord; RECORD_COUNT]> {
+    let mut grammar: Vec<ScheduledRecord> = Vec::with_capacity(RECORD_COUNT);
+    for block in permutation {
+        let block_coordinate = BlockCoordinate::of(block);
+        for run in block.ordered_runs(seed) {
+            let role = run.role();
+            let run_coordinate = RunCoordinate::new(block, role);
+            grammar.push(ScheduledRecord {
+                block: block_coordinate,
+                role,
+                run: run_coordinate.clone(),
+                slot: RecordSlot::Manifest,
+            });
+            for dose in DoseIndex::ALL {
+                grammar.push(ScheduledRecord {
+                    block: block_coordinate,
+                    role,
+                    run: run_coordinate.clone(),
+                    slot: RecordSlot::Dose(dose),
+                });
+            }
+        }
+    }
+    // Heap-first: seal the grammar Vec into a boxed fixed array by pointer reinterpret — the fixed
+    // cardinality proof stays in this fallible conversion and no by-value grammar array is materialized.
+    grammar
+        .into_boxed_slice()
+        .try_into()
+        .ok()
+        .expect("the preregistered schedule yields exactly RECORD_COUNT grammar records")
+}
+
+/// Decode the schedule-relevant identity of one wire record: its run role, the scheduled block coordinate
+/// it names, and its within-run slot. The block coordinate is constructed at decode by locating the
+/// record's `(cell, block)` in the seed permutation — where every canonical pairing appears exactly once —
+/// so the observed identity is the same typed [`BlockCoordinate`] the grammar carries, compared for
+/// equality rather than by a raw index. Every field was proven well-formed by the per-record stage and
+/// range-checked by census, so the coordinate rebuild and permutation lookup are infallible here.
+fn decode_scheduled_record(
+    record: &WireRecordDto,
+    permutation: &[BlockRun],
+) -> (RunRole, BlockCoordinate, RecordSlot) {
+    match record {
+        WireRecordDto::Manifest { body, .. } => {
+            let run = &body.manifest.run;
+            let coordinate = build_coordinate(run)
+                .expect("stage 2 proved every manifest coordinate is well-formed");
+            let block =
+                scheduled_block_coordinate(permutation, coordinate.cell(), run.repetition_block);
+            (coordinate.role(), block, RecordSlot::Manifest)
+        }
+        WireRecordDto::Dose { body, .. } => {
+            let coordinate_dto = &body.observation.coordinate;
+            let coordinate = build_coordinate(&coordinate_dto.run)
+                .expect("stage 2 proved every dose coordinate is well-formed");
+            let block = scheduled_block_coordinate(
+                permutation,
+                coordinate.cell(),
+                coordinate_dto.run.repetition_block,
+            );
+            let dose = DoseIndex::ALL[(coordinate_dto.dose - 1) as usize];
+            (coordinate.role(), block, RecordSlot::Dose(dose))
+        }
+    }
+}
+
+/// The canonical block coordinate for a census-proven record's `(cell, block)`. Every valid pairing
+/// appears exactly once in the seed permutation, so the look-up is total.
+fn scheduled_block_coordinate(
+    permutation: &[BlockRun],
+    cell: Cell,
+    block_index: u32,
+) -> BlockCoordinate {
+    let block = permutation
+        .iter()
+        .find(|candidate| candidate.cell() == cell && candidate.block_index() == block_index)
+        .expect("census proved every record names a canonical scheduled block");
+    BlockCoordinate::of(block)
+}
+
+/// Stage 7: prove each run's cumulative logical ladder strictly monotonic and each block's arm and
 /// control logical ladders equal, dose by dose. Runs after census, so every dose slot holds exactly one
 /// staged dose.
 fn validate_ladders(dose_slots: &[Vec<StagedDose>]) -> std::result::Result<(), IntegrityError> {
@@ -1329,17 +1555,21 @@ fn sole_dose(dose_slots: &[Vec<StagedDose>], run_slot: usize, dose_zero_based: u
         .expect("census proved exactly one observation per run dose")
 }
 
-/// Stage 7: mint the nine trusted cell datasets by draining each canonical dose slot's sole staged dose.
+/// Stage 8: mint the nine trusted cell datasets by draining each canonical dose slot's sole staged dose.
+/// The staged manifests are threaded in so each minted run carries its manifest's collection-order
+/// sequence.
 fn mint_cells(
     dose_slots: &mut [Vec<StagedDose>],
+    manifests: &[StagedManifest],
 ) -> std::result::Result<Box<[CellDataset; CELL_COUNT]>, IntegrityError> {
     let all_cells = Cell::all();
     let mut cells: Vec<CellDataset> = Vec::with_capacity(CELL_COUNT);
     for (cell_idx, cell) in all_cells.iter().copied().enumerate() {
         let mut blocks: Vec<MatchedBlock> = Vec::with_capacity(REPETITION_BLOCKS_USIZE);
         for block in 0..REPETITION_BLOCKS_USIZE {
-            let arm = mint_run::<ArmRun>(cell, RunRole::Arm, cell_idx, block, dose_slots)?;
-            let control = mint_run::<ControlRun>(cell, RunRole::Control, cell_idx, block, dose_slots)?;
+            let arm = mint_run::<ArmRun>(cell, RunRole::Arm, cell_idx, block, dose_slots, manifests)?;
+            let control =
+                mint_run::<ControlRun>(cell, RunRole::Control, cell_idx, block, dose_slots, manifests)?;
             blocks.push(MatchedBlock::new(arm, control));
         }
         // Heap-first: seal the block Vec into a boxed fixed array by pointer reinterpret — the fixed
@@ -1368,6 +1598,7 @@ fn mint_run<R: RunKind>(
     cell_idx: usize,
     block: usize,
     dose_slots: &mut [Vec<StagedDose>],
+    manifests: &[StagedManifest],
 ) -> std::result::Result<TrustedRun<R>, IntegrityError> {
     let coordinate = canonical_coordinate(cell, role, block);
     let run_slot = run_slot_index(cell_idx, role_index(role), block);
@@ -1392,7 +1623,16 @@ fn mint_run<R: RunKind>(
         .try_into()
         .ok()
         .expect("exactly NUM_DOSES trusted doses were minted for the run");
-    TrustedRun::<R>::mint(coordinate, doses)
+    // The run's manifest sequence is its collection-order anchor. Census proved exactly one manifest per
+    // canonical run coordinate, so this lookup is total.
+    let manifest_seq = RecordSeq::new(
+        manifests
+            .iter()
+            .find(|manifest| manifest.coordinate == coordinate)
+            .expect("census proved exactly one manifest per canonical run coordinate")
+            .seq,
+    );
+    TrustedRun::<R>::mint(coordinate, doses, manifest_seq)
 }
 
 #[cfg(test)]

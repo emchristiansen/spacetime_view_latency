@@ -7,6 +7,7 @@ use crate::analysis::ingest::record_kind_dto::RecordKindDto;
 use crate::analysis::ingest::wire_record_dto::WireRecordDto;
 use crate::analysis::validate::dose_census_fault::DoseCensusFault;
 use crate::analysis::validate::integrity_error::IntegrityError;
+use crate::dataset::dose_index::DoseIndex;
 use crate::params::NUM_DOSES;
 use crate::plan::cell::Cell;
 use crate::plan::run_role::RunRole;
@@ -20,15 +21,15 @@ use crate::plan::run_role::RunRole;
 #[test]
 fn an_out_of_range_dose_fails_the_dose_census() {
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    // The second record is the cell0/arm/block0 dose-1 observation; drop both its record-kind dose and its
+    // Locate the cell0/arm/block0 dose-1 observation by identity; drop both its record-kind dose and its
     // body coordinate dose to the same out-of-range zero, keeping the record internally consistent.
-    match &mut records[1] {
+    let index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, DoseIndex::ALL[0]);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Dose { record, body } => {
             record.kind = RecordKindDto::Dose(0);
             body.observation.coordinate.dose = 0;
         }
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

@@ -20,13 +20,13 @@ fn an_off_formula_logical_n_is_rejected() {
     let corrupted_logical_n = expected_logical_n + 1;
 
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    // The second record is the cell0/arm/block0 dose-1 observation; corrupt its cumulative logical count.
-    match &mut records[1] {
+    // Locate the cell0/arm/block0 dose-1 observation by identity; corrupt its cumulative logical count.
+    let index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, DoseIndex::ALL[0]);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Dose { body, .. } => {
             body.observation.coordinate.logical_n = corrupted_logical_n;
         }
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

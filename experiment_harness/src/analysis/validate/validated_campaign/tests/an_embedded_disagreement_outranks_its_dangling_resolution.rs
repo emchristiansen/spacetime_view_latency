@@ -27,12 +27,13 @@ fn an_embedded_disagreement_outranks_its_dangling_resolution() {
     let divergent_identity = "1".repeat(DatabaseIdentity::CANONICAL_HEX_LEN);
 
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    match &mut records[0] {
+    // Locate the cell0/arm/block0 manifest by identity; retag its own module database identity.
+    let index = fixture.manifest_index(Cell::all()[0], RunRole::Arm, 0);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.module.database_identity = divergent_identity.clone();
         }
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

@@ -16,23 +16,24 @@ use crate::plan::run_role::RunRole;
 #[test]
 fn a_bumped_summary_median_is_rejected() {
     let mut fixture = CampaignFixture::valid();
+    // Locate the cell0/arm/block0 dose-1 observation by identity.
+    let index = fixture.dose_index(Cell::all()[0], RunRole::Arm, 0, DoseIndex::ALL[0]);
     // The fixture's recorded summary equals the true R-1 recomputation, so capture it before corrupting.
-    let true_summary = match &fixture.records()[1] {
+    let true_summary = match &fixture.records()[index] {
         WireRecordDto::Dose { body, .. } => body.observation.summary,
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     };
 
-    let records = fixture.records_mut();
-    match &mut records[1] {
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Dose { body, .. } => {
             body.observation.summary.median_nanos += 1;
         }
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     }
     // Capture the corrupted wire summary the fold will report as recorded.
-    let recorded_dto = match &fixture.records()[1] {
+    let recorded_dto = match &fixture.records()[index] {
         WireRecordDto::Dose { body, .. } => body.observation.summary,
-        WireRecordDto::Manifest { .. } => panic!("the second record must be a dose observation"),
+        WireRecordDto::Manifest { .. } => panic!("the located record must be a dose observation"),
     };
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {

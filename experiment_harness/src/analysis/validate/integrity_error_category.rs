@@ -51,4 +51,9 @@ pub(crate) enum IntegrityErrorCategory {
     /// role-specific absolute event counts, which subscription coalescing makes non-deterministic
     /// (spec: "Record observed counts; assert only the event/net-delta identity").
     EventIdentityViolation,
+    /// A record's sequence position does not match the seed-derived preregistered schedule grammar (the
+    /// global `Cell × block` permutation, the seed-selected adjacent arm/control order, or the
+    /// manifest-then-canonical-doses within-run order), so the trusted collection order would not reflect
+    /// the preregistered randomized schedule.
+    ScheduleOrderMismatch,
 }

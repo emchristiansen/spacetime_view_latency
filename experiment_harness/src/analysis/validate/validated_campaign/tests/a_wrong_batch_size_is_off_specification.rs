@@ -19,12 +19,13 @@ fn a_wrong_batch_size_is_off_specification() {
     let corrupted_batch_size = BATCH_SIZE + 1;
 
     let mut fixture = CampaignFixture::valid();
-    let records = fixture.records_mut();
-    match &mut records[0] {
+    // Locate the cell0/arm/block0 manifest by identity; push its batch-size parameter off the constant.
+    let index = fixture.manifest_index(Cell::all()[0], RunRole::Arm, 0);
+    match &mut fixture.records_mut()[index] {
         WireRecordDto::Manifest { body, .. } => {
             body.manifest.parameters.batch_size = corrupted_batch_size;
         }
-        WireRecordDto::Dose { .. } => panic!("the first record must be a manifest"),
+        WireRecordDto::Dose { .. } => panic!("the located record must be a manifest"),
     }
 
     let Err(error) = ValidatedCampaign::from_records(fixture.into_records()) else {
