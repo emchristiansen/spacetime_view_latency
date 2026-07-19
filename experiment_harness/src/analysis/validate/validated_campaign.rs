@@ -250,6 +250,13 @@ impl ValidatedCampaign {
             cells,
         }
     }
+
+    /// The nine validated cell datasets, in canonical [`Cell::all`] order — the complete per-cell
+    /// evidence the classifier folds each into a
+    /// [`CellClassification`](crate::analysis::classify::cell_classification::CellClassification).
+    pub(crate) fn cells(&self) -> &[CellDataset; CELL_COUNT] {
+        &self.cells
+    }
 }
 
 /// One manifest record staged for the cross-record binding, provenance, and census stages: its wire

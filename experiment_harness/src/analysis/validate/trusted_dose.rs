@@ -61,6 +61,18 @@ impl TrustedDose {
         }
     }
 
+    /// The cumulative logical x-axis count (`dose * BATCH_SIZE`) of this dose — the preregistered ladder
+    /// x-value the primary Theil–Sen estimator regresses each per-dose response against.
+    pub(crate) fn logical_n(&self) -> u64 {
+        self.logical_n
+    }
+
+    /// The R-1 median round-trip latency of this dose in nanoseconds — the per-dose response `L(N)` the
+    /// classifier folds into each block's total change and into the frozen control-median margin.
+    pub(crate) fn median_nanos(&self) -> u128 {
+        self.summary.median_nanos()
+    }
+
     /// Test-only read of the 1-based ladder index, for asserting the minted graph's canonical dose
     /// order. `#[cfg(test)]` so it never widens the production API.
     #[cfg(test)]

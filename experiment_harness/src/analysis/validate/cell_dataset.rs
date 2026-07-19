@@ -46,17 +46,14 @@ impl CellDataset {
         Self { cell, blocks }
     }
 
-    /// Test-only read of the cell this dataset covers, for asserting the minted graph shape.
-    /// `#[cfg(test)]` so it never widens the production API — production consumers get their own
-    /// accessors when they need them.
-    #[cfg(test)]
-    pub(super) fn cell(&self) -> Cell {
+    /// The preregistered `(arm, growth-regime)` pairing this dataset covers.
+    pub(crate) fn cell(&self) -> Cell {
         self.cell
     }
 
-    /// Test-only read of the complete matched-block sample, for asserting the minted graph shape.
-    #[cfg(test)]
-    pub(super) fn blocks(&self) -> &[MatchedBlock; BLOCKS_PER_CELL] {
+    /// The complete fixed sample of matched arm/control blocks for this cell — the classifier's
+    /// per-cell evidence source.
+    pub(crate) fn blocks(&self) -> &[MatchedBlock; BLOCKS_PER_CELL] {
         &self.blocks
     }
 }

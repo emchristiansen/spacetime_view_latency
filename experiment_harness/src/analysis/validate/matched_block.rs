@@ -37,22 +37,17 @@ impl MatchedBlock {
     /// sequences. Temporal analyses (collection-order plots, lag-1 autocorrelation) order blocks by this
     /// key to recover when each block was actually recorded, independent of the canonical
     /// cell→role→block traversal that the trusted-graph shape imposes.
-    // Phase 1 scaffolding: consumed by the Phase 2 classify/report temporal layer; allow until then.
-    #[allow(dead_code)]
     pub(crate) fn collection_order_key(&self) -> RecordSeq {
         self.arm.manifest_seq().min(self.control.manifest_seq())
     }
 
-    /// Test-only read of the arm run, for asserting the minted graph shape. `#[cfg(test)]` so it never
-    /// widens the production API.
-    #[cfg(test)]
-    pub(super) fn arm(&self) -> &TrustedRun<ArmRun> {
+    /// The module-view arm run under test for this block — the classifier's arm response source.
+    pub(crate) fn arm(&self) -> &TrustedRun<ArmRun> {
         &self.arm
     }
 
-    /// Test-only read of the matched control run, for asserting the minted graph shape.
-    #[cfg(test)]
-    pub(super) fn control(&self) -> &TrustedRun<ControlRun> {
+    /// The matched direct-base-table control run for this block — the classifier's control source.
+    pub(crate) fn control(&self) -> &TrustedRun<ControlRun> {
         &self.control
     }
 }

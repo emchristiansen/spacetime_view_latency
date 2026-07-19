@@ -24,7 +24,22 @@ impl ResponseClass {
     /// Classify the arm's paired-difference total-change interval against the frozen margin's band,
     /// using exact rational comparison of the interval endpoints against `±δ` (spec: inclusive
     /// Flat-equivalent band, strict Increasing/Decreasing bounds).
-    pub(crate) fn classify(_arm_interval: MedianCi, _margin: EquivalenceMargin) -> Self {
-        todo!("Phase 2: exact endpoint comparison against the frozen [-δ, +δ] band")
+    ///
+    /// The band is `[-δ, +δ]`. The four classes are checked in an order that makes them mutually
+    /// exclusive: an interval within the band is Flat-equivalent (both bounds inclusive); otherwise a
+    /// lower bound strictly above `+δ` is Increasing and an upper bound strictly below `-δ` is
+    /// Decreasing; every remaining interval straddles a band bound and is Inconclusive.
+    pub(crate) fn classify(arm_interval: MedianCi, margin: EquivalenceMargin) -> Self {
+        let lo = arm_interval.lo();
+        let hi = arm_interval.hi();
+        if lo >= margin.lower() && hi <= margin.upper() {
+            Self::FlatEquivalent
+        } else if lo > margin.upper() {
+            Self::Increasing
+        } else if hi < margin.lower() {
+            Self::Decreasing
+        } else {
+            Self::Inconclusive
+        }
     }
 }

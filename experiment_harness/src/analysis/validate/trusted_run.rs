@@ -77,20 +77,21 @@ impl<R> TrustedRun<R> {
     pub(crate) fn manifest_seq(&self) -> RecordSeq {
         self.manifest_seq
     }
+
+    /// The run's complete monotonic dose ladder, doses `1..=NUM_DOSES` in canonical order — the per-dose
+    /// responses the classifier regresses to form this run's per-block total change.
+    pub(crate) fn doses(&self) -> &[TrustedDose; NUM_DOSES_USIZE] {
+        &self.doses
+    }
 }
 
 /// Test-only read accessors for asserting the minted graph shape. `#[cfg(test)]` so they never widen
 /// the production API — and role-agnostic (`impl<R>`, no [`RunKind`] bound) since reading the coordinate
-/// and doses does not depend on the role marker.
+/// does not depend on the role marker.
 #[cfg(test)]
 impl<R> TrustedRun<R> {
     /// The run's schedule coordinate.
     pub(super) fn coordinate(&self) -> &RunCoordinate {
         &self.coordinate
-    }
-
-    /// The run's complete dose ladder.
-    pub(super) fn doses(&self) -> &[TrustedDose; NUM_DOSES_USIZE] {
-        &self.doses
     }
 }

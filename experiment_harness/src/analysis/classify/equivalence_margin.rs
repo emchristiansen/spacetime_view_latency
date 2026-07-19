@@ -1,12 +1,15 @@
 //! The frozen preregistered practical-equivalence margin `δ`.
 
+use crate::analysis::stats::median::median;
 use crate::analysis::stats::rational::Rational;
 use crate::params::{NUM_DOSES_USIZE, REPETITION_BLOCKS};
 
 /// The number of matched-control dose medians a cell's margin is frozen over: one per dose of every
 /// run in the complete 30-block cell (30 blocks × 10 doses = 300). Fixed cardinality so the frozen
-/// margin's input is a compile-visible census, not a runtime-checked vector.
-const CONTROL_DOSE_MEDIAN_COUNT: usize = REPETITION_BLOCKS as usize * NUM_DOSES_USIZE;
+/// margin's input is a compile-visible census, not a runtime-checked vector. `pub(crate)` so the
+/// campaign classifier that assembles the 300 control dose medians shares this single canonical
+/// cardinality rather than re-deriving the same `30 × 10` product.
+pub(crate) const CONTROL_DOSE_MEDIAN_COUNT: usize = REPETITION_BLOCKS as usize * NUM_DOSES_USIZE;
 
 /// The frozen practical-equivalence margin `δ = 0.20 · median(L_control)` over all 300 matched-control
 /// dose medians in the complete 30-block cell (spec: "Classification"). It has latency units like
@@ -27,8 +30,12 @@ impl EquivalenceMargin {
     /// taking the exact average of the two central order statistics for the even-sized sample (spec:
     /// exact-rational classifier decision). The sample size is pinned by the array length, so an
     /// off-count input is a compile error rather than a runtime check.
-    pub(crate) fn freeze(_control_dose_medians: &[Rational; CONTROL_DOSE_MEDIAN_COUNT]) -> Self {
-        todo!("Phase 2: exact even-median of the 300 control dose medians, scaled by 1/5")
+    pub(crate) fn freeze(control_dose_medians: &[Rational; CONTROL_DOSE_MEDIAN_COUNT]) -> Self {
+        // `median` takes the exact even-count mean of the two central order statistics for this
+        // 300-sample cell, and `div_int(5)` scales by exactly one fifth — both exact rational steps.
+        Self {
+            delta: median(control_dose_medians).div_int(5),
+        }
     }
 
     /// The exact half-width `δ` of the practical-equivalence band.
@@ -49,6 +56,7 @@ impl EquivalenceMargin {
     /// A lossy millisecond rendering of `δ`, for the machine-readable report only — never a
     /// classification input (spec: the margin "must be reported in milliseconds").
     pub(crate) fn to_millis_f64(self) -> f64 {
-        todo!("Phase 2: report-only nanosecond-to-millisecond display rendering")
+        // δ is an exact rational count of nanoseconds; render it in milliseconds for the report only.
+        self.delta.to_f64() / 1_000_000.0
     }
 }

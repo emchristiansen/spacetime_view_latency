@@ -19,8 +19,23 @@ pub(crate) enum PredictionComparison {
 }
 
 impl PredictionComparison {
-    /// Compare the preregistered prediction with the observed response.
-    pub(crate) fn compare(_predicted: PredictedResponse, _observed: ResponseClass) -> Self {
-        todo!("Phase 2: the complete predicted-versus-observed comparison table")
+    /// Compare the preregistered prediction with the observed response. The prediction names a definite
+    /// class (Flat-equivalent or Increasing) in the cell's regime; the observed response's regime is
+    /// fixed by the same cell, so the comparison is over the response *class* alone. An `Inconclusive`
+    /// observation neither confirms nor contradicts; a definite observation matching the named class is
+    /// `Confirmed`, and any other definite class is `Contradicted`.
+    pub(crate) fn compare(predicted: PredictedResponse, observed: ResponseClass) -> Self {
+        match (predicted, observed) {
+            (_, ResponseClass::Inconclusive) => Self::Inconclusive,
+            (PredictedResponse::FlatIn(_), ResponseClass::FlatEquivalent) => Self::Confirmed,
+            (PredictedResponse::FlatIn(_), ResponseClass::Increasing | ResponseClass::Decreasing) => {
+                Self::Contradicted
+            }
+            (PredictedResponse::IncreasingIn(_), ResponseClass::Increasing) => Self::Confirmed,
+            (
+                PredictedResponse::IncreasingIn(_),
+                ResponseClass::FlatEquivalent | ResponseClass::Decreasing,
+            ) => Self::Contradicted,
+        }
     }
 }
