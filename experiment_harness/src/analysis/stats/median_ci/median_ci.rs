@@ -1,4 +1,4 @@
-//! The exact distribution-free order-statistic confidence interval for a population median.
+//! The frozen 95% median confidence interval and its exact preregistered coverage.
 
 use crate::analysis::stats::rational::Rational;
 use crate::params::REPETITION_BLOCKS;
@@ -12,6 +12,10 @@ use crate::params::REPETITION_BLOCKS;
 /// symmetric order-statistic interval whose exact binomial coverage is at least 95% is the 1-based
 /// `[X_(10), X_(21)]`, with coverage `Σ_{k=10}^{20} C(30,k) / 2^30 = 95.7226%`. Those indices and the
 /// exact coverage are recorded here so the report can cite them.
+///
+/// Fields are private with no defaults; the module-owned [`Self::new`] is the only assembler, so a
+/// `MedianCi` is built only by the module's own [`exact_median_ci_30`](super::exact_median_ci_30)
+/// selector.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MedianCi {
     lo: Rational,
@@ -23,6 +27,14 @@ impl MedianCi {
     pub(crate) const LOWER_ORDER_INDEX_ONE_BASED: usize = 10;
     /// The frozen 1-based upper order-statistic index (`X_(21)` at `n = 30`).
     pub(crate) const UPPER_ORDER_INDEX_ONE_BASED: usize = 21;
+
+    /// Assemble a confidence interval from its two already-selected order-statistic endpoints. The
+    /// caller (the module's [`exact_median_ci_30`](super::exact_median_ci_30) selector) owns proving the
+    /// endpoints are the frozen order statistics; this constructor only binds them so the private fields
+    /// cannot be populated from outside the module.
+    pub(super) fn new(lo: Rational, hi: Rational) -> Self {
+        Self { lo, hi }
+    }
 
     /// The interval's lower bound (the `X_(10)` order statistic).
     pub(crate) fn lo(&self) -> Rational {
@@ -53,19 +65,6 @@ impl MedianCi {
     }
 }
 
-/// The exact 95% median confidence interval over the fixed 30-block sample: sort the block values by
-/// exact rational order and select the frozen `[X_(10), X_(21)]` order statistics. The sample size is
-/// pinned to [`REPETITION_BLOCKS`] by the array length, so an off-count sample is a compile error, not
-/// a runtime check.
-pub(crate) fn exact_median_ci_30(values: &[Rational; REPETITION_BLOCKS as usize]) -> MedianCi {
-    let mut sorted = *values;
-    sorted.sort();
-    MedianCi {
-        lo: sorted[MedianCi::LOWER_ORDER_INDEX_ONE_BASED - 1],
-        hi: sorted[MedianCi::UPPER_ORDER_INDEX_ONE_BASED - 1],
-    }
-}
-
 /// The exact binomial coefficient `C(n, k)` by the multiplicative recurrence, which keeps every
 /// intermediate an exact integer. For `n = 30` no intermediate overflows `u128`.
 fn binomial(n: u128, k: u128) -> u128 {
@@ -81,6 +80,3 @@ fn binomial(n: u128, k: u128) -> u128 {
     }
     result
 }
-
-#[cfg(test)]
-mod tests;
