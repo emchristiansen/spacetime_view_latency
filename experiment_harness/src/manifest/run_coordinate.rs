@@ -68,6 +68,13 @@ impl RunCoordinate {
         self.role
     }
 
+    /// This run's validated 0-based repetition-block index within the cell's fixed block sample — the typed
+    /// coordinate component the census and slot-index arithmetic read, so those stages source the block from
+    /// the already-validated coordinate rather than re-reading the untrusted wire body.
+    pub(crate) fn repetition_block(&self) -> RepetitionBlockIndex {
+        self.repetition_block
+    }
+
     /// The single [`Run`] this coordinate identifies: the cell's matched arm or control, selected by
     /// [`Self::role`]. The `(cell, role)` a coordinate already carries *fully determines* the run — the
     /// control table is a pure function of the cell — so this is the sole derivation, letting the

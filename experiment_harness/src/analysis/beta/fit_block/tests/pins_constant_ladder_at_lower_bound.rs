@@ -12,7 +12,7 @@ fn pins_constant_ladder_at_lower_bound() {
     // A constant y has no centred x-covariance, so every fit is the a = 0 edge b = Σy·x/Σx²; its RSS
     // shrinks monotonically as β → 0 flattens x = N^β toward a constant. The minimum over [0.1, 4.0] is
     // at the lower bound, so the selected exponent pins near 0.1.
-    let fit = fit_block(&ladder_from(|_n| 500.0));
+    let fit = fit_block(&ladder_from(|_n| 500.0)).fit();
 
     let candidate = match fit {
         BlockFit::PinnedAtBound(candidate) => candidate,

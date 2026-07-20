@@ -1,7 +1,7 @@
 //! The immutable, serialize-only run manifest snapshot.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::Serialize;
@@ -27,6 +27,21 @@ use crate::provision::verified_distribution::VerifiedDistribution;
 /// outlive the server and serialize freely while making no claim that the process is
 /// still alive — the capability keeps gating live operations and cleans up on explicit
 /// shutdown.
+///
+/// It denotes *validated immutable manifest facts*, and has two honestly-distinct origins, never a
+/// live-now attestation:
+///
+/// - **Live capability** — [`Self::assemble`], at record time, value-copies the facts out of the still-live
+///   [`VerifiedDistribution`]/[`RunningPinnedServer`] capabilities.
+/// - **Fully validated frozen record** — [`Self::from_validated_parts`], at analysis time, rebuilds the exact
+///   same facts from a [`ValidatedRunManifestParts`] the analysis validator constructs at the tail of its
+///   stage-4 manifest checks, once the relational obligations (raw/parsed equality, campaign homogeneity)
+///   have already been established by that control flow. This origin deliberately broadens the type beyond
+///   live-capability assembly: a manifest so built claims neither a live-capability origin nor current
+///   liveness — it adds the documented validated-frozen-record origin. The raw ingest DTOs still have no path
+///   that turns them directly into a `ValidatedRunManifest`.
+///
+/// Neither origin is a claim the process is still alive; both denote facts already proven immutable.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ValidatedRunManifest {
     run: RunCoordinate,
@@ -96,6 +111,153 @@ impl ValidatedRunManifest {
     /// identities.
     pub(crate) fn schedule_seed(&self) -> ScheduleSeed {
         self.schedule_seed
+    }
+
+    /// The pinned Nix-store `bin` directory both binaries resolve from.
+    pub(crate) fn nix_store_bin_dir(&self) -> &Path {
+        &self.distribution.nix_store_bin_dir
+    }
+
+    /// The verified CLI executable path.
+    pub(crate) fn cli_exe(&self) -> &Path {
+        &self.distribution.cli_exe
+    }
+
+    /// The parsed, expected-matched CLI semver version.
+    pub(crate) fn cli_version(&self) -> &Version {
+        &self.distribution.cli_version
+    }
+
+    /// The CLI's canonical lowercase-hex release commit.
+    pub(crate) fn cli_release_commit(&self) -> ReleaseCommit {
+        self.distribution.cli_release_commit
+    }
+
+    /// The CLI's raw self-reported version string, retained verbatim.
+    pub(crate) fn cli_version_raw(&self) -> &str {
+        &self.distribution.cli_version_raw
+    }
+
+    /// The verified standalone executable path.
+    pub(crate) fn standalone_exe(&self) -> &Path {
+        &self.distribution.standalone_exe
+    }
+
+    /// The parsed, expected-matched standalone semver version.
+    pub(crate) fn standalone_version(&self) -> &Version {
+        &self.distribution.standalone_version
+    }
+
+    /// The standalone's raw self-reported version string, retained verbatim.
+    pub(crate) fn standalone_version_raw(&self) -> &str {
+        &self.distribution.standalone_version_raw
+    }
+
+    /// The run's server process id.
+    pub(crate) fn pid(&self) -> ServerPid {
+        self.server.pid
+    }
+
+    /// The `/proc/<pid>/exe` resolved standalone executable.
+    pub(crate) fn resolved_exe(&self) -> &Path {
+        &self.server.resolved_exe
+    }
+
+    /// The run's parsed listen socket address (host:port).
+    pub(crate) fn listen_addr(&self) -> SocketAddr {
+        self.server.listen_addr
+    }
+
+    /// The run's client URL, the `http://{listen_addr}` derivation.
+    pub(crate) fn client_url(&self) -> &str {
+        &self.server.client_url
+    }
+
+    /// The run's fresh data directory.
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.server.data_dir
+    }
+
+    /// The run's ephemeral JWT keys directory (sibling of [`Self::data_dir`]).
+    pub(crate) fn keys_dir(&self) -> &Path {
+        &self.server.keys_dir
+    }
+
+    /// The published module's canonical-hex WASM SHA-256 artifact hash.
+    pub(crate) fn wasm_sha256(&self) -> WasmSha256 {
+        self.module.wasm_sha256
+    }
+
+    /// Reconstruct the immutable manifest from a frozen record's already-parsed typed parts — the
+    /// analysis-time origin, dual to the live-capability [`Self::assemble`]. This is the sole non-`assemble`,
+    /// non-fixture constructor, and it takes a [`ValidatedRunManifestParts`] rather than raw strings, so the
+    /// untrusted ingest DTOs cannot turn themselves directly into a `ValidatedRunManifest`; only the analysis
+    /// validator, which builds the parts at the tail of its stage-4 checks, reaches this path. The preregistered
+    /// parameters are taken from the frozen [`PreregisteredParameters::preregistered`] source — the exact value
+    /// the validator proved each recorded parameter equal to — rather than re-carried through the parts, so this
+    /// snapshot cannot disagree with the frozen preregistration.
+    pub(crate) fn from_validated_parts(parts: ValidatedRunManifestParts) -> Self {
+        let ValidatedRunManifestParts {
+            identity: ValidatedManifestIdentity { run, schedule_seed },
+            distribution:
+                ValidatedDistributionParts {
+                    nix_store_bin_dir,
+                    cli:
+                        ValidatedCliFacts {
+                            exe: cli_exe,
+                            version: cli_version,
+                            version_raw: cli_version_raw,
+                            release_commit: cli_release_commit,
+                        },
+                    standalone:
+                        ValidatedStandaloneFacts {
+                            exe: standalone_exe,
+                            version: standalone_version,
+                            version_raw: standalone_version_raw,
+                        },
+                },
+            server:
+                ValidatedServerParts {
+                    pid,
+                    resolved_exe,
+                    listen_addr,
+                    client_url,
+                    data_dir: DataDirectory(data_dir),
+                    keys_dir: KeysDirectory(keys_dir),
+                },
+            module:
+                ValidatedModuleParts {
+                    wasm_sha256,
+                    database_identity,
+                },
+        } = parts;
+        Self {
+            run,
+            schedule_seed,
+            parameters: PreregisteredParameters::preregistered(),
+            distribution: DistributionFacts {
+                nix_store_bin_dir,
+                cli_exe,
+                cli_version,
+                cli_release_commit,
+                cli_version_raw,
+                standalone_exe,
+                standalone_version,
+                standalone_version_raw,
+            },
+            server: ServerFacts {
+                pid,
+                resolved_exe,
+                listen_addr,
+                client_url,
+                data_dir,
+                keys_dir,
+            },
+            module: ModuleFacts {
+                wasm_sha256,
+                database_identity,
+            },
+        }
     }
 
     /// A deterministic test fixture manifest for the fixture run coordinate — the fixed own-slice
@@ -201,4 +363,197 @@ struct ServerFacts {
 struct ModuleFacts {
     wasm_sha256: WasmSha256,
     database_identity: DatabaseIdentity,
+}
+
+/// The already-parsed typed parts of one recorded manifest, the sole input to
+/// [`ValidatedRunManifest::from_validated_parts`].
+///
+/// It is colocated with [`ValidatedRunManifest`] deliberately: the conversion has to populate that type's
+/// private [`DistributionFacts`]/[`ServerFacts`]/[`ModuleFacts`], so a cross-module constructor would have to
+/// widen those private facts. Every part below has private fields and one aptly named `new`, so this whole
+/// family is the *only* seam through which typed values become a [`ValidatedRunManifest`]; an untrusted `…Dto`
+/// has no direct path.
+///
+/// The parts are grouped to mirror the manifest's own `distribution`/`server`/`module` structure, and each
+/// group's `new` takes only distinct-typed arguments, so the CLI-vs-standalone split and the data-vs-keys path
+/// roles are structurally explicit — no two same-typed values are positionally swappable. Field types make a
+/// *parse-invalid* value unrepresentable; the only bare strings are the two self-reported `_raw` versions and
+/// the client URL, retained verbatim exactly as the manifest stores them.
+///
+/// The parts do **not** by themselves witness the *relational* obligations — raw/parsed string equality,
+/// expected-value matches, or campaign homogeneity — because those are properties of the validator's control
+/// flow, not of the field types: trusted crate code could construct the domain values independently. The
+/// analysis validator establishes those relational checks, at the tail of its stage-4 manifest pass, *before*
+/// it builds these parts. This family is therefore not a proof, a capability, or an attestation of whole-stage
+/// or campaign validation; it is only the typed carrier the validator hands to the conversion.
+pub(crate) struct ValidatedRunManifestParts {
+    identity: ValidatedManifestIdentity,
+    distribution: ValidatedDistributionParts,
+    server: ValidatedServerParts,
+    module: ValidatedModuleParts,
+}
+
+impl ValidatedRunManifestParts {
+    /// Bind one recorded manifest's four grouped parts. `pub(crate)` is the narrowest visibility that still
+    /// lets the analysis validator (in `analysis::validate`) call it; the four arguments are distinct part
+    /// types, so no group is positionally swappable and there is no default.
+    pub(crate) fn new(
+        identity: ValidatedManifestIdentity,
+        distribution: ValidatedDistributionParts,
+        server: ValidatedServerParts,
+        module: ValidatedModuleParts,
+    ) -> Self {
+        Self {
+            identity,
+            distribution,
+            server,
+            module,
+        }
+    }
+}
+
+/// The manifest's run identity and schedule seed — two distinct typed values, so neither can stand in for the
+/// other.
+pub(crate) struct ValidatedManifestIdentity {
+    run: RunCoordinate,
+    schedule_seed: ScheduleSeed,
+}
+
+impl ValidatedManifestIdentity {
+    pub(crate) fn new(run: RunCoordinate, schedule_seed: ScheduleSeed) -> Self {
+        Self { run, schedule_seed }
+    }
+}
+
+/// The campaign-stable distribution facts, split into the manifest's own CLI and standalone groups so a
+/// CLI path/version/raw can never be swapped with the standalone's. `nix_store_bin_dir` is the sole bare path
+/// at this level, distinct from the two nested groups.
+pub(crate) struct ValidatedDistributionParts {
+    nix_store_bin_dir: PathBuf,
+    cli: ValidatedCliFacts,
+    standalone: ValidatedStandaloneFacts,
+}
+
+impl ValidatedDistributionParts {
+    pub(crate) fn new(
+        nix_store_bin_dir: PathBuf,
+        cli: ValidatedCliFacts,
+        standalone: ValidatedStandaloneFacts,
+    ) -> Self {
+        Self {
+            nix_store_bin_dir,
+            cli,
+            standalone,
+        }
+    }
+}
+
+/// The verified CLI's executable path, parsed version, raw self-reported version, and release commit — every
+/// field a distinct type, so none is positionally swappable.
+pub(crate) struct ValidatedCliFacts {
+    exe: PathBuf,
+    version: Version,
+    version_raw: String,
+    release_commit: ReleaseCommit,
+}
+
+impl ValidatedCliFacts {
+    pub(crate) fn new(
+        exe: PathBuf,
+        version: Version,
+        version_raw: String,
+        release_commit: ReleaseCommit,
+    ) -> Self {
+        Self {
+            exe,
+            version,
+            version_raw,
+            release_commit,
+        }
+    }
+}
+
+/// The verified standalone's executable path, parsed version, and raw self-reported version — no commit, since
+/// the standalone reports none. Every field is a distinct type.
+pub(crate) struct ValidatedStandaloneFacts {
+    exe: PathBuf,
+    version: Version,
+    version_raw: String,
+}
+
+impl ValidatedStandaloneFacts {
+    pub(crate) fn new(exe: PathBuf, version: Version, version_raw: String) -> Self {
+        Self {
+            exe,
+            version,
+            version_raw,
+        }
+    }
+}
+
+/// The per-run server facts. The two same-typed directory paths carry field-role newtypes
+/// ([`DataDirectory`]/[`KeysDirectory`]), so with `resolved_exe` the sole bare path, every `new` argument is a
+/// distinct type and no path role is swappable.
+pub(crate) struct ValidatedServerParts {
+    pid: ServerPid,
+    resolved_exe: PathBuf,
+    listen_addr: SocketAddr,
+    client_url: String,
+    data_dir: DataDirectory,
+    keys_dir: KeysDirectory,
+}
+
+impl ValidatedServerParts {
+    pub(crate) fn new(
+        pid: ServerPid,
+        resolved_exe: PathBuf,
+        listen_addr: SocketAddr,
+        client_url: String,
+        data_dir: DataDirectory,
+        keys_dir: KeysDirectory,
+    ) -> Self {
+        Self {
+            pid,
+            resolved_exe,
+            listen_addr,
+            client_url,
+            data_dir,
+            keys_dir,
+        }
+    }
+}
+
+/// The run's fresh data directory, as a field-role newtype so it cannot be swapped with the sibling keys
+/// directory.
+pub(crate) struct DataDirectory(PathBuf);
+
+impl DataDirectory {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+/// The run's ephemeral JWT keys directory, as a field-role newtype so it cannot be swapped with the sibling
+/// data directory.
+pub(crate) struct KeysDirectory(PathBuf);
+
+impl KeysDirectory {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+/// The published-module facts — the WASM digest and database identity, two distinct types.
+pub(crate) struct ValidatedModuleParts {
+    wasm_sha256: WasmSha256,
+    database_identity: DatabaseIdentity,
+}
+
+impl ValidatedModuleParts {
+    pub(crate) fn new(wasm_sha256: WasmSha256, database_identity: DatabaseIdentity) -> Self {
+        Self {
+            wasm_sha256,
+            database_identity,
+        }
+    }
 }

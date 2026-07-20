@@ -32,7 +32,11 @@ const N_BLOCKS: usize = REPETITION_BLOCKS as usize;
 /// ([`Self::from_ladders`]) are module-private; this module's child `tests` submodule drives the fit over
 /// synthetic ladders through Rust's child privacy, so no sibling of `beta_descriptor` can mint one.
 ///
-/// It stores **only** the 30 block outcomes. The population β interval is *derived* on demand by
+/// It stores **only** the 30 per-block search outcomes — each an authoritative [`BlockFit`] bound to the
+/// complete [`BlockConvergence`](super::block_convergence::BlockConvergence) record of the search that
+/// produced it (see [`BlockSearchOutcome`]). This single field is the sole per-block storage: the
+/// authoritative fits are *derived* from it by [`Self::block_fits`] rather than duplicated, so a fit can
+/// never disagree with its convergence record, and the population β interval is *derived* on demand by
 /// [`Self::population`] (`Some` exactly when every block is identifiable), so it can never disagree with
 /// the outcomes it summarizes. The blocks are ordered by the same
 /// [`collection_order_key`](crate::analysis::validate::matched_block::MatchedBlock::collection_order_key)
@@ -40,9 +44,10 @@ const N_BLOCKS: usize = REPETITION_BLOCKS as usize;
 /// primary and secondary results.
 #[derive(Debug)]
 pub(crate) struct BetaDescriptor {
-    /// The 30 per-block exponent-fit outcomes, in schedule-proven collection order. Heap-owned as a
-    /// boxed fixed array, mirroring the trusted graph's heap-first fixed arrays.
-    blocks: Box<[BlockFit; N_BLOCKS]>,
+    /// The 30 per-block search outcomes (fit + convergence record), in schedule-proven collection order —
+    /// the sole per-block storage. Heap-owned as a boxed fixed array, mirroring the trusted graph's
+    /// heap-first fixed arrays.
+    blocks: Box<[BlockSearchOutcome; N_BLOCKS]>,
 }
 
 impl BetaDescriptor {
@@ -123,8 +128,8 @@ impl BetaDescriptor {
     /// tests through this module's child [`tests`] submodule, which Rust's child privacy lets read its
     /// parent's private items. No sibling under `analysis::beta` can mint a descriptor off a bare ladder.
     fn from_ladders(ladders: &[[BlockPoint; NUM_DOSES_USIZE]; N_BLOCKS]) -> Self {
-        let blocks: Vec<BlockFit> = ladders.iter().map(fit_block).collect();
-        let blocks: Box<[BlockFit; N_BLOCKS]> = blocks
+        let blocks: Vec<BlockSearchOutcome> = ladders.iter().map(fit_block).collect();
+        let blocks: Box<[BlockSearchOutcome; N_BLOCKS]> = blocks
             .into_boxed_slice()
             .try_into()
             .ok()
@@ -132,44 +137,32 @@ impl BetaDescriptor {
         Self { blocks }
     }
 
-    /// The 30 per-block exponent-fit outcomes, in schedule-proven collection order.
-    pub(crate) fn blocks(&self) -> &[BlockFit; N_BLOCKS] {
+    /// The 30 per-block *search* outcomes — each block's authoritative [`BlockFit`] bound to the complete
+    /// [`BlockConvergence`](super::block_convergence::BlockConvergence) record of the search that produced
+    /// it — in schedule-proven collection order. This is the descriptor's sole per-block storage; the
+    /// report projects these into its typed all-basin convergence section (spec: "retain a typed per-block
+    /// search summary ... Do not report only the winning basin").
+    pub(crate) fn block_search_outcomes(&self) -> &[BlockSearchOutcome; N_BLOCKS] {
         &self.blocks
     }
 
-    /// The 30 per-block *search* outcomes — each block's authoritative [`BlockFit`] bound to the complete
-    /// [`BlockConvergence`](super::block_convergence::BlockConvergence) record of the search that produced
-    /// it — in schedule-proven collection order. The report projects these into its typed all-basin
-    /// convergence section (spec: "retain a typed per-block search summary ... Do not report only the
-    /// winning basin").
-    ///
-    /// Phase-1 additive accessor: a `todo!()` signature with no backing field yet. The intended Phase-2
-    /// migration stores `[BlockSearchOutcome; 30]` as the *sole* per-block field (each outcome carrying
-    /// its authoritative [`BlockFit`] bound to its [`BlockConvergence`](super::block_convergence::BlockConvergence)
-    /// by [`BlockSearchOutcome::mint`], so a fit can never be paired with a different block's convergence).
-    /// [`Self::blocks`] then cannot keep returning `&[BlockFit; 30]` — that borrowed array cannot be
-    /// synthesized from an `[BlockSearchOutcome; 30]` without duplicate storage or self-referential
-    /// caching — so `blocks()` becomes an indexed/iterator accessor
-    /// (`fn block_fits(&self) -> impl Iterator<Item = BlockFit>`, [`BlockFit`] being `Copy`) and its
-    /// callers migrate to it. Outcomes-as-sole-storage with an iterator is preferred over parallel
-    /// `[BlockFit; 30]` + `[BlockConvergence; 30]` arrays because it makes a fit/convergence mismatch
-    /// structurally unrepresentable rather than merely constructor-checked. Wiring it now would require
-    /// [`fit_block`](super::fit_block) to emit the convergence record, a behavior change deferred out of
-    /// this compile-green skeleton.
-    pub(crate) fn block_search_outcomes(&self) -> &[BlockSearchOutcome; N_BLOCKS] {
-        todo!("Phase 2: store [BlockSearchOutcome; 30] as the sole per-block field; blocks() becomes an iterator")
+    /// The 30 per-block authoritative exponent-fit outcomes, in schedule-proven collection order, derived
+    /// from the sole [`Self::block_search_outcomes`] storage rather than stored separately — so a fit can
+    /// never disagree with its convergence record. [`BlockFit`] is `Copy`, so this yields values, not
+    /// borrows; a consumer needing indexed access reads `block_search_outcomes()[i].fit()`.
+    pub(crate) fn block_fits(&self) -> impl Iterator<Item = BlockFit> + '_ {
+        self.blocks.iter().map(BlockSearchOutcome::fit)
     }
 
     /// The population β interval over all 30 blocks, derived from the block outcomes: `Some` exactly when
     /// every block is identifiable (spec: "may emit a population interval ... only when every block is
     /// identifiable"), `None` otherwise. Derived, not stored, so it cannot drift from the outcomes.
     pub(crate) fn population(&self) -> Option<BetaPopulation> {
-        if !self.blocks.iter().all(|fit| fit.is_identifiable()) {
+        if !self.block_fits().all(|fit| fit.is_identifiable()) {
             return None;
         }
         let betas: Vec<f64> = self
-            .blocks
-            .iter()
+            .block_fits()
             .map(|fit| {
                 fit.identified_beta()
                     .expect("every block is identifiable in this branch")

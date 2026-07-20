@@ -10,7 +10,7 @@ use crate::analysis::beta::fit_block::tests::ladder_from;
 fn pins_above_bracket_power_at_upper_bound() {
     // y = N^5 has true exponent 5, above the [0.1, 4.0] domain. RSS decreases monotonically as β climbs
     // toward the truth, so the constrained minimum over the domain is at the upper bound 4.0.
-    let fit = fit_block(&ladder_from(|n| n.powi(5)));
+    let fit = fit_block(&ladder_from(|n| n.powi(5))).fit();
 
     let candidate = match fit {
         BlockFit::PinnedAtBound(candidate) => candidate,

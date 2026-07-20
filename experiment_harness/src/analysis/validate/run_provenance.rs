@@ -46,8 +46,14 @@ impl RunProvenance {
     /// reusing the domain values it already carries rather than reparsing pre-validation DTO strings.
     /// `pub(super)` so only the `validate` subtree's pass can construct one.
     pub(super) fn mint(manifest: &ValidatedRunManifest) -> Self {
-        let _ = manifest;
-        todo!("Phase 2: project the per-run server/module facts into typed domain values")
+        Self {
+            database_identity: manifest.database_identity(),
+            pid: manifest.pid(),
+            listen_addr: manifest.listen_addr(),
+            client_url: manifest.client_url().to_string(),
+            data_dir: manifest.data_dir().to_path_buf(),
+            keys_dir: manifest.keys_dir().to_path_buf(),
+        }
     }
 
     /// The run's published database identity.

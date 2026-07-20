@@ -123,6 +123,23 @@ impl BasinTermination {
         self.initial_bracket_hi.get()
     }
 
+    /// The lower endpoint of the bracket at termination — contained in the initial bracket (asserted at
+    /// the mint boundary).
+    pub(crate) fn final_bracket_lo(&self) -> f64 {
+        self.final_bracket_lo.get()
+    }
+
+    /// The upper endpoint of the bracket at termination.
+    pub(crate) fn final_bracket_hi(&self) -> f64 {
+        self.final_bracket_hi.get()
+    }
+
+    /// The number of golden-section iterations the refinement executed (one per completed loop body), at
+    /// most the frozen [`GOLDEN_MAX_ITERS`] cap (asserted at the mint boundary).
+    pub(crate) fn iterations(&self) -> usize {
+        self.iterations
+    }
+
     /// Why the refinement stopped.
     pub(crate) fn stop(&self) -> GoldenStop {
         self.stop

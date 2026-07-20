@@ -14,6 +14,7 @@ mod staged_ladder;
 
 mod a_complete_valid_campaign_folds;
 
+mod a_binding_fault_outranks_a_competing_off_specification;
 mod a_sequence_gap_outranks_an_earlier_record_defect;
 mod an_embedded_disagreement_outranks_its_dangling_resolution;
 mod the_census_returns_the_canonically_earliest_failure;
@@ -42,3 +43,6 @@ mod a_zero_server_pid_fails_provenance_shape;
 mod an_off_formula_logical_n_is_rejected;
 mod an_out_of_range_block_fails_the_block_census;
 mod an_out_of_range_dose_fails_the_dose_census;
+mod each_run_retains_its_own_server_provenance;
+mod the_campaign_provenance_retains_both_parsed_and_raw_versions;
+mod the_campaign_root_retains_the_homogeneous_provenance;

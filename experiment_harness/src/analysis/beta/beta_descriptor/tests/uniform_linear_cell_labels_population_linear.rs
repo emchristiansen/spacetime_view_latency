@@ -17,7 +17,7 @@ fn uniform_linear_cell_labels_population_linear() {
     let descriptor = BetaDescriptor::from_ladders(&ladders);
 
     assert!(
-        descriptor.blocks().iter().all(|fit| fit.is_identifiable()),
+        descriptor.block_fits().all(|fit| fit.is_identifiable()),
         "every one of the 30 clean linear blocks is identifiable"
     );
 

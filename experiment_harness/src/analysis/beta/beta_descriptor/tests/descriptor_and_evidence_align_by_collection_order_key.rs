@@ -66,7 +66,7 @@ fn descriptor_and_evidence_align_by_collection_order_key() {
     }
 
     let keys = evidence.collection_order_keys();
-    let blocks = beta.blocks();
+    let blocks = beta.block_search_outcomes();
     for i in 0..N_BLOCKS {
         // Primary evidence is in ascending collection-key order: position `i` carries key `2·i`, the key of
         // the block placed at collection rank `i`.
@@ -78,6 +78,7 @@ fn descriptor_and_evidence_align_by_collection_order_key() {
         // The secondary descriptor block at that same position carries that block's identified exponent, so
         // descriptor index `i` and evidence index `i` denote the same physical block.
         let identified = blocks[i]
+            .fit()
             .identified_beta()
             .expect("every clean power-law block is identifiable");
         assert!(

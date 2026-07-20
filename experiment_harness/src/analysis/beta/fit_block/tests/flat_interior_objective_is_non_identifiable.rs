@@ -46,7 +46,7 @@ fn flat_interior_objective_is_non_identifiable() {
         BlockPoint::from_synthetic(n, n * n + alternating + ALTERNATING)
     });
 
-    let fit = fit_block(&ladder);
+    let fit = fit_block(&ladder).fit();
     let candidate = match fit {
         BlockFit::FlatObjective(candidate) => candidate,
         other => panic!("a shallow interior basin must be a retained FlatObjective, got {other:?}"),

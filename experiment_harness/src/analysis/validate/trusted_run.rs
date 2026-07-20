@@ -7,6 +7,7 @@ use crate::analysis::validate::run_kind::RunKind;
 use crate::analysis::validate::run_provenance::RunProvenance;
 use crate::analysis::validate::trusted_dose::TrustedDose;
 use crate::manifest::run_coordinate::RunCoordinate;
+use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::observation::record_seq::RecordSeq;
 use crate::params::NUM_DOSES_USIZE;
 
@@ -36,22 +37,29 @@ pub(crate) struct TrustedRun<R> {
     /// the run's by-value footprint is one pointer — keeping the fold's stack frame bounded regardless of
     /// [`NUM_DOSES`](crate::params::NUM_DOSES).
     doses: Box<[TrustedDose; NUM_DOSES_USIZE]>,
+    /// This run's run-varying server/module provenance, minted from the typed manifest structurally bound to
+    /// this run's coordinate — the backing store the report's per-run provenance section reads.
+    provenance: RunProvenance,
     /// The compile-time role marker; carries no data, only the type-level arm/control distinction.
     role: PhantomData<R>,
 }
 
 impl<R: RunKind> TrustedRun<R> {
-    /// The sole role-specific minting path: assemble a trusted run from a coordinate and its
-    /// already-validated complete dose ladder, verifying that the coordinate's recorded role equals the
-    /// type-level role `R::ROLE`. This is why the type-level role can never disagree with the recorded
-    /// one — a mismatch is a typed [`IntegrityError::run_role_mismatch`], not a silently mislabelled run.
-    /// The caller (the validation pass) owns proving dose completeness, uniqueness, and ladder
-    /// monotonicity.
+    /// The sole role-specific minting path: assemble a trusted run from the typed [`ValidatedRunManifest`]
+    /// bound to it and its already-validated complete dose ladder. Both the run coordinate and the run's
+    /// [`RunProvenance`] are *derived from that one manifest* — the coordinate from [`ValidatedRunManifest::run_coordinate`]
+    /// and the provenance from [`RunProvenance::mint`] — so a coordinate can never be paired with a foreign
+    /// run's provenance: they come from the same value. Minting still verifies that the manifest's recorded
+    /// role equals the type-level role `R::ROLE`, so the type-level role can never disagree with the recorded
+    /// one — a mismatch is a typed [`IntegrityError::run_role_mismatch`], not a silently mislabelled run. The
+    /// caller (the validation pass) owns proving dose completeness, uniqueness, and ladder monotonicity, and
+    /// selecting the manifest structurally bound to this run's canonical coordinate.
     pub(super) fn mint(
-        coordinate: RunCoordinate,
+        manifest: &ValidatedRunManifest,
         doses: Box<[TrustedDose; NUM_DOSES_USIZE]>,
         manifest_seq: RecordSeq,
     ) -> Result<Self, IntegrityError> {
+        let coordinate = manifest.run_coordinate();
         if coordinate.role() != R::ROLE {
             let diagnostic = format!(
                 "run coordinate role {:?} does not match the {:?} position it was matched into",
@@ -64,6 +72,7 @@ impl<R: RunKind> TrustedRun<R> {
             coordinate,
             manifest_seq,
             doses,
+            provenance: RunProvenance::mint(manifest),
             role: PhantomData,
         })
     }
@@ -94,14 +103,10 @@ impl<R> TrustedRun<R> {
 
     /// This run's run-varying server/module provenance (database identity, PID, listen/client addresses,
     /// data/keys directories) — the report's per-run provenance section (spec: "Each `TrustedRun` owns its
-    /// run-varying database identity and server facts").
-    ///
-    /// Phase-1 additive accessor: a `todo!()` signature with no backing field yet, because a non-optional
-    /// [`RunProvenance`] field would force [`Self::mint`] to mint one (whose [`RunProvenance::mint`] is
-    /// itself `todo!()`), changing the existing validation behavior and panicking every existing run
-    /// construction. Phase 2 adds the backing field and the real mint together.
+    /// run-varying database identity and server facts"). A real accessor over the stored field, minted from
+    /// the run's typed manifest at [`Self::mint`].
     pub(crate) fn provenance(&self) -> &RunProvenance {
-        todo!("Phase 2: store and return the run-varying provenance minted during validation")
+        &self.provenance
     }
 }
 

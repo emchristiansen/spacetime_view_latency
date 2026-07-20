@@ -9,7 +9,7 @@ use crate::analysis::beta::fit_block::tests::ladder_from;
 fn recovers_interior_sublinear_exponent() {
     // y = 100·N^0.5 is exactly proportional to x = N^0.5, so the constrained fit is perfect at β = 0.5
     // and strictly worse elsewhere — a distinguishable interior sublinear minimum.
-    let fit = fit_block(&ladder_from(|n| 100.0 * n.sqrt()));
+    let fit = fit_block(&ladder_from(|n| 100.0 * n.sqrt())).fit();
 
     let candidate = match fit {
         BlockFit::Identifiable(candidate) => candidate,

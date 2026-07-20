@@ -36,11 +36,14 @@ pub(super) fn constant_n_ladder(n: f64, y_of_index: impl Fn(usize) -> f64) -> [B
 mod accepts_exact_zero_intercept_fit;
 mod accepts_projected_to_zero_intercept;
 mod flat_interior_objective_is_non_identifiable;
+mod golden_refinement_stops_at_bracket_width_with_honest_iteration_count;
 mod lower_edge_omits_outward_probe_and_keeps_inward;
 mod pins_above_bracket_power_at_upper_bound;
 mod pins_constant_ladder_at_lower_bound;
+mod records_every_located_basin_not_only_the_winner;
 mod recovers_interior_linear_exponent;
 mod recovers_interior_sublinear_exponent;
 mod rejects_zero_scale_ladder;
 mod resolves_flat_objective_tie_to_smaller_beta;
+mod selected_basin_index_is_positional_not_grid_node;
 mod upper_edge_omits_outward_probe_and_keeps_inward;

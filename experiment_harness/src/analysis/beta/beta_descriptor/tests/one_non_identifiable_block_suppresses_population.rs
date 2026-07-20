@@ -20,18 +20,17 @@ fn one_non_identifiable_block_suppresses_population() {
 
     // Every block outcome is retained — the failure is reported, not dropped.
     assert_eq!(
-        descriptor.blocks().len(),
+        descriptor.block_search_outcomes().len(),
         N_BLOCKS,
         "all 30 block outcomes are retained"
     );
     assert!(
-        matches!(descriptor.blocks()[0], BlockFit::NonPositiveScale),
+        matches!(descriptor.block_search_outcomes()[0].fit(), BlockFit::NonPositiveScale),
         "the all-zero block is retained as a NonPositiveScale failure, got {:?}",
-        descriptor.blocks()[0]
+        descriptor.block_search_outcomes()[0].fit()
     );
     let identifiable = descriptor
-        .blocks()
-        .iter()
+        .block_fits()
         .filter(|fit| fit.is_identifiable())
         .count();
     assert_eq!(

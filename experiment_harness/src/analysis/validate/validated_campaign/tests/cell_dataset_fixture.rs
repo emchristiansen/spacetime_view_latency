@@ -27,6 +27,8 @@ use crate::dataset::dose_index::DoseIndex;
 use crate::dataset::physical_cardinalities::PhysicalCardinalities;
 use crate::manifest::repetition_block_index::RepetitionBlockIndex;
 use crate::manifest::run_coordinate::RunCoordinate;
+use crate::manifest::schedule_seed::ScheduleSeed;
+use crate::manifest::validated_run_manifest::ValidatedRunManifest;
 use crate::observation::event_evidence::EventEvidence;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::latency_summary::LatencySummary;
@@ -144,7 +146,11 @@ fn mint_run<R: RunKind>(
         .ok()
         .expect("DoseIndex::ALL supplies exactly NUM_DOSES trusted doses");
     let manifest_seq = RecordSeq::new(2 * rank as u64 + role_offset(role));
-    TrustedRun::<R>::mint(coordinate, doses, manifest_seq)
+    // `mint` derives the run coordinate from the manifest it is handed; a fixture manifest built *for* this
+    // role-matched coordinate reports the matching role, so the role check passes. The manifest sequence is
+    // still supplied separately as the run's collection-order anchor.
+    let manifest = ValidatedRunManifest::fixture_for(coordinate.clone(), ScheduleSeed::new(0));
+    TrustedRun::<R>::mint(&manifest, doses, manifest_seq)
         .expect("the coordinate role matches the type-level role R")
 }
 

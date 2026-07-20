@@ -11,7 +11,7 @@ use crate::analysis::beta::fit_block::tests::ladder_from;
 fn recovers_interior_linear_exponent() {
     // y = 2N is exactly proportional to x = N^1, so the constrained fit is perfect at β = 1 (b ≈ 2,
     // RSS ≈ 0) and strictly worse at any other exponent — a distinguishable interior minimum.
-    let fit = fit_block(&ladder_from(|n| 2.0 * n));
+    let fit = fit_block(&ladder_from(|n| 2.0 * n)).fit();
 
     let candidate = match fit {
         BlockFit::Identifiable(candidate) => candidate,

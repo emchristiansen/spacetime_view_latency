@@ -24,9 +24,9 @@ fn resolves_flat_objective_tie_to_smaller_beta() {
 
     // Repeatability: the deterministic search yields the identical selected exponent and status on every
     // call over the same ladder.
-    let first = selected_beta(fit_block(&ladder));
-    let second = selected_beta(fit_block(&ladder));
-    let third = selected_beta(fit_block(&ladder));
+    let first = selected_beta(fit_block(&ladder).fit());
+    let second = selected_beta(fit_block(&ladder).fit());
+    let third = selected_beta(fit_block(&ladder).fit());
     assert_eq!(first, second, "the flat-objective selection is repeatable across calls");
     assert_eq!(second, third, "the flat-objective selection is repeatable across calls");
 

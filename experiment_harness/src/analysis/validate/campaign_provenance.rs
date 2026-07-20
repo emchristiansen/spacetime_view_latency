@@ -62,8 +62,18 @@ impl CampaignProvenance {
     /// rather than reparsing pre-validation DTO strings. `pub(super)` so only the `validate` subtree's
     /// pass — which owns proving that every run's manifest agrees on these facts — can construct one.
     pub(super) fn mint(manifest: &ValidatedRunManifest) -> Self {
-        let _ = manifest;
-        todo!("Phase 2: project the proven-homogeneous distribution/module facts into typed domain values")
+        Self {
+            nix_store_bin_dir: manifest.nix_store_bin_dir().to_path_buf(),
+            cli_exe: manifest.cli_exe().to_path_buf(),
+            cli_version: manifest.cli_version().clone(),
+            cli_release_commit: manifest.cli_release_commit(),
+            cli_version_raw: manifest.cli_version_raw().to_string(),
+            standalone_exe: manifest.standalone_exe().to_path_buf(),
+            standalone_version: manifest.standalone_version().clone(),
+            standalone_version_raw: manifest.standalone_version_raw().to_string(),
+            resolved_exe: manifest.resolved_exe().to_path_buf(),
+            wasm_sha256: manifest.wasm_sha256(),
+        }
     }
 
     /// The pinned Nix-store `bin` directory.

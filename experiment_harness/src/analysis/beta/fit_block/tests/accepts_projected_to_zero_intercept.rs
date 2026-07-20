@@ -14,7 +14,7 @@ fn accepts_projected_to_zero_intercept() {
     // unconstrained ordinary-least-squares intercept is exactly −1000 < 0, infeasible under a ≥ 0, so the
     // fit falls to the a = 0 edge b = Σxy/Σx². The offset is tiny against the ≈ 3.7·10^7 top of the
     // ladder, so the constrained optimum stays a distinguishable interior exponent near 1.5.
-    let fit = fit_block(&ladder_from(|n| 100.0 * n.powf(1.5) - 1000.0));
+    let fit = fit_block(&ladder_from(|n| 100.0 * n.powf(1.5) - 1000.0)).fit();
 
     let candidate = match fit {
         BlockFit::Identifiable(candidate) => candidate,

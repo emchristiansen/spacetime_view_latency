@@ -39,7 +39,7 @@ fn accepts_exact_zero_intercept_fit() {
     // minimum 0, and the tie rule only unseats the incumbent on a *strictly lower* RSS (impossible below 0)
     // or an equal RSS at a smaller β (which would need an exact-zero residual at some β ≠ 2 — impossible on
     // this non-degenerate ladder). So `fit_block` returns the β = 2 grid candidate unchanged.
-    let fit = fit_block(&points);
+    let fit = fit_block(&points).fit();
     let candidate = match fit {
         BlockFit::Identifiable(candidate) => candidate,
         other => panic!("a clean quadratic ladder must yield an identifiable interior fit, got {other:?}"),

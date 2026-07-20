@@ -1,7 +1,8 @@
 //! The root of the trusted campaign graph, and the sole untrusted→trusted validation entry point.
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 
 use semver::Version;
 
@@ -43,6 +44,12 @@ use crate::manifest::release_commit::ReleaseCommit;
 use crate::manifest::repetition_block_index::RepetitionBlockIndex;
 use crate::manifest::run_coordinate::RunCoordinate;
 use crate::manifest::schedule_seed::ScheduleSeed;
+use crate::manifest::server_pid::ServerPid;
+use crate::manifest::validated_run_manifest::{
+    DataDirectory, KeysDirectory, ValidatedCliFacts, ValidatedDistributionParts,
+    ValidatedManifestIdentity, ValidatedModuleParts, ValidatedRunManifest, ValidatedRunManifestParts,
+    ValidatedServerParts, ValidatedStandaloneFacts,
+};
 use crate::manifest::wasm_sha256::WasmSha256;
 use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
 use crate::observation::event_evidence::EventEvidence;
@@ -123,6 +130,9 @@ pub(crate) struct ValidatedCampaign {
     /// pointer — keeping [`Self::from_records`]'s stack frame bounded regardless of [`CELL_COUNT`] on every
     /// return path, success or failure.
     cells: Box<[CellDataset; CELL_COUNT]>,
+    /// The campaign-homogeneous distribution/module provenance, minted once from the sequence-first typed
+    /// manifest [`Self::new`] derives it from — proven identical across every run in stage 4.
+    provenance: CampaignProvenance,
 }
 
 impl ValidatedCampaign {
@@ -200,14 +210,17 @@ impl ValidatedCampaign {
         }
 
         // Stage 3 — manifest↔reference binding. Parse identities into typed keys, then prove the
-        // manifest→identity map injective and the reference↔manifest correspondence bijective.
-        bind_manifest_references(&manifests, &observation_refs)?;
+        // manifest→identity map injective and the reference↔manifest correspondence bijective. Each staged
+        // manifest moves into a [`BoundManifest`] carrying its parsed module database identity forward.
+        let bound = bind_manifest_references(manifests, &observation_refs)?;
 
-        // Stage 4 — campaign-stable homogeneity / off-specification and per-run provenance shape.
-        validate_stable_and_provenance(&manifests)?;
+        // Stage 4 — campaign-stable homogeneity / off-specification and per-run provenance shape. At the tail
+        // of its per-manifest checks — downstream of every field `?` — each bound manifest becomes a
+        // [`TypedRunManifest`] carrying the typed [`ValidatedRunManifest`] assembled from the validated parts.
+        let typed = validate_stable_and_provenance(bound)?;
 
         // Stage 5 — exact cell/block/dose census over the canonical slots.
-        census(&manifests, &dose_slots)?;
+        census(&typed, &dose_slots)?;
 
         // Stage 6 — schedule-order grammar binding. Bind each record's sequence position to the
         // seed-derived preregistered schedule grammar (the global `Cell × block` permutation, the
@@ -215,44 +228,40 @@ impl ValidatedCampaign {
         // order), so the trusted collection order provably reflects the randomized schedule rather than
         // the generator's emission order. Runs after census, which has proven the canonical population is
         // complete, and before minting, so a block key is minted only once its schedule order is proven.
-        validate_schedule_order(&ordered, &manifests)?;
+        validate_schedule_order(&ordered, &typed)?;
 
         // Stage 7 — monotonic per-run and matched arm/control cardinality ladders.
         validate_ladders(&dose_slots)?;
 
         // Stage 8 — mint the trusted graph. Every earlier stage has passed, so each canonical slot holds
-        // exactly one validated value; the canonical loop mints the fixed-cardinality tree.
-        let cells = mint_cells(&mut dose_slots, &manifests)?;
+        // exactly one validated value; the canonical loop mints the fixed-cardinality tree, deriving each
+        // run's provenance from the typed manifest structurally bound to its coordinate.
+        let cells = mint_cells(&mut dose_slots, &typed)?;
 
-        // Seed and parameters are the campaign-stable facts proven homogeneous in stage 4; take the
-        // reference run's seed (all runs equal it) and snapshot the preregistered parameters.
-        let schedule_seed = ScheduleSeed::new(
-            manifests
-                .first()
-                .expect("a complete campaign has 540 manifests, so at least one")
-                .body
-                .manifest
-                .schedule_seed,
-        );
-        Ok(Self::new(
-            schedule_seed,
-            PreregisteredParameters::preregistered(),
-            cells,
-        ))
+        // The campaign-stable roots — seed, parameters, and homogeneous provenance — are all derived from the
+        // one sequence-first typed manifest, which stage 4 proved every run equal to. Binding them from a
+        // single reference rather than pairing them independently keeps a seed from being matched to a foreign
+        // run's provenance.
+        let reference = typed
+            .first()
+            .expect("a complete campaign has 540 manifests, so at least one");
+        Ok(Self::new(reference.manifest(), cells))
     }
 
-    /// Assemble the validated campaign root from its proven-homogeneous seed and parameters and its
-    /// complete set of validated cell datasets. The caller ([`Self::from_records`]) owns proving seed and
-    /// parameter homogeneity and the nine-cell census; this constructor only binds the proven parts.
+    /// Assemble the validated campaign root from the sequence-first reference manifest — whose seed and
+    /// campaign-homogeneous provenance stage 4 proved every run equal to — and the complete set of validated
+    /// cell datasets. The caller ([`Self::from_records`]) owns proving seed and provenance homogeneity and the
+    /// nine-cell census; this constructor derives every campaign-stable root from the *one* reference manifest
+    /// (`pub(super)`, called once), so no seed/parameter/provenance triple can be independently mispaired.
     pub(super) fn new(
-        schedule_seed: ScheduleSeed,
-        parameters: PreregisteredParameters,
+        reference_manifest: &ValidatedRunManifest,
         cells: Box<[CellDataset; CELL_COUNT]>,
     ) -> Self {
         Self {
-            schedule_seed,
-            parameters,
+            schedule_seed: reference_manifest.schedule_seed(),
+            parameters: PreregisteredParameters::preregistered(),
             cells,
+            provenance: CampaignProvenance::mint(reference_manifest),
         }
     }
 
@@ -278,15 +287,10 @@ impl ValidatedCampaign {
 
     /// The campaign-homogeneous distribution/module provenance proven identical across every run's
     /// manifest — the report's environment section (spec: "`ValidatedCampaign` owns the
-    /// campaign-homogeneous distribution/module facts").
-    ///
-    /// Phase-1 additive accessor: it is a `todo!()` signature with no backing field yet, because a
-    /// non-optional [`CampaignProvenance`] field would force [`Self::from_records`]/[`Self::new`] to mint
-    /// one (whose [`CampaignProvenance::mint`] is itself `todo!()`), which would change the existing
-    /// validation behavior and panic every existing construction. Phase 2 adds the backing field and the
-    /// real mint together, once the projection is implemented.
+    /// campaign-homogeneous distribution/module facts"). A real accessor over the stored field, minted from
+    /// the sequence-first reference manifest at [`Self::new`].
     pub(crate) fn provenance(&self) -> &CampaignProvenance {
-        todo!("Phase 2: store and return the campaign-homogeneous provenance minted during validation")
+        &self.provenance
     }
 }
 
@@ -297,6 +301,36 @@ struct StagedManifest {
     seq: u64,
     coordinate: RunCoordinate,
     body: crate::analysis::ingest::manifest_body_dto::ManifestBodyDto,
+}
+
+/// One manifest after stage-3 reference binding: it moves with its `seq` and trusted [`RunCoordinate`],
+/// still carrying the wire `body` the provenance stage reads, plus the module `database_identity` parsed at
+/// the stage-3 binding site so stage 4 reuses it rather than reparsing the wire hex. No parallel vector: the
+/// association travels inside the struct.
+struct BoundManifest {
+    seq: u64,
+    coordinate: RunCoordinate,
+    body: crate::analysis::ingest::manifest_body_dto::ManifestBodyDto,
+    database_identity: DatabaseIdentity,
+}
+
+/// One manifest after the stage-4 field and homogeneity checks: it moves with its `seq` and trusted
+/// [`RunCoordinate`], now carrying the typed [`ValidatedRunManifest`] assembled from the validated parts at
+/// the tail of the per-manifest checks. The census, schedule-order, and mint stages read the coordinate and
+/// the typed manifest; the raw wire body is no longer needed. The `seq`/coordinate/manifest association
+/// travels inside the struct — never a parallel vector or positional zip.
+struct TypedRunManifest {
+    seq: u64,
+    coordinate: RunCoordinate,
+    manifest: ValidatedRunManifest,
+}
+
+impl TypedRunManifest {
+    /// The typed manifest this run is bound to — the source both the campaign and per-run provenance are
+    /// projected from.
+    fn manifest(&self) -> &ValidatedRunManifest {
+        &self.manifest
+    }
 }
 
 /// One dose observation's manifest reference, retained for the binding stage's bijection proof.
@@ -651,19 +685,24 @@ fn parse_identity(
 }
 
 /// Stage 3: prove the manifest↔observation reference binding. Identities become typed keys, then the
-/// manifest→identity map is proven injective and the reference↔manifest correspondence bijective.
+/// manifest→identity map is proven injective and the reference↔manifest correspondence bijective. Each
+/// staged manifest moves into a [`BoundManifest`] carrying its parsed module database identity, so the
+/// association travels with the record rather than through a parallel structure.
 fn bind_manifest_references(
-    manifests: &[StagedManifest],
+    manifests: Vec<StagedManifest>,
     observation_refs: &[StagedObservationRef],
-) -> std::result::Result<(), IntegrityError> {
+) -> std::result::Result<Vec<BoundManifest>, IntegrityError> {
     // Parse every manifest's own identity (module database identity) and its embedded reference identity,
-    // proving the two agree, in sequence order.
+    // proving the two agree, in sequence order. The parsed database identity moves into the bound manifest at
+    // this site so stage 4 does not reparse it.
+    let mut bound: Vec<BoundManifest> = Vec::with_capacity(manifests.len());
     let mut manifest_keys: Vec<ManifestReferenceIdentity> = Vec::with_capacity(manifests.len());
     for manifest in manifests {
-        let module = &manifest.body.manifest.module;
+        let database_identity =
+            parse_identity(manifest.coordinate.clone(), &manifest.body.manifest.module.database_identity)?;
         let own = ManifestReferenceIdentity::new(
             manifest.coordinate.clone(),
-            parse_identity(manifest.coordinate.clone(), &module.database_identity)?,
+            database_identity,
             ScheduleSeed::new(manifest.body.manifest.schedule_seed),
         );
         let embedded = reference_identity(&manifest.body.reference)?;
@@ -681,6 +720,12 @@ fn bind_manifest_references(
             ));
         }
         manifest_keys.push(own);
+        bound.push(BoundManifest {
+            seq: manifest.seq,
+            coordinate: manifest.coordinate,
+            body: manifest.body,
+            database_identity,
+        });
     }
 
     // Parse every observation's reference identity, in sequence order.
@@ -702,7 +747,7 @@ fn bind_manifest_references(
                 },
                 format!(
                     "manifest at seq {} shares its identity key with {} manifests",
-                    manifests[position].seq, occurrences
+                    bound[position].seq, occurrences
                 ),
             ));
         }
@@ -739,13 +784,13 @@ fn bind_manifest_references(
                 },
                 format!(
                     "manifest at seq {} is referenced by no observation",
-                    manifests[position].seq
+                    bound[position].seq
                 ),
             ));
         }
     }
 
-    Ok(())
+    Ok(bound)
 }
 
 /// Stage 4: prove campaign-stable facts off-specification/homogeneous and per-run provenance shape valid.
@@ -753,8 +798,8 @@ fn bind_manifest_references(
 /// environment/provenance facts and the seed, which have no preregistered constant, are proven identical
 /// across runs (heterogeneity).
 fn validate_stable_and_provenance(
-    manifests: &[StagedManifest],
-) -> std::result::Result<(), IntegrityError> {
+    manifests: Vec<BoundManifest>,
+) -> std::result::Result<Vec<TypedRunManifest>, IntegrityError> {
     let expected_version =
         Version::parse(EXPECTED_VERSION).expect("EXPECTED_VERSION is a valid semver constant");
     let expected_commit = ReleaseCommit::parse_canonical_hex(EXPECTED_RELEASE_COMMIT)
@@ -762,6 +807,12 @@ fn validate_stable_and_provenance(
     let expected_wasm = WasmSha256::new(MODULE_WASM_SHA256);
     let expected_ladder: Vec<u64> = (1..=NUM_DOSES).map(|dose| dose * BATCH_SIZE).collect();
 
+    // Pass 1 — per-manifest field checks in the exact preregistered order; each check that parses a stable
+    // fact returns the parsed typed value, retained in a [`ParsedManifest`] carrier so the later mint is
+    // assembled from the values proven here rather than by reparsing the wire body. This pass mints *no*
+    // [`ValidatedRunManifest`]: the trusted manifest is constructed only after the homogeneity pass below
+    // succeeds, so no trusted manifest can exist before every relational obligation is established.
+    let mut parsed: Vec<ParsedManifest> = Vec::with_capacity(manifests.len());
     for manifest in manifests {
         let run = &manifest.coordinate;
         let inner = &manifest.body.manifest;
@@ -770,21 +821,22 @@ fn validate_stable_and_provenance(
         let module = &inner.module;
         let server = &inner.server;
 
-        // Off-specification checks against frozen preregistered values.
-        check_version(
+        // Off-specification checks against frozen preregistered values, retaining each parsed typed value.
+        let cli_version = check_version(
             run,
             &distribution.cli_version,
             &expected_version,
             StableVersionFact::Cli,
         )?;
-        check_version(
+        let standalone_version = check_version(
             run,
             &distribution.standalone_version,
             &expected_version,
             StableVersionFact::Standalone,
         )?;
-        check_release_commit(run, &distribution.cli_release_commit, &expected_commit)?;
-        check_wasm_sha256(run, &module.wasm_sha256, &expected_wasm)?;
+        let cli_release_commit =
+            check_release_commit(run, &distribution.cli_release_commit, &expected_commit)?;
+        let wasm_sha256 = check_wasm_sha256(run, &module.wasm_sha256, &expected_wasm)?;
         check_raw_version(
             run,
             &distribution.cli_version_raw,
@@ -856,44 +908,66 @@ fn validate_stable_and_provenance(
             ));
         }
 
-        // Per-run server-provenance shape.
-        validate_server_provenance(run, server, &distribution.standalone_exe)?;
+        // Per-run server-provenance shape; retain the two parsed typed facts (pid, listen address).
+        let (pid, listen_addr) =
+            validate_server_provenance(run, server, &distribution.standalone_exe)?;
+
+        parsed.push(ParsedManifest {
+            seq: manifest.seq,
+            coordinate: manifest.coordinate.clone(),
+            schedule_seed: ScheduleSeed::new(inner.schedule_seed),
+            nix_store_bin_dir: PathBuf::from(&distribution.nix_store_bin_dir),
+            cli_exe: PathBuf::from(&distribution.cli_exe),
+            cli_version,
+            cli_version_raw: distribution.cli_version_raw.clone(),
+            cli_release_commit,
+            standalone_exe: PathBuf::from(&distribution.standalone_exe),
+            standalone_version,
+            standalone_version_raw: distribution.standalone_version_raw.clone(),
+            pid,
+            resolved_exe: PathBuf::from(&server.resolved_exe),
+            listen_addr,
+            client_url: server.client_url.clone(),
+            data_dir: PathBuf::from(&server.data_dir),
+            keys_dir: PathBuf::from(&server.keys_dir),
+            wasm_sha256,
+            database_identity: manifest.database_identity,
+        });
     }
 
-    // Homogeneity of the pinned environment/provenance facts and the seed: every run must equal the
-    // reference (first, in sequence order) run's value.
-    if let Some(reference) = manifests.first() {
-        let reference_inner = &reference.body.manifest;
-        for manifest in &manifests[1..] {
-            let inner = &manifest.body.manifest;
+    // Pass 2 — homogeneity of the pinned environment/provenance facts and the seed: every run must equal
+    // the reference (first, in sequence order) run's value. Runs over the parsed carriers in the identical
+    // order to the original pass, still before any trusted manifest is minted.
+    if let Some((reference, rest)) = parsed.split_first() {
+        for manifest in rest {
             check_homogeneous_path(
                 manifest,
                 reference,
-                &inner.distribution.nix_store_bin_dir,
-                &reference_inner.distribution.nix_store_bin_dir,
+                &manifest.nix_store_bin_dir,
+                &reference.nix_store_bin_dir,
                 StableEnvFact::NixStoreBinDir,
             )?;
             check_homogeneous_path(
                 manifest,
                 reference,
-                &inner.distribution.cli_exe,
-                &reference_inner.distribution.cli_exe,
+                &manifest.cli_exe,
+                &reference.cli_exe,
                 StableEnvFact::CliExe,
             )?;
             check_homogeneous_path(
                 manifest,
                 reference,
-                &inner.distribution.standalone_exe,
-                &reference_inner.distribution.standalone_exe,
+                &manifest.standalone_exe,
+                &reference.standalone_exe,
                 StableEnvFact::StandaloneExe,
             )?;
-            if inner.schedule_seed != reference_inner.schedule_seed {
+            if manifest.schedule_seed.get() != reference.schedule_seed.get() {
                 return Err(heterogeneity(
                     manifest,
                     reference,
                     StableFactContradiction::ScheduleSeed {
-                        expected: ScheduleSeed::new(reference_inner.schedule_seed),
-                        observed: ScheduleSeed::new(inner.schedule_seed),
+                        expected: reference.schedule_seed,
+                        observed: manifest.schedule_seed,
                     },
                     "schedule seed is not homogeneous across the campaign",
                 ));
@@ -901,7 +975,93 @@ fn validate_stable_and_provenance(
         }
     }
 
-    Ok(())
+    // Pass 3 — the entire homogeneity pass has now succeeded, so every relational obligation
+    // (raw/parsed equality, off-specification, campaign homogeneity) is established. Only here is each
+    // parsed carrier total-mapped into grouped [`ValidatedRunManifestParts`] and minted into the sole
+    // trusted [`ValidatedRunManifest`]; no trusted manifest existed before this point. Sequence order is
+    // preserved from pass 1.
+    let typed: Vec<TypedRunManifest> = parsed.into_iter().map(mint_typed_manifest).collect();
+    Ok(typed)
+}
+
+/// Total-map one fully validated parsed carrier into its trusted [`TypedRunManifest`]. Called only from the
+/// stage-4 tail, after the homogeneity pass has succeeded, so this transition witnesses no relational
+/// obligation itself — it only groups the already-proven typed values into
+/// [`ValidatedRunManifestParts`] and mints the sole [`ValidatedRunManifest`], carrying the run's `seq` and
+/// [`RunCoordinate`] forward inside the struct.
+fn mint_typed_manifest(parsed: ParsedManifest) -> TypedRunManifest {
+    let ParsedManifest {
+        seq,
+        coordinate,
+        schedule_seed,
+        nix_store_bin_dir,
+        cli_exe,
+        cli_version,
+        cli_version_raw,
+        cli_release_commit,
+        standalone_exe,
+        standalone_version,
+        standalone_version_raw,
+        pid,
+        resolved_exe,
+        listen_addr,
+        client_url,
+        data_dir,
+        keys_dir,
+        wasm_sha256,
+        database_identity,
+    } = parsed;
+    let manifest = ValidatedRunManifest::from_validated_parts(ValidatedRunManifestParts::new(
+        ValidatedManifestIdentity::new(coordinate.clone(), schedule_seed),
+        ValidatedDistributionParts::new(
+            nix_store_bin_dir,
+            ValidatedCliFacts::new(cli_exe, cli_version, cli_version_raw, cli_release_commit),
+            ValidatedStandaloneFacts::new(standalone_exe, standalone_version, standalone_version_raw),
+        ),
+        ValidatedServerParts::new(
+            pid,
+            resolved_exe,
+            listen_addr,
+            client_url,
+            DataDirectory::new(data_dir),
+            KeysDirectory::new(keys_dir),
+        ),
+        ValidatedModuleParts::new(wasm_sha256, database_identity),
+    ));
+    TypedRunManifest {
+        seq,
+        coordinate,
+        manifest,
+    }
+}
+
+/// The fully parsed facts of one recorded manifest after the stage-4 per-manifest checks, retained so the
+/// homogeneity pass can compare them and the tail transition can mint the trusted manifest — without
+/// reparsing the wire body and without any trusted [`ValidatedRunManifest`] existing before homogeneity is
+/// proven. It moves with its `seq` and trusted [`RunCoordinate`]; the association travels inside the struct,
+/// never a parallel vector. Every field is the already-parsed typed value (or the verbatim `_raw`/URL text
+/// the manifest itself stores), built by named-field struct literal so no two same-typed values are
+/// positionally swappable.
+struct ParsedManifest {
+    seq: u64,
+    coordinate: RunCoordinate,
+    schedule_seed: ScheduleSeed,
+    nix_store_bin_dir: PathBuf,
+    cli_exe: PathBuf,
+    cli_version: Version,
+    cli_version_raw: String,
+    cli_release_commit: ReleaseCommit,
+    standalone_exe: PathBuf,
+    standalone_version: Version,
+    standalone_version_raw: String,
+    pid: ServerPid,
+    resolved_exe: PathBuf,
+    listen_addr: SocketAddr,
+    client_url: String,
+    data_dir: PathBuf,
+    keys_dir: PathBuf,
+    wasm_sha256: WasmSha256,
+    database_identity: DatabaseIdentity,
 }
 
 /// Which version fact a semver/raw-version check concerns, so the typed contradiction/parse variant is
@@ -933,8 +1093,8 @@ fn off_specification(
 
 /// Build a `CampaignFactHeterogeneity` failure between a diverging run and the reference run.
 fn heterogeneity(
-    diverging: &StagedManifest,
-    reference: &StagedManifest,
+    diverging: &ParsedManifest,
+    reference: &ParsedManifest,
     contradiction: StableFactContradiction,
     diagnostic: &str,
 ) -> IntegrityError {
@@ -955,7 +1115,7 @@ fn check_version(
     raw: &str,
     expected: &Version,
     fact: StableVersionFact,
-) -> std::result::Result<(), IntegrityError> {
+) -> std::result::Result<Version, IntegrityError> {
     let observed = Version::parse(raw).map_err(|error| {
         let fault = match fact {
             StableVersionFact::Cli => MalformedStableFault::UnparseableCliVersion {
@@ -990,7 +1150,7 @@ fn check_version(
             "parsed version is off the preregistered expected version",
         ));
     }
-    Ok(())
+    Ok(observed)
 }
 
 /// Off-specification check of a raw version string against the frozen expected version string.
@@ -1024,7 +1184,7 @@ fn check_release_commit(
     run: &RunCoordinate,
     raw: &str,
     expected: &ReleaseCommit,
-) -> std::result::Result<(), IntegrityError> {
+) -> std::result::Result<ReleaseCommit, IntegrityError> {
     let observed = ReleaseCommit::parse_canonical_hex(raw).map_err(|error| {
         IntegrityError::malformed_stable_provenance(
             run.clone(),
@@ -1045,7 +1205,7 @@ fn check_release_commit(
             "parsed release commit is off the preregistered expected commit",
         ));
     }
-    Ok(())
+    Ok(observed)
 }
 
 /// Off-specification check of a parsed module WASM digest against the frozen committed hash.
@@ -1053,7 +1213,7 @@ fn check_wasm_sha256(
     run: &RunCoordinate,
     raw: &str,
     expected: &WasmSha256,
-) -> std::result::Result<(), IntegrityError> {
+) -> std::result::Result<WasmSha256, IntegrityError> {
     let observed = WasmSha256::parse_canonical_hex(raw).map_err(|error| {
         IntegrityError::malformed_stable_provenance(
             run.clone(),
@@ -1074,20 +1234,20 @@ fn check_wasm_sha256(
             "parsed module wasm sha256 is off the committed provenance hash",
         ));
     }
-    Ok(())
+    Ok(observed)
 }
 
 /// Homogeneity check of one pinned environment path fact against the reference run's value.
 fn check_homogeneous_path(
-    manifest: &StagedManifest,
-    reference: &StagedManifest,
-    observed: &str,
-    expected: &str,
+    manifest: &ParsedManifest,
+    reference: &ParsedManifest,
+    observed: &Path,
+    expected: &Path,
     fact: StableEnvFact,
 ) -> std::result::Result<(), IntegrityError> {
     if observed != expected {
-        let expected_path = std::path::PathBuf::from(expected);
-        let observed_path = std::path::PathBuf::from(observed);
+        let expected_path = expected.to_path_buf();
+        let observed_path = observed.to_path_buf();
         let contradiction = match fact {
             StableEnvFact::NixStoreBinDir => StableFactContradiction::NixStoreBinDir {
                 expected: expected_path,
@@ -1119,14 +1279,16 @@ fn validate_server_provenance(
     run: &RunCoordinate,
     server: &crate::analysis::ingest::server_facts_dto::ServerFactsDto,
     standalone_exe: &str,
-) -> std::result::Result<(), IntegrityError> {
-    if server.pid == 0 {
-        return Err(IntegrityError::server_provenance_shape(
-            run.clone(),
-            ServerProvenanceFault::ZeroPid { observed: 0 },
-            "server pid is zero".to_string(),
-        ));
-    }
+) -> std::result::Result<(ServerPid, SocketAddr), IntegrityError> {
+    let pid = NonZeroU32::new(server.pid)
+        .map(ServerPid::new)
+        .ok_or_else(|| {
+            IntegrityError::server_provenance_shape(
+                run.clone(),
+                ServerProvenanceFault::ZeroPid { observed: 0 },
+                "server pid is zero".to_string(),
+            )
+        })?;
 
     let listen_addr = server.listen_addr.parse::<SocketAddr>().map_err(|_| {
         IntegrityError::server_provenance_shape(
@@ -1180,13 +1342,13 @@ fn validate_server_provenance(
         ));
     }
 
-    Ok(())
+    Ok((pid, listen_addr))
 }
 
 /// Stage 5: exact cell/block/dose census over the canonical slots. Reports the first failure in canonical
 /// cell→role→block→dose order.
 fn census(
-    manifests: &[StagedManifest],
+    manifests: &[TypedRunManifest],
     dose_slots: &[Vec<StagedDose>],
 ) -> std::result::Result<(), IntegrityError> {
     let all_cells = Cell::all();
@@ -1236,7 +1398,7 @@ fn census(
                         run_slot_index(
                             cell_index(manifest.coordinate.cell()),
                             role_index(manifest.coordinate.role()),
-                            manifest.body.manifest.run.repetition_block as usize,
+                            manifest.coordinate.repetition_block().get() as usize,
                         ) == slot
                     })
                     .count();
@@ -1328,18 +1490,15 @@ fn canonical_coordinate(cell: Cell, role: RunRole, block: usize) -> RunCoordinat
 /// [`ScheduleOrderMismatch`]: super::integrity_error::IntegrityError
 fn validate_schedule_order(
     ordered: &[&WireRecordDto],
-    manifests: &[StagedManifest],
+    manifests: &[TypedRunManifest],
 ) -> std::result::Result<(), IntegrityError> {
     // The schedule seed is proven homogeneous across every manifest in stage 4, so any manifest's seed is
     // the campaign's seed; take the first in sequence order.
-    let seed = ScheduleSeed::new(
-        manifests
-            .first()
-            .expect("a complete campaign has 540 manifests, so at least one")
-            .body
-            .manifest
-            .schedule_seed,
-    );
+    let seed = manifests
+        .first()
+        .expect("a complete campaign has 540 manifests, so at least one")
+        .manifest()
+        .schedule_seed();
 
     // Reconstruct the preregistered grammar from the production schedule — never a parallel definition of
     // it: the seed-derived global block permutation, each block's seed-selected adjacent run order, and the
@@ -1598,7 +1757,7 @@ fn sole_dose(dose_slots: &[Vec<StagedDose>], run_slot: usize, dose_zero_based: u
 /// sequence.
 fn mint_cells(
     dose_slots: &mut [Vec<StagedDose>],
-    manifests: &[StagedManifest],
+    manifests: &[TypedRunManifest],
 ) -> std::result::Result<Box<[CellDataset; CELL_COUNT]>, IntegrityError> {
     let all_cells = Cell::all();
     let mut cells: Vec<CellDataset> = Vec::with_capacity(CELL_COUNT);
@@ -1636,7 +1795,7 @@ fn mint_run<R: RunKind>(
     cell_idx: usize,
     block: usize,
     dose_slots: &mut [Vec<StagedDose>],
-    manifests: &[StagedManifest],
+    manifests: &[TypedRunManifest],
 ) -> std::result::Result<TrustedRun<R>, IntegrityError> {
     let coordinate = canonical_coordinate(cell, role, block);
     let run_slot = run_slot_index(cell_idx, role_index(role), block);
@@ -1661,16 +1820,15 @@ fn mint_run<R: RunKind>(
         .try_into()
         .ok()
         .expect("exactly NUM_DOSES trusted doses were minted for the run");
-    // The run's manifest sequence is its collection-order anchor. Census proved exactly one manifest per
-    // canonical run coordinate, so this lookup is total.
-    let manifest_seq = RecordSeq::new(
-        manifests
-            .iter()
-            .find(|manifest| manifest.coordinate == coordinate)
-            .expect("census proved exactly one manifest per canonical run coordinate")
-            .seq,
-    );
-    TrustedRun::<R>::mint(coordinate, doses, manifest_seq)
+    // Select the one typed manifest structurally bound to this run's canonical coordinate; census proved
+    // exactly one exists. Its typed [`ValidatedRunManifest`] — not a separately supplied coordinate or
+    // provenance — is handed to [`TrustedRun::mint`], which derives both the run coordinate and the run's
+    // [`RunProvenance`] from that single value. Its manifest sequence is the run's collection-order anchor.
+    let bound = manifests
+        .iter()
+        .find(|manifest| manifest.coordinate == coordinate)
+        .expect("census proved exactly one manifest per canonical run coordinate");
+    TrustedRun::<R>::mint(bound.manifest(), doses, RecordSeq::new(bound.seq))
 }
 
 // `pub(crate)` (test-only) so the `campaign_builder` fixture reachable through it is nameable from the

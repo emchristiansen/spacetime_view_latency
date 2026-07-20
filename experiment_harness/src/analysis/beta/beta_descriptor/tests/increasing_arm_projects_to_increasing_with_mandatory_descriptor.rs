@@ -40,7 +40,7 @@ fn increasing_arm_projects_to_increasing_with_mandatory_descriptor() {
         // there is no descriptor-less Increasing to match.
         ClassifiedCell::Increasing { beta, .. } => {
             assert_eq!(
-                beta.blocks().len(),
+                beta.block_search_outcomes().len(),
                 REPETITION_BLOCKS as usize,
                 "the mandatory descriptor reports one fit outcome for every one of the 30 arm blocks"
             );
