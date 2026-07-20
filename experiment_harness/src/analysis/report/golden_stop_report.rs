@@ -18,7 +18,9 @@ pub(crate) enum GoldenStopReport {
 impl GoldenStopReport {
     /// Project the analysis-domain stop cause. Takes the `Copy` [`GoldenStop`] by value — one input.
     pub(crate) fn of(stop: GoldenStop) -> Self {
-        let _ = stop;
-        todo!("Phase 2: map GoldenStop variants one-to-one")
+        match stop {
+            GoldenStop::BracketWidthReached => Self::BracketWidthReached,
+            GoldenStop::IterationCapReached => Self::IterationCapReached,
+        }
     }
 }

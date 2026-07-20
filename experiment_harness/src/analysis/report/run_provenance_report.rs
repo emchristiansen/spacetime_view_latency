@@ -30,7 +30,15 @@ pub(crate) struct RunProvenanceReport {
 impl RunProvenanceReport {
     /// Project one run's trusted run-varying provenance into its report shape.
     pub(crate) fn of(provenance: &RunProvenance) -> Self {
-        let _ = provenance;
-        todo!("Phase 2: project the run's database identity, PID, addresses, and directories")
+        // Every value is exact — the database identity routes through its single canonical-hex render
+        // owner, the listen address through its `Display`, and the directories stay `PathBuf`s.
+        Self {
+            database_identity: provenance.database_identity().canonical_hex(),
+            pid: provenance.pid().get(),
+            listen_addr: provenance.listen_addr().to_string(),
+            client_url: provenance.client_url().to_string(),
+            data_dir: provenance.data_dir().to_path_buf(),
+            keys_dir: provenance.keys_dir().to_path_buf(),
+        }
     }
 }

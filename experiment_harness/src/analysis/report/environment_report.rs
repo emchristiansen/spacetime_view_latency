@@ -50,7 +50,25 @@ impl EnvironmentReport {
     /// its [`CampaignProvenance`](crate::analysis::validate::campaign_provenance::CampaignProvenance) — one
     /// input, projected in one place.
     pub(crate) fn of(campaign: &ValidatedCampaign) -> Self {
-        let _ = campaign;
-        todo!("Phase 2: project provenance paths/versions/hashes, schedule seed, and parameters")
+        // The campaign-homogeneous distribution/module facts come from the one root provenance, while the
+        // seed and preregistered parameters are campaign-owned — all bound from this single input so no
+        // seed/parameter/provenance triple can be independently mispaired. Every value is exact: paths
+        // become `PathBuf`, versions and canonical-hex hashes their `String` renderings through their single
+        // render owners, and the seed a bare `u64`; no float, so no `FiniteF64`.
+        let provenance = campaign.provenance();
+        Self {
+            nix_store_bin_dir: provenance.nix_store_bin_dir().to_path_buf(),
+            cli_exe: provenance.cli_exe().to_path_buf(),
+            cli_version: provenance.cli_version().to_string(),
+            cli_release_commit: provenance.cli_release_commit().to_string(),
+            cli_version_raw: provenance.cli_version_raw().to_string(),
+            standalone_exe: provenance.standalone_exe().to_path_buf(),
+            standalone_version: provenance.standalone_version().to_string(),
+            standalone_version_raw: provenance.standalone_version_raw().to_string(),
+            resolved_exe: provenance.resolved_exe().to_path_buf(),
+            wasm_sha256: provenance.wasm_sha256().canonical_hex(),
+            schedule_seed: campaign.schedule_seed().get(),
+            parameters: PreregisteredParametersReport::of(campaign.parameters()),
+        }
     }
 }

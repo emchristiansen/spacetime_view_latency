@@ -31,7 +31,28 @@ pub(crate) struct SecondaryDescriptorReport {
 impl SecondaryDescriptorReport {
     /// Project one cell's secondary descriptor, including every block's all-basin convergence telemetry.
     pub(crate) fn of(descriptor: &BetaDescriptor) -> Self {
-        let _ = descriptor;
-        todo!("Phase 2: project the 30 block search outcomes and the derived population interval")
+        // Project the 30 per-block search summaries heap-first into the fixed array, mirroring the
+        // descriptor's own boxed storage. The population interval is `Some` exactly when every block is
+        // identifiable — the source derives that, so this projection cannot introduce a disagreement.
+        let blocks: Vec<BlockSearchReport> = descriptor
+            .block_search_outcomes()
+            .iter()
+            .map(BlockSearchReport::of)
+            .collect();
+        let blocks = blocks
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly N_BLOCKS search outcomes project into exactly N_BLOCKS block reports");
+        Self {
+            population: descriptor
+                .population()
+                .as_ref()
+                .map(BetaPopulationReport::of),
+            blocks,
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -29,7 +29,13 @@ impl BetaPopulationReport {
     /// endpoints/coverage cross the lossy boundary to [`FiniteF64`] and whose label projects to
     /// [`BetaLabelReport`].
     pub(crate) fn of(population: &BetaPopulation) -> Self {
-        let _ = population;
-        todo!("Phase 2: project interval endpoints/coverage through FiniteF64 and the label through BetaLabelReport")
+        // The population endpoints and coverage are already finite by construction in the source
+        // descriptor, and the label projects to the closed report enum.
+        Self {
+            interval_lo: FiniteF64::new(population.interval_lo()),
+            interval_hi: FiniteF64::new(population.interval_hi()),
+            coverage: FiniteF64::new(population.coverage()),
+            label: BetaLabelReport::of(population.label()),
+        }
     }
 }

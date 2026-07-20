@@ -21,7 +21,10 @@ pub(crate) enum BetaLabelReport {
 impl BetaLabelReport {
     /// Project the analysis-domain label. Takes the `Copy` [`BetaLabel`] by value — one input.
     pub(crate) fn of(label: BetaLabel) -> Self {
-        let _ = label;
-        todo!("Phase 2: map each BetaLabel variant to its report variant")
+        match label {
+            BetaLabel::LinearConsistent => Self::LinearConsistent,
+            BetaLabel::SublinearConsistent => Self::SublinearConsistent,
+            BetaLabel::Unlabeled => Self::Unlabeled,
+        }
     }
 }

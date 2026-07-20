@@ -51,8 +51,32 @@ impl ClassifiedCellReport {
     /// Project one cell's stored classification. One input — the exact [`ClassifiedCell`] — so a cell's
     /// classification can never be paired with foreign evidence or a foreign descriptor.
     pub(crate) fn of(classified: &ClassifiedCell) -> Self {
-        let _ = classified;
-        todo!("Phase 2: map each ClassifiedCell branch, projecting its evidence, comparison, and gated response/beta")
+        // Mirror the stored classification variant-for-variant: the secondary descriptor projects only in
+        // the Increasing branch and the arm response only in the NonIncreasing branch, so the structural
+        // gate is preserved in the serialized result.
+        match classified {
+            ClassifiedCell::InvalidControl { evidence } => Self::InvalidControl {
+                evidence: CellEvidenceReport::of(evidence),
+            },
+            ClassifiedCell::NonIncreasing {
+                evidence,
+                response,
+                comparison,
+            } => Self::NonIncreasing {
+                evidence: CellEvidenceReport::of(evidence),
+                comparison: *comparison,
+                response: NonIncreasingResponseReport::of(*response),
+            },
+            ClassifiedCell::Increasing {
+                evidence,
+                comparison,
+                beta,
+            } => Self::Increasing {
+                evidence: CellEvidenceReport::of(evidence),
+                comparison: *comparison,
+                beta: SecondaryDescriptorReport::of(beta),
+            },
+        }
     }
 
     /// The complete per-cell primary evidence, present on *every* branch — mirroring

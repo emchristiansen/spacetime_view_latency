@@ -23,7 +23,9 @@ pub(crate) enum BasinSelectionReport {
 impl BasinSelectionReport {
     /// Project the analysis-domain selection. Takes the `Copy` [`BasinSelection`] by value — one input.
     pub(crate) fn of(selection: BasinSelection) -> Self {
-        let _ = selection;
-        todo!("Phase 2: map BasinSelection variants one-to-one")
+        match selection {
+            BasinSelection::Selected { basin_index } => Self::Selected { basin_index },
+            BasinSelection::NoFeasiblePositiveScale => Self::NoFeasiblePositiveScale,
+        }
     }
 }

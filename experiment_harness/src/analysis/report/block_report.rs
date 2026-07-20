@@ -24,7 +24,12 @@ pub(crate) struct BlockReport {
 impl BlockReport {
     /// Project one matched block's raw observations. One input — the trusted block — projected whole.
     pub(crate) fn of(block: &MatchedBlock) -> Self {
-        let _ = block;
-        todo!("Phase 2: project the collection-order key and both matched runs")
+        // The two runs stay distinct fields, mirroring the trusted block's structural arm/control
+        // distinction; the collection-order key is the exact sequence the temporal diagnostics join on.
+        Self {
+            collection_order_key: block.collection_order_key(),
+            arm: RunReport::of(block.arm()),
+            control: RunReport::of(block.control()),
+        }
     }
 }

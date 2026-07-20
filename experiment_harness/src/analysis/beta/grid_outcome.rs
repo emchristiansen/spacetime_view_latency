@@ -58,6 +58,14 @@ impl GridOutcome {
         }
     }
 
+    /// Every grid node's typed constrained-fit outcome, in a fixed [`GRID_NODES`]-length array — the
+    /// complete coarse-grid scan the report projects across the lossy boundary. A narrow read accessor
+    /// over the boxed array (the report renders every node's outcome, not only the located basins), so the
+    /// 79-node cardinality stays a property of the type.
+    pub(crate) fn nodes(&self) -> &[GridNodeOutcome; GRID_NODES] {
+        &self.nodes
+    }
+
     /// The 0-based indices of the located grid-local basins, strictly ascending.
     pub(crate) fn basin_node_indices(&self) -> &[usize] {
         &self.basin_node_indices

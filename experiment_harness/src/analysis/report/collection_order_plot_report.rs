@@ -30,7 +30,29 @@ impl CollectionOrderPlotReport {
     /// the 30 `T_block` totals and their aligned collection-order keys — so the plotted totals and their
     /// x-coordinates cannot come from different sources.
     pub(crate) fn of(evidence: &CellEvidence) -> Self {
-        let _ = evidence;
-        todo!("Phase 2: pair each block total with its collection-order key and project the delta band")
+        // The primary `T_block` series is the arm-minus-control paired difference (the same totals the arm
+        // interval is computed from), paired position-for-position with its aligned collection-order keys,
+        // so the plotted totals and their x-coordinates come from one source. The `±δ` band is the frozen
+        // margin's millisecond half-width.
+        let points: Vec<CollectionOrderPointReport> = evidence
+            .arm_minus_control_totals()
+            .iter()
+            .zip(evidence.collection_order_keys().iter())
+            .map(|(total, key)| {
+                CollectionOrderPointReport::new(*key, FiniteF64::new(total.to_f64() / 1_000_000.0))
+            })
+            .collect();
+        let points = points
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly N_BLOCKS block totals pair with exactly N_BLOCKS collection-order keys");
+        Self {
+            points,
+            delta_band_millis: FiniteF64::new(evidence.margin().to_millis_f64()),
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -38,7 +38,15 @@ pub(crate) struct DoseReport {
 impl DoseReport {
     /// Project one validated dose's raw evidence. One input — the trusted dose — projected whole.
     pub(crate) fn of(dose: &TrustedDose) -> Self {
-        let _ = dose;
-        todo!("Phase 2: project the dose identity, logical n, summary, raw latencies, cardinalities, and events")
+        // The fixed-shape integer-exact content types are reused directly (no lossy boundary); only the
+        // lossless raw vector gets its own fixed-cardinality report projection.
+        Self {
+            dose: dose.dose(),
+            logical_n: dose.logical_n(),
+            summary: *dose.summary(),
+            raw_latencies: RawLatenciesReport::of(dose.latencies()),
+            physical_cardinalities: *dose.cardinalities(),
+            events: *dose.events(),
+        }
     }
 }

@@ -22,8 +22,19 @@ impl RawLatenciesReport {
     /// Project one dose's lossless raw latency vector. One input — the trusted vector, itself a fixed
     /// [`BATCH_SIZE_USIZE`] array — so the projection's cardinality is proven by its source.
     pub(crate) fn of(latencies: &RawLatencies) -> Self {
-        let _ = latencies;
-        todo!("Phase 2: copy the BATCH_SIZE_USIZE exact nanosecond samples into the fixed array")
+        // Copy the exact integer nanoseconds heap-first into the fixed batch array; raw nanoseconds stay
+        // exact `u128`, crossing no lossy float boundary.
+        let samples: Vec<u128> = latencies
+            .samples()
+            .iter()
+            .map(|sample| sample.nanos())
+            .collect();
+        let samples = samples
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly BATCH_SIZE_USIZE samples project into exactly BATCH_SIZE_USIZE nanoseconds");
+        Self(samples)
     }
 }
 
@@ -37,3 +48,6 @@ impl Serialize for RawLatenciesReport {
         serializer.collect_seq(self.0.iter())
     }
 }
+
+#[cfg(test)]
+mod tests;

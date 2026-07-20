@@ -3,6 +3,7 @@
 use serde::Serialize;
 
 use crate::analysis::beta::grid_outcome::GridOutcome;
+use crate::analysis::report::grid_node_report::GridNodeReport;
 use crate::analysis::report::grid_nodes_report::GridNodesReport;
 
 /// The report projection of one block's [`GridOutcome`] (spec: "the 79-node grid outcome"): every node's
@@ -20,7 +21,22 @@ pub(crate) struct GridOutcomeReport {
 impl GridOutcomeReport {
     /// Project one block's coarse-grid scan outcome.
     pub(crate) fn of(grid: &GridOutcome) -> Self {
-        let _ = grid;
-        todo!("Phase 2: project each node outcome into the fixed node array and the located basin indices")
+        // Project every node outcome heap-first into the fixed 79-node array, mirroring the trusted
+        // graph's `Vec -> Box<[T]> -> Box<[T; N]>` construction so no large array materializes on the
+        // stack. The located-basin index list is genuinely data-dependent, so it stays a `Vec`.
+        let nodes: Vec<GridNodeReport> = grid
+            .nodes()
+            .iter()
+            .map(|&node| GridNodeReport::of(node))
+            .collect();
+        let nodes = nodes
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly GRID_NODES node outcomes project into exactly GRID_NODES node reports");
+        Self {
+            nodes: GridNodesReport::new(nodes),
+            basin_node_indices: grid.basin_node_indices().to_vec(),
+        }
     }
 }

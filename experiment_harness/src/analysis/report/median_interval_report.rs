@@ -21,7 +21,11 @@ pub(crate) struct MedianIntervalReport {
 impl MedianIntervalReport {
     /// Project an exact median interval. Takes the `Copy` [`MedianCi`] by value — one input.
     pub(crate) fn of(interval: MedianCi) -> Self {
-        let _ = interval;
-        todo!("Phase 2: render both order-statistic endpoints to finite millisecond FiniteF64")
+        // Both endpoints are exact rational nanoseconds; render them in milliseconds for display only,
+        // mirroring `EquivalenceMargin::to_millis_f64`. The exact rationals stay in the analysis domain.
+        Self {
+            lo_millis: FiniteF64::new(interval.lo().to_f64() / 1_000_000.0),
+            hi_millis: FiniteF64::new(interval.hi().to_f64() / 1_000_000.0),
+        }
     }
 }

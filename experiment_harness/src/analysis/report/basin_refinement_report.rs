@@ -20,7 +20,9 @@ pub(crate) struct BasinRefinementReport {
 impl BasinRefinementReport {
     /// Project one located basin's refined outcome.
     pub(crate) fn of(refinement: &BasinRefinement) -> Self {
-        let _ = refinement;
-        todo!("Phase 2: project termination telemetry and the refined candidate")
+        Self {
+            termination: BasinTerminationReport::of(refinement.termination()),
+            candidate: BetaCandidateReport::of(refinement.candidate()),
+        }
     }
 }

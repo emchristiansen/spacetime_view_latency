@@ -23,7 +23,10 @@ impl NonIncreasingResponseReport {
     /// Project the analysis-domain response. Takes the `Copy` [`NonIncreasingResponse`] by value — one
     /// input.
     pub(crate) fn of(response: NonIncreasingResponse) -> Self {
-        let _ = response;
-        todo!("Phase 2: map each NonIncreasingResponse variant to its report variant")
+        match response {
+            NonIncreasingResponse::FlatEquivalent => Self::FlatEquivalent,
+            NonIncreasingResponse::Decreasing => Self::Decreasing,
+            NonIncreasingResponse::Inconclusive => Self::Inconclusive,
+        }
     }
 }

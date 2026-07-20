@@ -31,7 +31,19 @@ impl RunReport {
     /// coordinate, manifest sequence, provenance, and doses do not depend on it), so one projection serves
     /// both the arm and control runs. One input — the trusted run — projected whole.
     pub(crate) fn of<R>(run: &TrustedRun<R>) -> Self {
-        let _ = run;
-        todo!("Phase 2: project the coordinate, manifest sequence, run-varying provenance, and ten doses")
+        // Project the ten doses heap-first into the fixed ladder array; the coordinate reuses the domain
+        // type directly and the provenance projects the run-varying facts.
+        let doses: Vec<DoseReport> = run.doses().iter().map(DoseReport::of).collect();
+        let doses = doses
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly NUM_DOSES_USIZE doses project into exactly NUM_DOSES_USIZE dose reports");
+        Self {
+            coordinate: run.coordinate().clone(),
+            manifest_seq: run.manifest_seq(),
+            provenance: RunProvenanceReport::of(run.provenance()),
+            doses,
+        }
     }
 }

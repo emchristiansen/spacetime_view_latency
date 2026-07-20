@@ -22,7 +22,9 @@ pub(crate) enum GridNodeReport {
 impl GridNodeReport {
     /// Project one grid node's outcome. Takes the `Copy` [`GridNodeOutcome`] by value — one input.
     pub(crate) fn of(outcome: GridNodeOutcome) -> Self {
-        let _ = outcome;
-        todo!("Phase 2: project a feasible node's RSS through FiniteF64, else NoPositiveScale")
+        match outcome.feasible_rss() {
+            Some(rss) => Self::Feasible { rss },
+            None => Self::NoPositiveScale,
+        }
     }
 }

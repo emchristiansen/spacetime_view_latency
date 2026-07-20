@@ -35,7 +35,17 @@ pub(crate) enum BlockFitReport {
 impl BlockFitReport {
     /// Project one block's authoritative fit outcome. Takes the `Copy` [`BlockFit`] by value — one input.
     pub(crate) fn of(fit: BlockFit) -> Self {
-        let _ = fit;
-        todo!("Phase 2: map each BlockFit variant, projecting its retained candidate where present")
+        match fit {
+            BlockFit::Identifiable(candidate) => Self::Identifiable {
+                candidate: BetaCandidateReport::of(candidate),
+            },
+            BlockFit::PinnedAtBound(candidate) => Self::PinnedAtBound {
+                candidate: BetaCandidateReport::of(candidate),
+            },
+            BlockFit::FlatObjective(candidate) => Self::FlatObjective {
+                candidate: BetaCandidateReport::of(candidate),
+            },
+            BlockFit::NonPositiveScale => Self::NonPositiveScale,
+        }
     }
 }

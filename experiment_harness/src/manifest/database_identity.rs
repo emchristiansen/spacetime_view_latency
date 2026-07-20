@@ -31,6 +31,12 @@ impl DatabaseIdentity {
         &self.0
     }
 
+    /// The canonical lowercase hex identity. The single owner of this type's canonical-hex rendering, so
+    /// the report's `String` projection and the [`Serialize`] impl share one format and cannot drift.
+    pub(crate) fn canonical_hex(&self) -> String {
+        self.0.to_hex().to_string()
+    }
+
     /// The exhaustive typed reason `hex` is not canonical, or `None` if it is. Delegates the shape rule
     /// to the shared [`CanonicalHexShapeError::check`] and translates its failure into the
     /// identity-specific typed error, so the algorithm is single-sourced; it does not decode.
@@ -57,7 +63,7 @@ impl DatabaseIdentity {
 impl Serialize for DatabaseIdentity {
     /// Serialized as the canonical lowercase hex identity.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0.to_hex().to_string())
+        serializer.serialize_str(&self.canonical_hex())
     }
 }
 

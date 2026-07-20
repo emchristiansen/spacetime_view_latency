@@ -24,7 +24,16 @@ pub(crate) struct BlockConvergenceReport {
 impl BlockConvergenceReport {
     /// Project one block's complete convergence record.
     pub(crate) fn of(convergence: &BlockConvergence) -> Self {
-        let _ = convergence;
-        todo!("Phase 2: project the grid outcome, every refined basin, and the selection")
+        // The refined-basin list is positionally aligned with the grid's located-basin indices and is a
+        // data-dependent count, so it stays a `Vec`.
+        Self {
+            grid: GridOutcomeReport::of(convergence.grid()),
+            refined_basins: convergence
+                .refined_basins()
+                .iter()
+                .map(BasinRefinementReport::of)
+                .collect(),
+            selection: BasinSelectionReport::of(convergence.selection()),
+        }
     }
 }

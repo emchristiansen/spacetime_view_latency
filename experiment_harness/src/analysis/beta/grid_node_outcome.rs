@@ -41,4 +41,15 @@ impl GridNodeOutcome {
     pub(crate) fn is_feasible(self) -> bool {
         matches!(self, Self::Feasible { .. })
     }
+
+    /// This node's finite, nonnegative residual sum of squares when it admitted a constrained fit, or
+    /// `None` when no constrained fit with strictly positive finite scale exists. A narrow read accessor
+    /// so the report projects a feasible node's already-[`FiniteF64`] RSS without matching the private
+    /// variant, keeping the infeasible case a typed `None` rather than a sentinel.
+    pub(crate) fn feasible_rss(self) -> Option<FiniteF64> {
+        match self {
+            Self::Feasible { rss } => Some(rss),
+            Self::NoPositiveScale => None,
+        }
+    }
 }

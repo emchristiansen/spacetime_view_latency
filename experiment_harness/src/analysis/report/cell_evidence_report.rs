@@ -43,8 +43,38 @@ impl CellEvidenceReport {
     /// Project one cell's complete primary evidence. One input — the exact evidence — projected in one
     /// place across the lossy millisecond boundary.
     pub(crate) fn of(evidence: &CellEvidence) -> Self {
-        let _ = evidence;
-        todo!("Phase 2: project identity, margin, both intervals, and the two 30-block total arrays to millis")
+        // The exact rational totals, margin, and intervals cross the lossy boundary to finite millisecond
+        // values in this one place; the schedule-proven collection-order keys stay exact integers. Each
+        // 30-block array is projected heap-first, mirroring the trusted graph's boxed fixed arrays.
+        let arm_totals: Vec<FiniteF64> = evidence
+            .arm_minus_control_totals()
+            .iter()
+            .map(|total| FiniteF64::new(total.to_f64() / 1_000_000.0))
+            .collect();
+        let arm_minus_control_totals_millis = arm_totals
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly N_BLOCKS arm-minus-control totals project into exactly N_BLOCKS millis values");
+        let control_totals: Vec<FiniteF64> = evidence
+            .control_totals()
+            .iter()
+            .map(|total| FiniteF64::new(total.to_f64() / 1_000_000.0))
+            .collect();
+        let control_totals_millis = control_totals
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly N_BLOCKS control totals project into exactly N_BLOCKS millis values");
+        Self {
+            identity: CellIdentityReport::of(evidence.cell()),
+            margin_millis: FiniteF64::new(evidence.margin().to_millis_f64()),
+            arm_interval: MedianIntervalReport::of(evidence.arm_interval()),
+            control_interval: MedianIntervalReport::of(evidence.control_interval()),
+            arm_minus_control_totals_millis,
+            control_totals_millis,
+            collection_order_keys: *evidence.collection_order_keys(),
+        }
     }
 
     /// The typed identity of the cell this evidence classifies. A narrow read accessor so the escalation

@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::analysis::beta::beta_descriptor::BetaDescriptor;
 use crate::analysis::report::block_report::BlockReport;
 use crate::analysis::report::classified_cell_report::ClassifiedCellReport;
 use crate::analysis::report::temporal_diagnostics_report::TemporalDiagnosticsReport;
@@ -50,8 +51,25 @@ impl CellReport {
     /// from the derived primary evidence, so a cell's classification, raw evidence, and diagnostics all
     /// share one source.
     pub(crate) fn of(dataset: &CellDataset) -> Self {
-        let _ = dataset;
-        todo!("Phase 2: BetaDescriptor::project(dataset) once; project the returned ClassifiedCell, the 30 raw blocks, and diagnostics")
+        // Exactly one call to the crate's sole authoritative classification producer, whose single result
+        // then feeds BOTH the stored classification and the diagnostics — `classify_cell` is never called
+        // separately. `project` computes the primary result and invokes its module-private β fit only in the
+        // Increasing arm, so β never runs for a non-Increasing cell and no outer classification flow is
+        // duplicated. The returned `ClassifiedCell`'s primary evidence sources the temporal diagnostics, and
+        // the raw blocks come from the same dataset — one source for classification, raw evidence, and
+        // diagnostics. The 30 blocks project heap-first, mirroring the trusted graph's boxed fixed arrays.
+        let classified = BetaDescriptor::project(dataset);
+        let observations: Vec<BlockReport> = dataset.blocks().iter().map(BlockReport::of).collect();
+        let observations = observations
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly N_BLOCKS matched blocks project into exactly N_BLOCKS block reports");
+        Self {
+            classification: ClassifiedCellReport::of(&classified),
+            observations,
+            diagnostics: TemporalDiagnosticsReport::of(classified.evidence()),
+        }
     }
 
     /// This cell's stored classification — the typed outcome the stock-to-patch escalation gate inspects

@@ -57,12 +57,18 @@ impl WasmSha256 {
     pub(crate) fn bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Canonical lowercase 64-character hex. The single owner of this type's canonical-hex rendering, so
+    /// the report's `String` projection and the [`Serialize`] impl share one format and cannot drift.
+    pub(crate) fn canonical_hex(&self) -> String {
+        hex::encode(self.0)
+    }
 }
 
 impl Serialize for WasmSha256 {
     /// Serialized as canonical lowercase 64-character hex.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&hex::encode(self.0))
+        serializer.serialize_str(&self.canonical_hex())
     }
 }
 

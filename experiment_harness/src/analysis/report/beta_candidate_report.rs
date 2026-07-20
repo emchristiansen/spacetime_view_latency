@@ -26,7 +26,13 @@ impl BetaCandidateReport {
     /// Project one exact candidate into its finite report shape. Takes the `Copy` [`BetaCandidate`] by
     /// value — one input.
     pub(crate) fn of(candidate: BetaCandidate) -> Self {
-        let _ = candidate;
-        todo!("Phase 2: project β/a/b/RSS through FiniteF64::new (source proved each finite)")
+        // The source candidate already proved every component finite at its mint boundary, so each
+        // `FiniteF64::new` assertion can never fire here.
+        Self {
+            beta: FiniteF64::new(candidate.beta()),
+            a: FiniteF64::new(candidate.a()),
+            b: FiniteF64::new(candidate.b()),
+            rss: FiniteF64::new(candidate.rss()),
+        }
     }
 }

@@ -45,7 +45,24 @@ impl CampaignReport {
     /// Project a validated campaign into its authoritative report. The sole report projection and the only
     /// public constructor; every nested projection is derived from this one `&ValidatedCampaign`.
     pub(crate) fn of(campaign: &ValidatedCampaign) -> Self {
-        let _ = campaign;
-        todo!("Phase 2: project environment, primary-estimator protocol, nine cell reports, citations, observability, escalation")
+        // Every nested projection derives from this one `&ValidatedCampaign`. The nine cell reports project
+        // the campaign's own datasets heap-first into the fixed array (mirroring the trusted graph's boxed
+        // cells); the escalation assessment then reads exactly those same nine reports, so the gate can
+        // never inspect a foreign campaign's cells.
+        let cells: Vec<CellReport> = campaign.cells().iter().map(CellReport::of).collect();
+        let cells: Box<[CellReport; CELL_COUNT]> = cells
+            .into_boxed_slice()
+            .try_into()
+            .ok()
+            .expect("exactly CELL_COUNT datasets project into exactly CELL_COUNT cell reports");
+        let escalation = EscalationAssessmentReport::of(&cells);
+        Self {
+            environment: EnvironmentReport::of(campaign),
+            primary_estimator: EstimatorConvergenceReport::preregistered(),
+            cells,
+            source_claims: SourceClaimsReport::all(),
+            stock_observability: StockObservabilityReport::all(),
+            escalation,
+        }
     }
 }

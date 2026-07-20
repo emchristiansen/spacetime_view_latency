@@ -37,4 +37,35 @@ impl PreregisteredParameters {
             confirmed_reads: CONFIRMED_READS,
         }
     }
+
+    /// Rows written per dose batch.
+    pub(crate) fn batch_size(&self) -> u64 {
+        self.batch_size
+    }
+
+    /// Number of cumulative doses.
+    pub(crate) fn num_doses(&self) -> u64 {
+        self.num_doses
+    }
+
+    /// The cumulative `dose * batch_size` logical-row ladder — exactly [`num_doses`](Self::num_doses)
+    /// entries by construction.
+    pub(crate) fn dose_ladder(&self) -> &[u64] {
+        &self.dose_ladder
+    }
+
+    /// Milliseconds between dose batches, outside the measured confirmed round trip.
+    pub(crate) fn batch_delay_ms(&self) -> u64 {
+        self.batch_delay_ms
+    }
+
+    /// Complete randomized repetition blocks per arm/regime cell.
+    pub(crate) fn repetition_blocks(&self) -> u32 {
+        self.repetition_blocks
+    }
+
+    /// Whether confirmed reads are enabled for every primary comparison.
+    pub(crate) fn confirmed_reads(&self) -> bool {
+        self.confirmed_reads
+    }
 }

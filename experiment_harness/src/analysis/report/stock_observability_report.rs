@@ -21,6 +21,14 @@ impl StockObservabilityReport {
     /// [`StockObservabilityLimit::ALL`](super::stock_observability_limit::StockObservabilityLimit::ALL)
     /// identities. Takes no input: the limits are protocol constants.
     pub(crate) fn all() -> Self {
-        todo!("Phase 2: project StockObservabilityLimit::ALL into the stated limit set")
+        // The closed `ALL` set is the exact stated limit set; box it into the fixed array so the stated
+        // cardinality stays a property of the type. The set is tiny (two protocol constants), so a direct
+        // `Box::new` of the `Copy` array is faithful with no heap-first staging.
+        Self {
+            limits: Box::new(StockObservabilityLimit::ALL),
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

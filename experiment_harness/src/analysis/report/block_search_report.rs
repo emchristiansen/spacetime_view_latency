@@ -22,7 +22,9 @@ pub(crate) struct BlockSearchReport {
 impl BlockSearchReport {
     /// Project one block's complete search outcome.
     pub(crate) fn of(outcome: &BlockSearchOutcome) -> Self {
-        let _ = outcome;
-        todo!("Phase 2: project the authoritative fit and its convergence record")
+        Self {
+            fit: BlockFitReport::of(outcome.fit()),
+            convergence: BlockConvergenceReport::of(outcome.convergence()),
+        }
     }
 }

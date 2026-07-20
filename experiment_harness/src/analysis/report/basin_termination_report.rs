@@ -31,7 +31,16 @@ pub(crate) struct BasinTerminationReport {
 impl BasinTerminationReport {
     /// Project one basin's termination telemetry into its finite report shape.
     pub(crate) fn of(termination: &BasinTermination) -> Self {
-        let _ = termination;
-        todo!("Phase 2: project brackets through FiniteF64, iterations, and the stop cause")
+        // Every bracket endpoint is finite by construction in the source (the brackets live within
+        // `[0.1, 4.0]`), so each `FiniteF64::new` assertion can never fire here.
+        Self {
+            grid_node_index: termination.grid_node_index(),
+            initial_bracket_lo: FiniteF64::new(termination.initial_bracket_lo()),
+            initial_bracket_hi: FiniteF64::new(termination.initial_bracket_hi()),
+            final_bracket_lo: FiniteF64::new(termination.final_bracket_lo()),
+            final_bracket_hi: FiniteF64::new(termination.final_bracket_hi()),
+            iterations: termination.iterations(),
+            stop: GoldenStopReport::of(termination.stop()),
+        }
     }
 }
