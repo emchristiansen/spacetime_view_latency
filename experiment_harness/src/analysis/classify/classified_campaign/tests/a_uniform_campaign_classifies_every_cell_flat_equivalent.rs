@@ -6,14 +6,16 @@
 //! direct control's response are therefore flat: each block's Theil–Sen slope is zero, so every arm and
 //! control total change is zero and both exact 30-block intervals are the degenerate `[0, 0]`. The
 //! frozen margin is `δ = median(500 ns) / 5 = 100 ns`, so `[0, 0]` lies within `[-δ, +δ]`: every cell's
-//! control is valid and every arm response is Flat-equivalent. The prediction comparison then falls out
-//! of each cell's preregistered prediction — Confirmed for the Flat-predicting key-scoped-unrelated
-//! arms, Contradicted for the Increasing-predicting table-scoped and own-slice arms.
+//! control is valid and every arm response is Flat-equivalent. Every cell therefore projects to
+//! [`ClassifiedCell::NonIncreasing`] with a Flat-equivalent response — so the secondary β descriptor is
+//! never fit (the `Increasing` arm is unreachable here and asserts so). The prediction comparison then
+//! falls out of each cell's preregistered prediction — Confirmed for the Flat-predicting
+//! key-scoped-unrelated arms, Contradicted for the Increasing-predicting table-scoped and own-slice arms.
 
-use crate::analysis::classify::cell_classification::CellClassification;
 use crate::analysis::classify::classified_campaign::ClassifiedCampaign;
+use crate::analysis::classify::classified_cell::ClassifiedCell;
+use crate::analysis::classify::non_increasing_response::NonIncreasingResponse;
 use crate::analysis::classify::prediction_comparison::PredictionComparison;
-use crate::analysis::classify::response_class::ResponseClass;
 use crate::analysis::validate::validated_campaign::tests::campaign_builder::CampaignFixture;
 use crate::analysis::validate::validated_campaign::ValidatedCampaign;
 use crate::plan::cell::Cell;
@@ -35,7 +37,7 @@ fn a_uniform_campaign_classifies_every_cell_flat_equivalent() {
     for (index, classification) in classified.cells().iter().enumerate() {
         let cell = all_cells[index];
         match classification {
-            CellClassification::Valid {
+            ClassifiedCell::NonIncreasing {
                 evidence,
                 response,
                 comparison,
@@ -47,7 +49,7 @@ fn a_uniform_campaign_classifies_every_cell_flat_equivalent() {
                 );
                 assert_eq!(
                     *response,
-                    ResponseClass::FlatEquivalent,
+                    NonIncreasingResponse::FlatEquivalent,
                     "a flat arm response is Flat-equivalent within the frozen band"
                 );
                 // The observed response is Flat-equivalent for every cell, so a Flat prediction is
@@ -61,7 +63,11 @@ fn a_uniform_campaign_classifies_every_cell_flat_equivalent() {
                     "the flat observation is compared against the cell's preregistered prediction"
                 );
             }
-            CellClassification::InvalidControl { .. } => panic!(
+            ClassifiedCell::Increasing { .. } => panic!(
+                "the uniform arm response is flat, never Increasing, so the secondary β descriptor must \
+                 never be fit for this fixture"
+            ),
+            ClassifiedCell::InvalidControl { .. } => panic!(
                 "the uniform control response is flat and within the band, so every cell is valid"
             ),
         }

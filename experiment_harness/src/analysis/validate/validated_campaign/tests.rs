@@ -6,6 +6,10 @@
 // graph-level tests can reuse this validation-owned fixture without duplicating the complete-campaign
 // record builder. The category-proof submodules below stay private.
 pub(crate) mod campaign_builder;
+// `pub(crate)` for the same reason as `campaign_builder`: the secondary β descriptor's dataset-driven
+// projection gate proofs reuse this validation-owned single-`CellDataset` fixture without duplicating the
+// trusted-graph mint path.
+pub(crate) mod cell_dataset_fixture;
 mod staged_ladder;
 
 mod a_complete_valid_campaign_folds;

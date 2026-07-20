@@ -15,15 +15,27 @@
 //! - [`cell_evidence`] — the fixed-cardinality per-cell evidence: all 30 arm-minus-control and all 30
 //!   direct-control total changes, their schedule-proven collection-order keys, the frozen margin, and
 //!   both exact intervals. Retained identically for valid and invalid cells.
-//! - [`cell_classification`] — the sum type whose valid branch alone exposes the arm response and
-//!   prediction comparison; the `InvalidControl` branch carries the same evidence but no arm claim.
-//! - [`classified_campaign`] — the nine per-cell classifications of a validated campaign.
+//! - [`cell_classification`] — the exact-primary sum type whose valid branch alone exposes the arm
+//!   response and prediction comparison; the `InvalidControl` branch carries the same evidence but no arm
+//!   claim.
+//! - [`classify_cell`] — the primary aggregation of one [`CellDataset`](crate::analysis::validate::cell_dataset::CellDataset)
+//!   into its gated [`cell_classification`]; taking only the dataset binds each classification to its own
+//!   cell, so the gated projection cannot pair a foreign dataset with a cell's primary result.
+//! - [`non_increasing_response`] — the arm response taxonomy for a control-valid non-Increasing cell
+//!   (Flat-equivalent/Decreasing/Inconclusive), with no Increasing variant.
+//! - [`classified_cell`] — the stored per-cell result projected from [`cell_classification`], whose
+//!   Increasing branch carries a mandatory secondary descriptor. The projection that mints it, and the
+//!   gated β fit, live in `analysis::beta`.
+//! - [`classified_campaign`] — the nine per-cell stored classifications of a validated campaign.
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
 pub(crate) mod cell_classification;
 pub(crate) mod cell_evidence;
 pub(crate) mod classified_campaign;
+pub(crate) mod classify_cell;
+pub(crate) mod classified_cell;
 pub(crate) mod equivalence_margin;
+pub(crate) mod non_increasing_response;
 pub(crate) mod prediction_comparison;
 pub(crate) mod response_class;
