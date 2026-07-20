@@ -52,6 +52,18 @@ impl CollectionOrderPlotReport {
             delta_band_millis: FiniteF64::new(evidence.margin().to_millis_f64()),
         }
     }
+
+    /// The 30 plotted points, in schedule-proven collection order. Read by the sibling SVG renderer so the
+    /// rendered polyline and the serialized plot data are two views of one projected series.
+    pub(crate) fn points(&self) -> &[CollectionOrderPointReport; N_BLOCKS] {
+        &self.points
+    }
+
+    /// The frozen `±δ` equivalence band half-width in milliseconds. Read by the sibling SVG renderer so the
+    /// shaded band and the y-domain it must span come from the same projected value the plot serializes.
+    pub(crate) fn delta_band_millis(&self) -> FiniteF64 {
+        self.delta_band_millis
+    }
 }
 
 #[cfg(test)]

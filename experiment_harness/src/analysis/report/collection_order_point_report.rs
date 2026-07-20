@@ -27,4 +27,16 @@ impl CollectionOrderPointReport {
             block_total_millis,
         }
     }
+
+    /// The block's schedule-proven collection-order key — the plot x-coordinate. Read by the sibling SVG
+    /// renderer so the rendered polyline plots against the same actual keys this point serializes.
+    pub(crate) fn collection_order_key(&self) -> RecordSeq {
+        self.collection_order_key
+    }
+
+    /// The block's primary `T_block` total change in milliseconds — the plot y-coordinate. Read by the
+    /// sibling SVG renderer so the rendered polyline and the serialized point share one projected value.
+    pub(crate) fn block_total_millis(&self) -> FiniteF64 {
+        self.block_total_millis
+    }
 }
