@@ -21,12 +21,20 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod basin_refinement;
+pub(crate) mod basin_selection;
+pub(crate) mod basin_termination;
 pub(crate) mod beta_candidate;
 pub(crate) mod beta_descriptor;
 pub(crate) mod beta_label;
 pub(crate) mod beta_population;
+pub(crate) mod block_convergence;
 pub(crate) mod block_fit;
 pub(crate) mod block_point;
+pub(crate) mod block_search_outcome;
 pub(crate) mod constrained_fit;
 pub(crate) mod fit_block;
+pub(crate) mod golden_stop;
+pub(crate) mod grid_node_outcome;
+pub(crate) mod grid_outcome;
 pub(crate) mod non_identifiable_reason;

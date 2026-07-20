@@ -14,11 +14,20 @@ pub(super) const BETA_MIN: f64 = 0.1;
 /// as [`BETA_MIN`].
 pub(super) const BETA_MAX: f64 = 4.0;
 /// The number of inclusive uniform grid nodes over `[0.1, 4.0]` spaced by `0.05` (`(4.0 − 0.1)/0.05 + 1`).
-const GRID_NODES: usize = 79;
+/// `pub(crate)` so both the telemetry types ([`GridOutcome`](super::grid_outcome::GridOutcome)) and the
+/// report's fixed-cardinality node array
+/// ([`GridNodesReport`](crate::analysis::report::grid_nodes_report::GridNodesReport)) size their fixed node
+/// arrays from this single frozen source rather than re-typing the `79` literal — the search, its
+/// convergence record, and its report projection cannot drift.
+pub(crate) const GRID_NODES: usize = 79;
 /// The golden-section bracket-width stopping threshold: refine until the bracket is at most this wide.
-const GOLDEN_BRACKET_TOL: f64 = 1e-4;
-/// The golden-section iteration cap (spec: "or 100 iterations have executed").
-const GOLDEN_MAX_ITERS: usize = 100;
+/// `pub(super)` so the convergence telemetry ([`BasinTermination`](super::basin_termination::BasinTermination))
+/// asserts its recorded `BracketWidthReached`/final-bracket width against this single frozen source
+/// rather than a re-typed literal — the search and its record cannot drift.
+pub(super) const GOLDEN_BRACKET_TOL: f64 = 1e-4;
+/// The golden-section iteration cap (spec: "or 100 iterations have executed"). `pub(super)` for the same
+/// single-source reason as [`GOLDEN_BRACKET_TOL`]: the telemetry bounds its iteration count by this const.
+pub(super) const GOLDEN_MAX_ITERS: usize = 100;
 /// The relative RSS comparison tolerance: two residual sums tie within `RSS_REL_TOL · max(r1, r2, 1)`.
 const RSS_REL_TOL: f64 = 1e-9;
 /// The interior identifiability probe offset: an interior estimate must beat both `β ± PROBE_DELTA`.

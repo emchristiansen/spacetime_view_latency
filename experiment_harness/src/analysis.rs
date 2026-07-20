@@ -20,8 +20,11 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod analyze;
 pub(crate) mod beta;
 pub(crate) mod classify;
+pub(crate) mod finite_f64;
 pub(crate) mod ingest;
+pub(crate) mod report;
 pub(crate) mod stats;
 pub(crate) mod validate;

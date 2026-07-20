@@ -16,6 +16,7 @@ use crate::analysis::ingest::table_scoped_arm_dto::TableScopedArmDto;
 use crate::analysis::ingest::wire_record_dto::WireRecordDto;
 use crate::analysis::validate::arm_run::ArmRun;
 use crate::analysis::validate::block_census_fault::BlockCensusFault;
+use crate::analysis::validate::campaign_provenance::CampaignProvenance;
 use crate::analysis::validate::cell_census_fault::CellCensusFault;
 use crate::analysis::validate::cell_dataset::CellDataset;
 use crate::analysis::validate::control_run::ControlRun;
@@ -70,7 +71,11 @@ use crate::plan::table_scoped_arm::TableScopedArm;
 /// validation pass owns that agreement instead: [`Self::from_records`] censuses the manifests against
 /// `Cell::all()` and asserts `CELL_COUNT == Cell::all().len()` before minting any cell, surfacing any
 /// drift as a typed [`IntegrityError`]. Drift is caught by validation, not by the type.
-const CELL_COUNT: usize = 9;
+///
+/// `pub(crate)` so the report layer's fixed-cardinality cell array
+/// ([`CampaignReport`](crate::analysis::report::campaign_report::CampaignReport)) sizes itself from this
+/// single frozen source rather than re-typing the `9` literal.
+pub(crate) const CELL_COUNT: usize = 9;
 
 /// The two run roles per cell block (arm and its matched control).
 const ROLE_COUNT: usize = 2;
@@ -256,6 +261,32 @@ impl ValidatedCampaign {
     /// [`CellClassification`](crate::analysis::classify::cell_classification::CellClassification).
     pub(crate) fn cells(&self) -> &[CellDataset; CELL_COUNT] {
         &self.cells
+    }
+
+    /// The one campaign-stable schedule seed, proven homogeneous across every run — a campaign-owned fact
+    /// the report projects once at the root (spec: campaign provenance "includes schedule seed").
+    pub(crate) fn schedule_seed(&self) -> ScheduleSeed {
+        self.schedule_seed
+    }
+
+    /// The preregistered parameters, proven identical to the frozen values across every run — a
+    /// campaign-owned fact the report projects once at the root (spec: campaign provenance "includes ...
+    /// preregistered parameters").
+    pub(crate) fn parameters(&self) -> &PreregisteredParameters {
+        &self.parameters
+    }
+
+    /// The campaign-homogeneous distribution/module provenance proven identical across every run's
+    /// manifest — the report's environment section (spec: "`ValidatedCampaign` owns the
+    /// campaign-homogeneous distribution/module facts").
+    ///
+    /// Phase-1 additive accessor: it is a `todo!()` signature with no backing field yet, because a
+    /// non-optional [`CampaignProvenance`] field would force [`Self::from_records`]/[`Self::new`] to mint
+    /// one (whose [`CampaignProvenance::mint`] is itself `todo!()`), which would change the existing
+    /// validation behavior and panic every existing construction. Phase 2 adds the backing field and the
+    /// real mint together, once the projection is implemented.
+    pub(crate) fn provenance(&self) -> &CampaignProvenance {
+        todo!("Phase 2: store and return the campaign-homogeneous provenance minted during validation")
     }
 }
 

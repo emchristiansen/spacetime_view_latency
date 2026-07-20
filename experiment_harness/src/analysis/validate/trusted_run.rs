@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use crate::analysis::validate::integrity_error::IntegrityError;
 use crate::analysis::validate::run_kind::RunKind;
+use crate::analysis::validate::run_provenance::RunProvenance;
 use crate::analysis::validate::trusted_dose::TrustedDose;
 use crate::manifest::run_coordinate::RunCoordinate;
 use crate::observation::record_seq::RecordSeq;
@@ -78,20 +79,29 @@ impl<R> TrustedRun<R> {
         self.manifest_seq
     }
 
+    /// This run's schedule coordinate (cell, role, repetition block) — the typed run identity the report
+    /// embeds for each arm/control run. A real accessor over the stored coordinate field (not a Phase-2
+    /// `todo!()`), promoted to `pub(crate)` alongside the run's other read accessors.
+    pub(crate) fn coordinate(&self) -> &RunCoordinate {
+        &self.coordinate
+    }
+
     /// The run's complete monotonic dose ladder, doses `1..=NUM_DOSES` in canonical order — the per-dose
     /// responses the classifier regresses to form this run's per-block total change.
     pub(crate) fn doses(&self) -> &[TrustedDose; NUM_DOSES_USIZE] {
         &self.doses
     }
-}
 
-/// Test-only read accessors for asserting the minted graph shape. `#[cfg(test)]` so they never widen
-/// the production API — and role-agnostic (`impl<R>`, no [`RunKind`] bound) since reading the coordinate
-/// does not depend on the role marker.
-#[cfg(test)]
-impl<R> TrustedRun<R> {
-    /// The run's schedule coordinate.
-    pub(super) fn coordinate(&self) -> &RunCoordinate {
-        &self.coordinate
+    /// This run's run-varying server/module provenance (database identity, PID, listen/client addresses,
+    /// data/keys directories) — the report's per-run provenance section (spec: "Each `TrustedRun` owns its
+    /// run-varying database identity and server facts").
+    ///
+    /// Phase-1 additive accessor: a `todo!()` signature with no backing field yet, because a non-optional
+    /// [`RunProvenance`] field would force [`Self::mint`] to mint one (whose [`RunProvenance::mint`] is
+    /// itself `todo!()`), changing the existing validation behavior and panicking every existing run
+    /// construction. Phase 2 adds the backing field and the real mint together.
+    pub(crate) fn provenance(&self) -> &RunProvenance {
+        todo!("Phase 2: store and return the run-varying provenance minted during validation")
     }
 }
+

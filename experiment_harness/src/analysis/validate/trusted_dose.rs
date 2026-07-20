@@ -73,10 +73,35 @@ impl TrustedDose {
         self.summary.median_nanos()
     }
 
-    /// Test-only read of the 1-based ladder index, for asserting the minted graph's canonical dose
-    /// order. `#[cfg(test)]` so it never widens the production API.
-    #[cfg(test)]
-    pub(super) fn dose(&self) -> DoseIndex {
+    /// The 1-based ladder index of this dose. Promoted to `pub(crate)` so the report can embed each dose's
+    /// typed coordinate identity alongside its raw evidence (spec: "Each dose report also retains its typed
+    /// coordinate/identity").
+    pub(crate) fn dose(&self) -> DoseIndex {
         self.dose
+    }
+
+    /// The lossless raw latency vector of this dose — embedded verbatim in the authoritative report (spec:
+    /// "embed every raw latency vector in the authoritative JSON"), so exact nanoseconds cross no lossy
+    /// boundary.
+    pub(crate) fn latencies(&self) -> &RawLatencies {
+        &self.latencies
+    }
+
+    /// The validated median/IQR summary of this dose — the exact R-1 recomputation of [`Self::latencies`],
+    /// projected into the report's per-dose evidence (spec: "its ... validated median and IQR").
+    pub(crate) fn summary(&self) -> &LatencySummary {
+        &self.summary
+    }
+
+    /// Both physical table cardinalities of this dose, proven equal to the deterministic dataset
+    /// expectation — the report's per-dose physical evidence (spec: "physical cardinalities").
+    pub(crate) fn cardinalities(&self) -> &PhysicalCardinalities {
+        &self.cardinalities
+    }
+
+    /// The SDK logical event evidence of this dose (insert/delete/update counts and net delta) — the
+    /// report's per-dose event evidence (spec: "event evidence").
+    pub(crate) fn events(&self) -> &EventEvidence {
+        &self.events
     }
 }

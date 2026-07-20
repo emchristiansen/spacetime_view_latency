@@ -4,6 +4,7 @@
 use crate::analysis::beta::beta_population::BetaPopulation;
 use crate::analysis::beta::block_fit::BlockFit;
 use crate::analysis::beta::block_point::BlockPoint;
+use crate::analysis::beta::block_search_outcome::BlockSearchOutcome;
 use crate::analysis::beta::fit_block::fit_block;
 use crate::analysis::classify::cell_classification::CellClassification;
 use crate::analysis::classify::classified_cell::ClassifiedCell;
@@ -134,6 +135,29 @@ impl BetaDescriptor {
     /// The 30 per-block exponent-fit outcomes, in schedule-proven collection order.
     pub(crate) fn blocks(&self) -> &[BlockFit; N_BLOCKS] {
         &self.blocks
+    }
+
+    /// The 30 per-block *search* outcomes — each block's authoritative [`BlockFit`] bound to the complete
+    /// [`BlockConvergence`](super::block_convergence::BlockConvergence) record of the search that produced
+    /// it — in schedule-proven collection order. The report projects these into its typed all-basin
+    /// convergence section (spec: "retain a typed per-block search summary ... Do not report only the
+    /// winning basin").
+    ///
+    /// Phase-1 additive accessor: a `todo!()` signature with no backing field yet. The intended Phase-2
+    /// migration stores `[BlockSearchOutcome; 30]` as the *sole* per-block field (each outcome carrying
+    /// its authoritative [`BlockFit`] bound to its [`BlockConvergence`](super::block_convergence::BlockConvergence)
+    /// by [`BlockSearchOutcome::mint`], so a fit can never be paired with a different block's convergence).
+    /// [`Self::blocks`] then cannot keep returning `&[BlockFit; 30]` — that borrowed array cannot be
+    /// synthesized from an `[BlockSearchOutcome; 30]` without duplicate storage or self-referential
+    /// caching — so `blocks()` becomes an indexed/iterator accessor
+    /// (`fn block_fits(&self) -> impl Iterator<Item = BlockFit>`, [`BlockFit`] being `Copy`) and its
+    /// callers migrate to it. Outcomes-as-sole-storage with an iterator is preferred over parallel
+    /// `[BlockFit; 30]` + `[BlockConvergence; 30]` arrays because it makes a fit/convergence mismatch
+    /// structurally unrepresentable rather than merely constructor-checked. Wiring it now would require
+    /// [`fit_block`](super::fit_block) to emit the convergence record, a behavior change deferred out of
+    /// this compile-green skeleton.
+    pub(crate) fn block_search_outcomes(&self) -> &[BlockSearchOutcome; N_BLOCKS] {
+        todo!("Phase 2: store [BlockSearchOutcome; 30] as the sole per-block field; blocks() becomes an iterator")
     }
 
     /// The population β interval over all 30 blocks, derived from the block outcomes: `Some` exactly when

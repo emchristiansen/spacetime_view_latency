@@ -97,6 +97,14 @@ enum Command {
         #[arg(long, value_enum)]
         role: RunRole,
     },
+    /// Validate a complete campaign NDJSON artifact and print its authoritative, self-contained JSON
+    /// report to stdout (stdout is JSON only). This is the read-only stage-6 analysis path; it provisions
+    /// and measures nothing.
+    Analyze {
+        /// Path to the complete campaign NDJSON artifact to validate and report on.
+        #[arg(long)]
+        input: PathBuf,
+    },
     /// Run the whole preregistered campaign: every scheduled block and adjacent arm/control pair, in the
     /// seed's global order, provisioning a fresh isolated server per run and streaming one NDJSON
     /// observation per dose to the required output path. This is the full effectful measurement path.
@@ -175,6 +183,13 @@ fn main() -> Result<()> {
                 ScheduleSeed::new(seed),
                 |server, manifest| execute_run(server, manifest, run),
             )?;
+            Ok(())
+        }
+        Command::Analyze { input } => {
+            // Read-only: validate the artifact into the trusted campaign graph and project the one
+            // authoritative report. Stdout carries JSON only.
+            let report = crate::analysis::analyze::analyze(&input)?;
+            println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
         Command::Campaign {
