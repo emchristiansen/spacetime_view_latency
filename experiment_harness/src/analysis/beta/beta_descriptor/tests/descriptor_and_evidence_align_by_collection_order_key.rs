@@ -78,6 +78,7 @@ fn descriptor_and_evidence_align_by_collection_order_key() {
         // The secondary descriptor block at that same position carries that block's identified exponent, so
         // descriptor index `i` and evidence index `i` denote the same physical block.
         let identified = blocks[i]
+            .outcome()
             .fit()
             .identified_beta()
             .expect("every clean power-law block is identifiable");

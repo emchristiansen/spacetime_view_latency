@@ -1,17 +1,31 @@
 //! Cell-level descriptor proofs: the 30-fit population interval and labels, and one non-identifiable
 //! block suppressing the population interval while every block outcome is retained.
 //!
-//! The descriptor proofs drive [`BetaDescriptor::from_ladders`](super::BetaDescriptor::from_ladders)
-//! over 30 synthetic ten-dose ladders, bypassing the trusted graph while exercising the real per-block
-//! fit and the derived population interval. The direct order-statistic proof drives
+//! The descriptor proofs drive
+//! [`BetaDescriptor::from_keyed_ladders`](super::BetaDescriptor::from_keyed_ladders) over 30 synthetic
+//! key-tagged ten-dose ladders, bypassing the trusted graph while exercising the real per-block fit and
+//! the derived population interval. The direct order-statistic proof drives
 //! [`BetaPopulation::from_identified`](crate::analysis::beta::beta_population::BetaPopulation) so the
 //! `[X_(10), X_(21)]` selection is pinned independently of any fit.
 
 use crate::analysis::beta::block_point::BlockPoint;
+use crate::observation::record_seq::RecordSeq;
 use crate::params::{NUM_DOSES_USIZE, REPETITION_BLOCKS};
 
 /// The fixed per-cell block count as an array length, mirroring the descriptor's own `N_BLOCKS`.
 pub(super) const N_BLOCKS: usize = REPETITION_BLOCKS as usize;
+
+/// Tag 30 ten-dose ladders with the canonical collection ranks `0..N_BLOCKS` as their intentional keys.
+/// These cell-level fit proofs are canonical-grid fixtures carrying no temporal order, so the canonical
+/// rank is each block's intended collection-order identity; stating that choice explicitly here — rather
+/// than letting the descriptor infer identity from array position — is what
+/// [`from_keyed_ladders`](super::super::BetaDescriptor::from_keyed_ladders) requires of every caller. The
+/// ranks are already strictly increasing, so they satisfy that helper's uniqueness invariant.
+pub(super) fn canonically_keyed(
+    ladders: [[BlockPoint; NUM_DOSES_USIZE]; N_BLOCKS],
+) -> [(RecordSeq, [BlockPoint; NUM_DOSES_USIZE]); N_BLOCKS] {
+    std::array::from_fn(|rank| (RecordSeq::new(rank as u64), ladders[rank]))
+}
 
 /// The shared ten-dose `N` ladder for the descriptor fixtures, the same ≈ 2.7-decade geometric span the
 /// block-fit proofs use, so each replicated block is a well-conditioned identifiable fit.

@@ -3,7 +3,7 @@
 //! "prove that one non-identifiable block suppresses the population β interval while retaining all block
 //! outcomes").
 
-use crate::analysis::beta::beta_descriptor::tests::{ladder_from, N_BLOCKS};
+use crate::analysis::beta::beta_descriptor::tests::{canonically_keyed, ladder_from, N_BLOCKS};
 use crate::analysis::beta::beta_descriptor::BetaDescriptor;
 use crate::analysis::beta::block_fit::BlockFit;
 use crate::analysis::beta::block_point::BlockPoint;
@@ -16,18 +16,19 @@ fn one_non_identifiable_block_suppresses_population() {
     let zero = ladder_from(|_n| 0.0);
     let mut ladders: [[BlockPoint; NUM_DOSES_USIZE]; N_BLOCKS] = [linear; N_BLOCKS];
     ladders[0] = zero;
-    let descriptor = BetaDescriptor::from_ladders(&ladders);
+    let descriptor = BetaDescriptor::from_keyed_ladders(&canonically_keyed(ladders));
 
-    // Every block outcome is retained — the failure is reported, not dropped.
+    // Every block outcome is retained — the failure is reported, not dropped. The zero block carries the
+    // canonical key 0, so it sorts to collection position 0.
     assert_eq!(
         descriptor.block_search_outcomes().len(),
         N_BLOCKS,
         "all 30 block outcomes are retained"
     );
     assert!(
-        matches!(descriptor.block_search_outcomes()[0].fit(), BlockFit::NonPositiveScale),
+        matches!(descriptor.block_search_outcomes()[0].outcome().fit(), BlockFit::NonPositiveScale),
         "the all-zero block is retained as a NonPositiveScale failure, got {:?}",
-        descriptor.block_search_outcomes()[0].fit()
+        descriptor.block_search_outcomes()[0].outcome().fit()
     );
     let identifiable = descriptor
         .block_fits()

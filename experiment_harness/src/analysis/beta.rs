@@ -37,4 +37,5 @@ pub(crate) mod fit_block;
 pub(crate) mod golden_stop;
 pub(crate) mod grid_node_outcome;
 pub(crate) mod grid_outcome;
+pub(crate) mod keyed_block_outcome;
 pub(crate) mod non_identifiable_reason;

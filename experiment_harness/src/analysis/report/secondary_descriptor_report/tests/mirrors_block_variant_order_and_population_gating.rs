@@ -122,8 +122,8 @@ fn mirrors_block_variant_order_and_population_gating() {
         descriptor_b
             .block_search_outcomes()
             .iter()
-            .all(|outcome| outcome.fit().is_pinned_at_bound()
-                && outcome.fit().identified_beta().is_none()),
+            .all(|keyed| keyed.outcome().fit().is_pinned_at_bound()
+                && keyed.outcome().fit().identified_beta().is_none()),
         "a bound exponent must yield non-identifiable (PinnedAtBound) blocks for the None gate to bind"
     );
 

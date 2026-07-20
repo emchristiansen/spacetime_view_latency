@@ -3,7 +3,7 @@
 //! linear-consistent (spec: only when all 30 block estimates are identifiable may the descriptor emit the
 //! population interval and a linear/sublinear label).
 
-use crate::analysis::beta::beta_descriptor::tests::{ladder_from, N_BLOCKS};
+use crate::analysis::beta::beta_descriptor::tests::{canonically_keyed, ladder_from, N_BLOCKS};
 use crate::analysis::beta::beta_descriptor::BetaDescriptor;
 use crate::analysis::beta::beta_label::BetaLabel;
 use crate::analysis::beta::block_point::BlockPoint;
@@ -14,7 +14,7 @@ fn uniform_linear_cell_labels_population_linear() {
     // 30 identical linear ladders → 30 identifiable β = 1 fits.
     let block = ladder_from(|n| 2.0 * n);
     let ladders: [[BlockPoint; NUM_DOSES_USIZE]; N_BLOCKS] = [block; N_BLOCKS];
-    let descriptor = BetaDescriptor::from_ladders(&ladders);
+    let descriptor = BetaDescriptor::from_keyed_ladders(&canonically_keyed(ladders));
 
     assert!(
         descriptor.block_fits().all(|fit| fit.is_identifiable()),

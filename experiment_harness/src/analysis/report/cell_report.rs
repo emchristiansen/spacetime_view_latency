@@ -30,9 +30,12 @@ pub(crate) struct CellReport {
     /// The stored classification: primary evidence, prediction comparison, and the gate-structural
     /// response/secondary-β, mirroring [`ClassifiedCell`](crate::analysis::classify::classified_cell::ClassifiedCell).
     classification: ClassifiedCellReport,
-    /// The 30 matched blocks' raw arm/control observations, in schedule-proven collection order — the
-    /// self-contained raw evidence, a boxed fixed array so the 30-block cardinality is a property of the
-    /// type.
+    /// The 30 matched blocks' raw arm/control observations, in the campaign's canonical block-index order
+    /// (the dataset's block order — *not* resorted into collection order). Each [`BlockReport`] carries its
+    /// own explicit `collection_order_key`, so cross-sibling association with the primary temporal series
+    /// and the β outcomes is by that serialized key, never by array position; resorting these would add a
+    /// second ordering contract and obscure the raw campaign/block organization. A boxed fixed array so the
+    /// 30-block cardinality is a property of the type.
     observations: Box<[BlockReport; N_BLOCKS]>,
     /// The cell's temporal diagnostics (collection-order plot, inline SVG, lag-1 autocorrelation).
     diagnostics: TemporalDiagnosticsReport,
