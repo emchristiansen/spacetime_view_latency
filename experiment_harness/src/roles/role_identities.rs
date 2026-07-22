@@ -64,7 +64,12 @@ impl RoleIdentities {
 /// Every component is a stable canonical field — the raw seed and the explicit
 /// `canonical_tag` contracts — never `Debug` output, so the derived growth identity is
 /// reproducible against a recorded seed and cannot be moved by a Rust variant rename.
-fn growth_subject(seed: ScheduleSeed, cell: Cell) -> String {
+///
+/// `pub(crate)` (spec: "Widen the existing `growth_subject` to `pub(crate)` and reuse it in execution
+/// and validation; do not duplicate the derivation grammar") so the analysis validation pass can
+/// rederive the same subject from a manifest's already-bound schedule seed and cell, rather than
+/// re-encoding this grammar a second time.
+pub(crate) fn growth_subject(seed: ScheduleSeed, cell: Cell) -> String {
     format!(
         "seed={};cell={};role={}",
         seed.get(),

@@ -25,6 +25,7 @@ use crate::analysis::ingest::physical_cardinalities_dto::PhysicalCardinalitiesDt
 use crate::analysis::ingest::preregistered_parameters_dto::PreregisteredParametersDto;
 use crate::analysis::ingest::record_id_dto::RecordIdDto;
 use crate::analysis::ingest::record_kind_dto::RecordKindDto;
+use crate::analysis::ingest::role_identities_dto::RoleIdentitiesDto;
 use crate::analysis::ingest::run_coordinate_dto::RunCoordinateDto;
 use crate::analysis::ingest::run_role_dto::RunRoleDto;
 use crate::analysis::ingest::server_facts_dto::ServerFactsDto;
@@ -267,6 +268,7 @@ fn manifest_record(seq: u64, cell: Cell, role: RunRole, block: u32) -> WireRecor
                 distribution: distribution_dto(),
                 server: server_dto(),
                 module: module_dto(),
+                role_identities: role_identities_dto(),
             },
         },
     }
@@ -374,6 +376,17 @@ fn module_dto() -> ModuleFactsDto {
     ModuleFactsDto {
         wasm_sha256: module_wasm_hex(),
         database_identity: identity_hex(),
+    }
+}
+
+/// The per-run role-identity evidence: two distinct canonical-hex identities. `check_role_identities`
+/// is not yet wired into this fold (Phase 2), so these values are not yet cross-checked against the
+/// fixture's schedule seed/cell derivation; they are kept distinct only to avoid an incidentally
+/// colliding fixture.
+fn role_identities_dto() -> RoleIdentitiesDto {
+    RoleIdentitiesDto {
+        measured: "1".repeat(DatabaseIdentity::CANONICAL_HEX_LEN),
+        growth: "2".repeat(DatabaseIdentity::CANONICAL_HEX_LEN),
     }
 }
 

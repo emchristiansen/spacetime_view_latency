@@ -11,6 +11,7 @@ use crate::analysis::ingest::key_scoped_arm_dto::KeyScopedArmDto;
 use crate::analysis::ingest::manifest_reference_dto::ManifestReferenceDto;
 use crate::analysis::ingest::physical_cardinalities_dto::PhysicalCardinalitiesDto;
 use crate::analysis::ingest::record_kind_dto::RecordKindDto;
+use crate::analysis::ingest::role_identities_dto::RoleIdentitiesDto;
 use crate::analysis::ingest::run_coordinate_dto::RunCoordinateDto;
 use crate::analysis::ingest::run_role_dto::RunRoleDto;
 use crate::analysis::ingest::table_scoped_arm_dto::TableScopedArmDto;
@@ -47,8 +48,8 @@ use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::manifest::server_pid::ServerPid;
 use crate::manifest::validated_run_manifest::{
     DataDirectory, KeysDirectory, ValidatedCliFacts, ValidatedDistributionParts,
-    ValidatedManifestIdentity, ValidatedModuleParts, ValidatedRunManifest, ValidatedRunManifestParts,
-    ValidatedServerParts, ValidatedStandaloneFacts,
+    ValidatedManifestIdentity, ValidatedModuleParts, ValidatedRoleIdentityParts, ValidatedRunManifest,
+    ValidatedRunManifestParts, ValidatedServerParts, ValidatedStandaloneFacts,
 };
 use crate::manifest::wasm_sha256::WasmSha256;
 use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
@@ -1235,6 +1236,23 @@ fn check_wasm_sha256(
         ));
     }
     Ok(observed)
+}
+
+/// Parse and validate a manifest's required role-identity evidence (spec: "Parse both canonical hex
+/// strings with `Identity::from_hex`, reject equality, bind them to the manifest `RunCoordinate`, and
+/// rederive growth from the already-bound schedule seed and run cell" via [`growth_subject`]).
+/// Signature-only for Phase 1: the parse/reject/rederive behavior, and the `ValidatedRunManifestParts`
+/// fifth-group wiring this feeds, are deferred to Phase 2 alongside the live `seal()` mint site.
+fn check_role_identities(
+    run: &RunCoordinate,
+    seed: ScheduleSeed,
+    dto: &RoleIdentitiesDto,
+) -> std::result::Result<ValidatedRoleIdentityParts, IntegrityError> {
+    let _ = (run, seed, dto);
+    todo!(
+        "Phase 2: parse both canonical hex identities via Identity::from_hex, reject measured==growth, \
+         and require growth == Identity::from_claims(EXPERIMENT_ISSUER, &growth_subject(seed, run.cell()))"
+    )
 }
 
 /// Homogeneity check of one pinned environment path fact against the reference run's value.

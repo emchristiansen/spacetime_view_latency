@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::Serialize;
+use spacetimedb_sdk::Identity;
 
 use crate::manifest::database_identity::DatabaseIdentity;
 use crate::manifest::preregistered_parameters::PreregisteredParameters;
@@ -540,6 +541,24 @@ pub(crate) struct KeysDirectory(PathBuf);
 impl KeysDirectory {
     pub(crate) fn new(path: PathBuf) -> Self {
         Self(path)
+    }
+}
+
+/// The manifest's two required per-run role identities — the server-issued measured identity and the
+/// deterministically derived growth identity — as already-parsed typed values (spec: "Add strict
+/// `RoleIdentitiesDto` ... project it only after `check_role_identities` returns
+/// `ValidatedRoleIdentityParts { measured: Identity, growth: Identity }`"). Colocated with its future
+/// sibling parts groups for the same reason as [`ValidatedModuleParts`]: it exists as the typed carrier
+/// `check_role_identities` produces, ahead of the `ValidatedRunManifestParts` fifth-group wiring and the
+/// live `seal()` mint site, both deferred to Phase 2.
+pub(crate) struct ValidatedRoleIdentityParts {
+    measured: Identity,
+    growth: Identity,
+}
+
+impl ValidatedRoleIdentityParts {
+    pub(crate) fn new(measured: Identity, growth: Identity) -> Self {
+        Self { measured, growth }
     }
 }
 

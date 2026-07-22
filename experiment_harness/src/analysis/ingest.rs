@@ -43,6 +43,7 @@ pub(crate) mod physical_cardinalities_dto;
 pub(crate) mod preregistered_parameters_dto;
 pub(crate) mod record_id_dto;
 pub(crate) mod record_kind_dto;
+pub(crate) mod role_identities_dto;
 pub(crate) mod run_coordinate_dto;
 pub(crate) mod run_role_dto;
 pub(crate) mod server_facts_dto;
