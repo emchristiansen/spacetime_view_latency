@@ -28,6 +28,8 @@ use clap::{Parser, Subcommand};
 
 use crate::campaign::run_campaign;
 use crate::campaign::CampaignOutcome;
+use crate::campaign::CampaignPartialPath;
+use crate::campaign::CampaignRoot;
 use crate::execute_run::execute_run;
 use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::run_coordinate::RunCoordinate;
@@ -111,9 +113,10 @@ enum Command {
     /// report to stdout (stdout is JSON only). This is the read-only stage-6 analysis path; it provisions
     /// and measures nothing.
     Analyze {
-        /// Path to the complete campaign NDJSON artifact to validate and report on.
+        /// Required `--campaign-root` directory shared with `Campaign`; `Analyze` is the sole reader of
+        /// Campaign's fixed staged NDJSON under it and the sole writer of the final corrected-v2 bundle.
         #[arg(long)]
-        input: PathBuf,
+        campaign_root: PathBuf,
     },
     /// Run the whole preregistered campaign: every scheduled block and adjacent arm/control pair, in the
     /// seed's global order, provisioning a fresh isolated server per run and streaming one NDJSON
@@ -129,10 +132,11 @@ enum Command {
         /// dataset — one seed, so the schedule and the seeded data cannot diverge.
         #[arg(long)]
         seed: u64,
-        /// Required output path for the durable NDJSON observation stream (records go to a file, never
-        /// stdout); created exclusively, so a pre-existing path fails fast.
+        /// Required `--campaign-root` directory, never a caller-named output file. Campaign exclusively
+        /// creates its one fixed non-authoritative staged NDJSON under `<campaign-root>/staging/`,
+        /// failing if it already exists.
         #[arg(long)]
-        output: PathBuf,
+        campaign_root: PathBuf,
         /// Git worktree checked out against the harness's own embedded build commit. Phase 1:
         /// accepted and threaded but not yet compared (Phase 2: `BuildProvenance`'s
         /// `EmbeddedHarnessCommit` checkout verification, required clean, and per-run recheck).
@@ -209,10 +213,11 @@ fn main() -> Result<()> {
             )?;
             Ok(())
         }
-        Command::Analyze { input } => {
-            // Read-only: validate the artifact into the trusted campaign graph and project the one
-            // authoritative report. Stdout carries JSON only.
-            let report = crate::analysis::analyze::analyze(&input)?;
+        Command::Analyze { campaign_root } => {
+            // Validate the fixed staged artifact under campaign_root into the trusted campaign graph and
+            // durably publish the one authoritative report. Stdout carries JSON only.
+            let root = CampaignRoot::new(campaign_root);
+            let report = crate::analysis::analyze::analyze(&root)?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
@@ -220,15 +225,20 @@ fn main() -> Result<()> {
             server,
             module_wasm,
             seed,
-            output,
+            campaign_root,
             harness_checkout_root,
         } => {
             let listen = ListenAddress::parse(&server)?;
-            // Create the one required output file exclusively before any provisioning, so a bad path or a
-            // pre-existing file fails fast rather than after standing up a server.
-            let sink = ObservationSink::create(&OutputPath::new(output)).map_err(|e| {
-                anyhow::anyhow!("creating the campaign output sink: {}", e.diagnostic())
-            })?;
+            let root = CampaignRoot::new(campaign_root);
+            let partial_path = CampaignPartialPath::under(&root);
+            // Phase-1 skeleton ordering only, not the authoritative final contract: the spec requires
+            // resolving harness provenance and rejecting a `Development` build *before* creating staging
+            // output, which is deferred to Phase 2. Until that lands, this create-before-provisioning
+            // order is temporary and must be revisited alongside the provenance rejection wiring.
+            let sink = ObservationSink::create(&OutputPath::new(partial_path.path().to_path_buf()))
+                .map_err(|e| {
+                    anyhow::anyhow!("creating the campaign output sink: {}", e.diagnostic())
+                })?;
             // Drive the whole campaign. A completed campaign reports its affine completion evidence; an
             // incomplete outcome or a pre-cleanup acquisition abort is a loud failure carrying its typed
             // evidence — the durable records already written remain on disk regardless.

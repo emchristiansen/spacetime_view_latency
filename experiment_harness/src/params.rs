@@ -105,3 +105,35 @@ pub(crate) const EXPECTED_VERSION: &str = "2.6.1";
 /// Expected release commit of the official Nix-packaged 2.6.1 CLI/standalone,
 /// matching Anton's retest report (spec: "Official 2.6.1 server provisioning").
 pub(crate) const EXPECTED_RELEASE_COMMIT: &str = "052c83fe984a4c4eb7bb4f9afa5c6b1903891d87";
+
+/// Campaign's fixed staging-subdirectory name under `<campaign-root>/`, holding the one
+/// non-authoritative partial artifact (spec: "`<campaign-root>/staging/
+/// campaign-seed20260717.ndjson.partial`").
+pub(crate) const CAMPAIGN_STAGING_DIRNAME: &str = "staging";
+
+/// Campaign's one fixed, non-authoritative staged artifact's filename under
+/// `<campaign-root>/staging/` (spec: "Campaign ... exclusively creates
+/// `<campaign-root>/staging/campaign-seed20260717.ndjson.partial`").
+pub(crate) const PARTIAL_CAMPAIGN_FILENAME: &str = "campaign-seed20260717.ndjson.partial";
+
+/// The promoted corrected-v2 campaign NDJSON's fixed filename, identical inside Analyze's staging
+/// directory and in the final published bundle.
+pub(crate) const CORRECTED_V2_NDJSON_FILENAME: &str = "campaign-seed20260717-corrected-v2.ndjson";
+
+/// The promoted corrected-v2 report JSON's fixed filename, identical inside Analyze's staging
+/// directory and in the final published bundle.
+pub(crate) const CORRECTED_V2_REPORT_FILENAME: &str = "report-seed20260717-corrected-v2.json";
+
+/// The fixed final directory name Analyze's staging directory is atomically renamed to (spec:
+/// "atomically rename the complete directory to deterministic
+/// `<campaign-root>/campaign-seed20260717-corrected-v2/`").
+pub(crate) const CORRECTED_V2_DIRNAME: &str = "campaign-seed20260717-corrected-v2";
+
+/// Suffix appended to [`CORRECTED_V2_DIRNAME`] to name Analyze's staging sibling directory before the
+/// atomic rename to the final bundle name (spec: "exclusively creates deterministic
+/// `<campaign-root>/campaign-seed20260717-corrected-v2.staging/`").
+pub(crate) const CORRECTED_V2_STAGING_SUFFIX: &str = ".staging";
+
+/// Suffix appended to each corrected-v2 bundle artifact's filename to name its digest sidecar (spec:
+/// "corresponding `.sha256` sidecars").
+pub(crate) const SHA256_SIDECAR_SUFFIX: &str = ".sha256";

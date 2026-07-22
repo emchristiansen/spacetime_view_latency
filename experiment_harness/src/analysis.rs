@@ -25,6 +25,7 @@ pub(crate) mod beta;
 pub(crate) mod classify;
 pub(crate) mod finite_f64;
 pub(crate) mod ingest;
+pub(crate) mod publish;
 pub(crate) mod report;
 pub(crate) mod stats;
 pub(crate) mod validate;

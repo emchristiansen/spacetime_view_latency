@@ -30,6 +30,8 @@ mod campaign_aborted;
 mod campaign_frontier;
 mod campaign_incomplete;
 mod campaign_outcome;
+mod campaign_partial_path;
+mod campaign_root;
 mod effect_stage;
 mod finalization_outcome;
 mod latest_progress;
@@ -50,6 +52,8 @@ mod run_cursor;
 mod run_driver;
 
 pub(crate) use campaign_outcome::CampaignOutcome;
+pub(crate) use campaign_partial_path::CampaignPartialPath;
+pub(crate) use campaign_root::CampaignRoot;
 pub(crate) use run_campaign::run_campaign;
 
 #[cfg(test)]
