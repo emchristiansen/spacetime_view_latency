@@ -31,7 +31,12 @@ pub(crate) fn run_campaign(
     module_wasm: &Path,
     seed: ScheduleSeed,
     sink: ObservationSink,
+    // Signature-only for Phase 1: requiring a clean worktree here, comparing it against
+    // `BuildProvenance`'s `EmbeddedHarnessCommit`, and repeating that recheck before each of the 540
+    // runs are deferred to Phase 2.
+    harness_checkout_root: &Path,
 ) -> Result<CampaignOutcome, CampaignAborted> {
+    let _ = harness_checkout_root;
     let mut campaign = CampaignReady::preregistered(seed, sink);
     loop {
         match campaign.next_block() {

@@ -73,6 +73,11 @@ enum Command {
         /// Whether to provision the arm run or its matched control run.
         #[arg(long, value_enum)]
         role: RunRole,
+        /// Git worktree checked out against the harness's own embedded build commit. Phase 1:
+        /// accepted and threaded but not yet compared (Phase 2: `BuildProvenance`'s
+        /// `EmbeddedHarnessCommit` checkout verification).
+        #[arg(long)]
+        harness_checkout_root: PathBuf,
     },
     /// Provision one isolated server for a single valid scheduled run, then seed its
     /// deterministic dataset and assert the initial subscribed result set equals the
@@ -96,6 +101,11 @@ enum Command {
         /// Whether to run the arm or its matched control.
         #[arg(long, value_enum)]
         role: RunRole,
+        /// Git worktree checked out against the harness's own embedded build commit. Phase 1:
+        /// accepted and threaded but not yet compared (Phase 2: `BuildProvenance`'s
+        /// `EmbeddedHarnessCommit` checkout verification).
+        #[arg(long)]
+        harness_checkout_root: PathBuf,
     },
     /// Validate a complete campaign NDJSON artifact and print its authoritative, self-contained JSON
     /// report to stdout (stdout is JSON only). This is the read-only stage-6 analysis path; it provisions
@@ -123,6 +133,11 @@ enum Command {
         /// stdout); created exclusively, so a pre-existing path fails fast.
         #[arg(long)]
         output: PathBuf,
+        /// Git worktree checked out against the harness's own embedded build commit. Phase 1:
+        /// accepted and threaded but not yet compared (Phase 2: `BuildProvenance`'s
+        /// `EmbeddedHarnessCommit` checkout verification, required clean, and per-run recheck).
+        #[arg(long)]
+        harness_checkout_root: PathBuf,
     },
 }
 
@@ -149,12 +164,19 @@ fn main() -> Result<()> {
             cell_index,
             block,
             role,
+            harness_checkout_root,
         } => {
             let listen = ListenAddress::parse(&server)?;
             let schedule = Schedule::preregistered();
             let block_run = schedule.canonical_block(cell_index, block)?;
             let run = RunCoordinate::new(&block_run, role);
-            let manifest = provision_run(listen, &module_wasm, run, ScheduleSeed::new(seed))?;
+            let manifest = provision_run(
+                listen,
+                &module_wasm,
+                run,
+                ScheduleSeed::new(seed),
+                &harness_checkout_root,
+            )?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
             Ok(())
         }
@@ -165,6 +187,7 @@ fn main() -> Result<()> {
             cell_index,
             block,
             role,
+            harness_checkout_root,
         } => {
             let listen = ListenAddress::parse(&server)?;
             let schedule = Schedule::preregistered();
@@ -181,6 +204,7 @@ fn main() -> Result<()> {
                 &module_wasm,
                 coordinate,
                 ScheduleSeed::new(seed),
+                &harness_checkout_root,
                 |server, manifest| execute_run(server, manifest, run),
             )?;
             Ok(())
@@ -197,6 +221,7 @@ fn main() -> Result<()> {
             module_wasm,
             seed,
             output,
+            harness_checkout_root,
         } => {
             let listen = ListenAddress::parse(&server)?;
             // Create the one required output file exclusively before any provisioning, so a bad path or a
@@ -207,7 +232,13 @@ fn main() -> Result<()> {
             // Drive the whole campaign. A completed campaign reports its affine completion evidence; an
             // incomplete outcome or a pre-cleanup acquisition abort is a loud failure carrying its typed
             // evidence — the durable records already written remain on disk regardless.
-            match run_campaign(listen, &module_wasm, ScheduleSeed::new(seed), sink) {
+            match run_campaign(
+                listen,
+                &module_wasm,
+                ScheduleSeed::new(seed),
+                sink,
+                &harness_checkout_root,
+            ) {
                 Ok(CampaignOutcome::Complete(complete)) => {
                     println!("campaign complete: {complete:?}");
                     Ok(())

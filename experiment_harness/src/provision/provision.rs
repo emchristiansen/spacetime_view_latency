@@ -38,8 +38,12 @@ pub(crate) fn provision_and_run<T>(
     module_wasm: &Path,
     run: RunCoordinate,
     seed: ScheduleSeed,
+    // Signature-only for Phase 1: comparing this checkout against `BuildProvenance`'s
+    // `EmbeddedHarnessCommit` is deferred to Phase 2.
+    harness_checkout_root: &Path,
     body: impl FnOnce(&RunningPinnedServer, &ValidatedRunManifest) -> Result<T>,
 ) -> Result<T> {
+    let _ = harness_checkout_root;
     let (resources, manifest) = provision_run_resources(listen, module_wasm, run, seed)
         .map_err(ProvisionFailure::into_anyhow)?
         .into_parts();
@@ -77,10 +81,16 @@ pub(crate) fn provision_run(
     module_wasm: &Path,
     run: RunCoordinate,
     seed: ScheduleSeed,
+    harness_checkout_root: &Path,
 ) -> Result<ValidatedRunManifest> {
-    provision_and_run(listen, module_wasm, run, seed, |_server, manifest| {
-        Ok(manifest.clone())
-    })
+    provision_and_run(
+        listen,
+        module_wasm,
+        run,
+        seed,
+        harness_checkout_root,
+        |_server, manifest| Ok(manifest.clone()),
+    )
 }
 
 /// Provision one isolated server for `run` and hand its live resources onward as an owned
