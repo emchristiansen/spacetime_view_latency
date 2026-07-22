@@ -32,8 +32,14 @@ impl RunReport {
     /// both the arm and control runs. One input — the trusted run — projected whole.
     pub(crate) fn of<R>(run: &TrustedRun<R>) -> Self {
         // Project the ten doses heap-first into the fixed ladder array; the coordinate reuses the domain
-        // type directly and the provenance projects the run-varying facts.
-        let doses: Vec<DoseReport> = run.doses().iter().map(DoseReport::of).collect();
+        // type directly and the provenance projects the run-varying facts. The growth regime is derived
+        // from the run's own coordinate cell, so `n_total`/`n_own` cannot disagree with the run's schedule.
+        let growth_regime = run.coordinate().cell().growth_regime();
+        let doses: Vec<DoseReport> = run
+            .doses()
+            .iter()
+            .map(|dose| DoseReport::of(dose, growth_regime))
+            .collect();
         let doses = doses
             .into_boxed_slice()
             .try_into()
