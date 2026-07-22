@@ -17,11 +17,13 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub mod access_path;
 pub mod cell;
 pub mod control_table;
 pub mod growth_regime;
 pub mod key_scoped_arm;
 pub mod predicted_response;
+pub mod recorded_read_set_class;
 pub mod run;
 pub mod run_role;
 pub mod schedule;

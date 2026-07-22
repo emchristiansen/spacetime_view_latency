@@ -53,7 +53,7 @@ type BoxedReducerCallback = Box<dyn FnOnce(&ReducerEventContext, ReducerOutcome)
 
 /// One callback outcome from the Chronicle **prerequisite** batch (phase A), delivered from the SDK
 /// callback thread to the prerequisite barrier over an [`mpsc`] channel. It carries no timing — a
-/// prerequisite `chronicle_message` insert is unmeasured; the barrier only requires that every one
+/// prerequisite `message_visibility` insert is unmeasured; the barrier only requires that every one
 /// confirms *successfully* before any measured write is issued, so the phase and its message type are
 /// kept distinct from the measured batch and can never overlap it.
 enum PrerequisiteMessage {
@@ -225,17 +225,19 @@ impl ConnectedClient {
     /// A Chronicle dose is measured in **two ordered phases** so the measured batch is genuinely
     /// back-to-back and never depends on server-side execution ordering:
     ///
-    /// - **Phase A ([`Self::confirm_prerequisites`])** issues all [`BATCH_SIZE`] `chronicle_message`
+    /// - **Phase A ([`Self::confirm_prerequisites`])** issues all [`BATCH_SIZE`] `message_visibility`
     ///   prerequisite inserts back-to-back and barriers until *every* one has confirmed successfully.
     ///   A confirmed callback establishes that the prerequisite transaction completed successfully, so
     ///   once phase A returns every prerequisite transaction has finished and a later transaction can
-    ///   observe its chronicle row — no reliance on the relative execution order of two reducers on
+    ///   observe its visibility row — no reliance on the relative execution order of two reducers on
     ///   the connection. This phase is entirely outside every measured interval.
     /// - **Phase B ([`Self::measure_writes`])** then issues all [`BATCH_SIZE`] measured writes
-    ///   back-to-back — for Chronicle the `message_visibility` inserts (the writes that can refresh
-    ///   subscriptions), for the message family the `message` inserts — barriers on their confirmed
-    ///   round trips, and seals. With phase A already complete, no prerequisite issue is interleaved
-    ///   between two measured writes, so the measured batch is uninterrupted.
+    ///   back-to-back — for Chronicle the `chronicle_message` inserts (the writes that always change
+    ///   the direct control's subscribed `chronicle_message` table, and — under `OwnSliceGrowth` —
+    ///   also supply the missing key the measured subscriber's own pair awaits), for the message
+    ///   family the `message` inserts — barriers on their confirmed round trips, and seals. With phase
+    ///   A already complete, no prerequisite issue is interleaved between two measured writes, so the
+    ///   measured batch is uninterrupted.
     ///
     /// The message family has no prerequisites and runs phase B directly. Each measured write's
     /// `Instant` is captured immediately before it is issued and its elapsed is read only inside the
