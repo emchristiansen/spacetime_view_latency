@@ -285,18 +285,20 @@ impl ConnectedClient {
         let (tx, rx) = mpsc::channel::<PrerequisiteMessage>();
 
         for (index, operation) in operations.iter().enumerate() {
-            if let SeedOp::ChroniclePair { key, .. } = *operation {
-                let payload = ROW_PAYLOAD.to_string();
+            if let SeedOp::ChroniclePair { key, viewer } = *operation {
                 let prerequisite_tx = tx.clone();
                 self.conn
                     .reducers
-                    .insert_chronicle_message_then(
+                    .insert_message_visibility_then(
                         key,
-                        payload,
+                        viewer,
+                        key,
                         prerequisite_callback(index, prerequisite_tx),
                     )
                     .map_err(|e| {
-                        anyhow!("issuing prerequisite chronicle_message write index {index}: {e:?}")
+                        anyhow!(
+                            "issuing prerequisite message_visibility write index {index}: {e:?}"
+                        )
                     })?;
             }
         }
@@ -340,23 +342,19 @@ impl ConnectedClient {
                             anyhow!("issuing measured message write index {index}: {e:?}")
                         })?;
                 }
-                SeedOp::ChroniclePair { key, viewer } => {
-                    // The visibility insert carries no `String` payload; prebuild only its sender
-                    // clone before timing.
+                SeedOp::ChroniclePair { key, .. } => {
+                    let payload = ROW_PAYLOAD.to_string();
                     let measured_tx = tx.clone();
                     let start = Instant::now();
                     self.conn
                         .reducers
-                        .insert_message_visibility_then(
+                        .insert_chronicle_message_then(
                             key,
-                            viewer,
-                            key,
+                            payload,
                             measured_callback(index, start, measured_tx),
                         )
                         .map_err(|e| {
-                            anyhow!(
-                                "issuing measured message_visibility write index {index}: {e:?}"
-                            )
+                            anyhow!("issuing measured chronicle_message write index {index}: {e:?}")
                         })?;
                 }
             }

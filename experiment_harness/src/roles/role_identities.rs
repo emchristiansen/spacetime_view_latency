@@ -36,6 +36,14 @@ impl RoleIdentities {
     /// measured identity.
     pub(crate) fn resolve(measured: Identity, seed: ScheduleSeed, cell: Cell) -> Result<Self> {
         let growth = Identity::from_claims(EXPERIMENT_ISSUER, &growth_subject(seed, cell));
+        Self::from_identities(measured, growth)
+    }
+
+    /// Bind an already-derived measured/growth identity pair directly, rejecting aliasing exactly
+    /// like [`Self::resolve`]. Used by the quick-run path, which derives `growth` from a fixed
+    /// literal subject rather than a schedule seed and cell (each quick run provisions its own
+    /// fresh isolated server, so no per-run domain separation is needed).
+    pub(crate) fn from_identities(measured: Identity, growth: Identity) -> Result<Self> {
         ensure!(
             measured != growth,
             "measured (server-issued) and growth (from_claims) identities collide ({measured:?}); \

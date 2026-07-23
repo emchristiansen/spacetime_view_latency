@@ -19,11 +19,12 @@ mod observation;
 mod params;
 mod plan;
 mod provision;
+mod quick_run;
 mod roles;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::campaign::run_campaign;
@@ -143,6 +144,25 @@ enum Command {
         #[arg(long)]
         harness_checkout_root: PathBuf,
     },
+    /// Results-first quick path (spec: "Results-First Revision"): provision a fresh isolated
+    /// server per run, seed literal setup rows, execute the ten-dose ladder timing each write in
+    /// memory, and print the per-dose p50 table — no manifest, schedule, or NDJSON output.
+    QuickRun {
+        /// Explicit `host:port` listen address every run's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Run only the four F/F′ smoke cells (both growth regimes) instead of the full
+        /// smoke-then-A–E pass.
+        #[arg(long, conflicts_with = "cell_index")]
+        smoke_only: bool,
+        /// Rerun a single cell by its 0-based index into the fixed execution order (0-3 = F/F′
+        /// smoke cells, 4-8 = A-E), instead of the default full pass.
+        #[arg(long)]
+        cell_index: Option<usize>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -260,6 +280,44 @@ fn main() -> Result<()> {
                     "campaign aborted during run acquisition: {aborted:?}"
                 )),
             }
+        }
+        Command::QuickRun {
+            server,
+            module_wasm,
+            smoke_only,
+            cell_index,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+
+            let selected: Vec<(usize, crate::plan::cell::Cell)> = match cell_index {
+                Some(index) => {
+                    let all = crate::quick_run::quick_run_cells(false);
+                    let cell = *all.get(index).with_context(|| {
+                        format!("cell index {index} out of range 0..{}", all.len())
+                    })?;
+                    vec![(index, cell)]
+                }
+                None => crate::quick_run::quick_run_cells(smoke_only)
+                    .into_iter()
+                    .enumerate()
+                    .collect(),
+            };
+
+            for (index, cell) in selected {
+                let mut pair = cell.matched_runs();
+                if index % 2 == 1 {
+                    pair.reverse();
+                }
+                for run in pair {
+                    println!(
+                        "=== quick-run cell={:?} role={:?} ===",
+                        run.cell(),
+                        run.role()
+                    );
+                    crate::quick_run::quick_run(listen, &module_wasm, run)?;
+                }
+            }
+            Ok(())
         }
     }
 }
