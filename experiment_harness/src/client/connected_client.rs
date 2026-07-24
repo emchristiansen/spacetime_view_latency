@@ -7,15 +7,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Result};
 use spacetimedb_sdk::__codegen::InternalError;
-use spacetimedb_sdk::{DbContext, Identity};
+use spacetimedb_sdk::{DbContext, Identity, Table};
 
 use crate::dataset::seed_op::SeedOp;
 use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::module_artifact::bindings::{
-    insert_chronicle_message, insert_message, insert_message_visibility, DbConnection,
-    ReducerEventContext,
+    insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
+    DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess, ReducerEventContext,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -23,6 +23,11 @@ use crate::observation::dose_latency_accumulator::DoseLatencyAccumulator;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::raw_latencies::RawLatencies;
 use crate::params::{BATCH_SIZE, BATCH_SIZE_USIZE, CONFIRMED_READS, ROW_PAYLOAD};
+
+/// The `entity_owner_sender_view` subscription query name — a cross-component contract with the
+/// module's `#[view(accessor = entity_owner_sender_view, …)]`, so it is a named constant rather
+/// than an inline literal.
+const TABLE_ENTITY_OWNER_SENDER_VIEW: &str = "entity_owner_sender_view";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -211,6 +216,34 @@ impl ConnectedClient {
     pub(crate) fn read_back_visibility(&self) -> Result<SeededVisibility> {
         self.subscribe_and_await_applied(SeededVisibility::subscription_sql())?;
         Ok(SeededVisibility::read_back(&self.conn))
+    }
+
+    /// Seed one `entity_owner` row via its confirmed insertion reducer — the `EntityOwnerSenderView`
+    /// candidate's seeding primitive. Built directly on [`Self::await_reducer`], the same generic
+    /// primitive [`Self::seed`] uses, so no new [`SeedOp`] variant is needed for this candidate.
+    pub(crate) fn insert_entity_owner(
+        &self,
+        entity_uuid: u64,
+        owner: Identity,
+        record: String,
+    ) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn
+                .reducers
+                .insert_entity_owner_then(entity_uuid, owner, record, cb)
+        })
+        .with_context(|| format!("seeding entity_owner entity_uuid={entity_uuid}"))
+    }
+
+    /// Subscribe to `entity_owner_sender_view` and, once its initial snapshot is applied, read the
+    /// caller-scoped rows out of the client cache — the `EntityOwnerSenderView` candidate's
+    /// measurement primitive. Built directly on [`Self::subscribe_and_await_applied`], the same
+    /// generic primitive [`Self::subscribe_and_read`] uses for the historical arms.
+    pub(crate) fn subscribe_and_read_entity_owner_sender_view(&self) -> Result<Vec<EntityOwner>> {
+        self.subscribe_and_await_applied(format!(
+            "SELECT * FROM {TABLE_ENTITY_OWNER_SENDER_VIEW}"
+        ))?;
+        Ok(self.conn.db.entity_owner_sender_view().iter().collect())
     }
 
     /// Measure one cumulative dose as an Anton-shaped back-to-back measured batch, returning the

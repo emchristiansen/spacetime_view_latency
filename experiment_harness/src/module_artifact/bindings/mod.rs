@@ -11,7 +11,11 @@ pub mod chronicle_message_type;
 pub mod chronicle_point_view_table;
 pub mod chronicle_query_pk_view_table;
 pub mod chronicle_query_view_table;
+pub mod entity_owner_sender_view_table;
+pub mod entity_owner_table;
+pub mod entity_owner_type;
 pub mod insert_chronicle_message_reducer;
+pub mod insert_entity_owner_reducer;
 pub mod insert_message_reducer;
 pub mod insert_message_visibility_reducer;
 pub mod message_query_pk_view_table;
@@ -28,7 +32,11 @@ pub use chronicle_message_type::ChronicleMessage;
 pub use chronicle_point_view_table::*;
 pub use chronicle_query_pk_view_table::*;
 pub use chronicle_query_view_table::*;
+pub use entity_owner_sender_view_table::*;
+pub use entity_owner_table::*;
+pub use entity_owner_type::EntityOwner;
 pub use insert_chronicle_message_reducer::insert_chronicle_message;
+pub use insert_entity_owner_reducer::insert_entity_owner;
 pub use insert_message_reducer::insert_message;
 pub use insert_message_visibility_reducer::insert_message_visibility;
 pub use message_query_pk_view_table::*;
@@ -52,6 +60,11 @@ pub enum Reducer {
         uuid: u64,
         payload: String,
     },
+    InsertEntityOwner {
+        entity_uuid: u64,
+        owner: __sdk::Identity,
+        record: String,
+    },
     InsertMessage {
         id: u64,
         sender: __sdk::Identity,
@@ -72,6 +85,7 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::InsertChronicleMessage { .. } => "insert_chronicle_message",
+            Reducer::InsertEntityOwner { .. } => "insert_entity_owner",
             Reducer::InsertMessage { .. } => "insert_message",
             Reducer::InsertMessageVisibility { .. } => "insert_message_visibility",
             _ => unreachable!(),
@@ -86,6 +100,15 @@ impl __sdk::Reducer for Reducer {
                     payload: payload.clone(),
                 },
             ),
+            Reducer::InsertEntityOwner {
+                entity_uuid,
+                owner,
+                record,
+            } => __sats::bsatn::to_vec(&insert_entity_owner_reducer::InsertEntityOwnerArgs {
+                entity_uuid: entity_uuid.clone(),
+                owner: owner.clone(),
+                record: record.clone(),
+            }),
             Reducer::InsertMessage {
                 id,
                 sender,
@@ -119,6 +142,8 @@ pub struct DbUpdate {
     chronicle_point_view: __sdk::TableUpdate<ChronicleMessage>,
     chronicle_query_pk_view: __sdk::TableUpdate<ChronicleMessage>,
     chronicle_query_view: __sdk::TableUpdate<ChronicleMessage>,
+    entity_owner: __sdk::TableUpdate<EntityOwner>,
+    entity_owner_sender_view: __sdk::TableUpdate<EntityOwner>,
     message: __sdk::TableUpdate<Message>,
     message_query_pk_view: __sdk::TableUpdate<Message>,
     message_query_view: __sdk::TableUpdate<Message>,
@@ -144,6 +169,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "chronicle_query_view" => db_update.chronicle_query_view.append(
                     chronicle_query_view_table::parse_table_update(table_update)?,
+                ),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(entity_owner_table::parse_table_update(table_update)?),
+                "entity_owner_sender_view" => db_update.entity_owner_sender_view.append(
+                    entity_owner_sender_view_table::parse_table_update(table_update)?,
                 ),
                 "message" => db_update
                     .message
@@ -192,6 +223,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.chronicle_message = cache
             .apply_diff_to_table::<ChronicleMessage>("chronicle_message", &self.chronicle_message)
             .with_updates_by_pk(|row| &row.uuid);
+        diff.entity_owner = cache
+            .apply_diff_to_table::<EntityOwner>("entity_owner", &self.entity_owner)
+            .with_updates_by_pk(|row| &row.entity_uuid);
         diff.message = cache
             .apply_diff_to_table::<Message>("message", &self.message)
             .with_updates_by_pk(|row| &row.id);
@@ -217,6 +251,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.chronicle_query_view,
             )
             .with_updates_by_pk(|row| &row.uuid);
+        diff.entity_owner_sender_view = cache
+            .apply_diff_to_table::<EntityOwner>(
+                "entity_owner_sender_view",
+                &self.entity_owner_sender_view,
+            )
+            .with_updates_by_pk(|row| &row.entity_uuid);
         diff.message_query_pk_view = cache
             .apply_diff_to_table::<Message>("message_query_pk_view", &self.message_query_pk_view)
             .with_updates_by_pk(|row| &row.id);
@@ -245,6 +285,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "chronicle_query_view" => db_update
                     .chronicle_query_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "entity_owner_sender_view" => db_update
+                    .entity_owner_sender_view
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "message" => db_update
                     .message
@@ -289,6 +335,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "chronicle_query_view" => db_update
                     .chronicle_query_view
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "entity_owner_sender_view" => db_update
+                    .entity_owner_sender_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "message" => db_update
                     .message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -326,6 +378,8 @@ pub struct AppliedDiff<'r> {
     chronicle_point_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     chronicle_query_pk_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     chronicle_query_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
+    entity_owner: __sdk::TableAppliedDiff<'r, EntityOwner>,
+    entity_owner_sender_view: __sdk::TableAppliedDiff<'r, EntityOwner>,
     message: __sdk::TableAppliedDiff<'r, Message>,
     message_query_pk_view: __sdk::TableAppliedDiff<'r, Message>,
     message_query_view: __sdk::TableAppliedDiff<'r, Message>,
@@ -363,6 +417,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ChronicleMessage>(
             "chronicle_query_view",
             &self.chronicle_query_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<EntityOwner>(
+            "entity_owner",
+            &self.entity_owner,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<EntityOwner>(
+            "entity_owner_sender_view",
+            &self.entity_owner_sender_view,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Message>("message", &self.message, event);
@@ -1055,6 +1119,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         chronicle_point_view_table::register_table(client_cache);
         chronicle_query_pk_view_table::register_table(client_cache);
         chronicle_query_view_table::register_table(client_cache);
+        entity_owner_table::register_table(client_cache);
+        entity_owner_sender_view_table::register_table(client_cache);
         message_table::register_table(client_cache);
         message_query_pk_view_table::register_table(client_cache);
         message_query_view_table::register_table(client_cache);
@@ -1067,6 +1133,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "chronicle_point_view",
         "chronicle_query_pk_view",
         "chronicle_query_view",
+        "entity_owner",
+        "entity_owner_sender_view",
         "message",
         "message_query_pk_view",
         "message_query_view",

@@ -1,10 +1,21 @@
-//! Controlled SpacetimeDB 2.6.1 module for the view read-set experiment.
+//! Controlled SpacetimeDB module for the view read-set experiment, built and tested against the
+//! official published 2.7.0-line release (`v2.7.0-hotfix3`).
 //!
 //! Defines three base tables and the seven module-view arms A/B/C/D/E/F/F′ from
-//! the governing spec, plus seeding reducers. Read-set behavior is the object of
+//! the governing historical spec, plus seeding reducers. Read-set behavior is the object of
 //! study; the view *bodies* here are the experiment, so they are written in full
 //! (a query-builder view body simply IS its query expression). Access-path forms
-//! are sourced from `modules/sdk-test-procedural-view-pk/src/lib.rs` at v2.6.1.
+//! are sourced from `modules/sdk-test-procedural-view-pk/src/lib.rs` at v2.6.1 — a
+//! provenance citation for those forms only, not the module's current runtime target.
+//!
+//! Also defines `EntityOwner` and `entity_owner_sender_view`: the deployable
+//! sublinear-pattern spec's `EntityOwnerSenderView` candidate, an exact
+//! production-composition analogue of Muninn's real `entity_owner` table and its
+//! `entity_owner_view` (`callosum/callosum/src/tables/entity_owner{,_view}.rs`) —
+//! same `(entity_uuid primary key, owner indexed Identity)` composition and the
+//! same bare sender-equality query-builder filter, with an opaque `record` payload
+//! standing in for the real `EntityRecord` enum (the payload's shape is not the
+//! object of study).
 
 use std::ops::Bound;
 
@@ -41,6 +52,19 @@ pub struct ChronicleMessage {
     #[primary_key]
     pub uuid: u64,
     pub payload: String,
+}
+
+/// Production-composition analogue of Muninn's real `entity_owner` table: current ownership of an
+/// entity, keyed by the entity and indexed by owner exactly as production is. `record` is an opaque
+/// stand-in for production's `EntityRecord` enum — the view's read-set behavior, not the record's
+/// internal shape, is the object of study.
+#[table(accessor = entity_owner, public)]
+pub struct EntityOwner {
+    #[primary_key]
+    pub entity_uuid: u64,
+    #[index(btree)]
+    pub owner: Identity,
+    pub record: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +137,20 @@ pub fn chronicle_point_view(ctx: &ViewContext) -> Vec<ChronicleMessage> {
 }
 
 // ---------------------------------------------------------------------------
+// Views — deployable candidates (spec c33f2e51)
+// ---------------------------------------------------------------------------
+
+/// `EntityOwnerSenderView` — exact production-composition sender-scoped view for entity
+/// ownership. Query-builder single-table owner-equality filter, no semijoin — the bare form of
+/// production's `entity_owner_view` (`callosum/callosum/src/tables/entity_owner_view.rs`).
+#[view(accessor = entity_owner_sender_view, public)]
+pub fn entity_owner_sender_view(ctx: &ViewContext) -> impl Query<EntityOwner> {
+    ctx.from
+        .entity_owner()
+        .r#where(|row| row.owner.eq(ctx.sender()))
+}
+
+// ---------------------------------------------------------------------------
 // Seeding reducers
 // ---------------------------------------------------------------------------
 //
@@ -152,4 +190,13 @@ pub fn insert_message_visibility(ctx: &ReducerContext, id: u64, viewer: Identity
 #[reducer]
 pub fn insert_chronicle_message(ctx: &ReducerContext, uuid: u64, payload: String) {
     ctx.db.chronicle_message().insert(ChronicleMessage { uuid, payload });
+}
+
+#[reducer]
+pub fn insert_entity_owner(ctx: &ReducerContext, entity_uuid: u64, owner: Identity, record: String) {
+    ctx.db.entity_owner().insert(EntityOwner {
+        entity_uuid,
+        owner,
+        record,
+    });
 }

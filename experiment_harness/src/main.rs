@@ -12,6 +12,7 @@ mod analysis;
 mod campaign;
 mod client;
 mod dataset;
+mod entity_owner_smoke;
 mod execute_run;
 mod manifest;
 mod module_artifact;
@@ -162,6 +163,17 @@ enum Command {
         /// smoke cells, 4-8 = A-E), instead of the default full pass.
         #[arg(long)]
         cell_index: Option<usize>,
+    },
+    /// Smoke stage for the `EntityOwnerSenderView` candidate (spec c33f2e51): provision a fresh
+    /// isolated server, seed owned and non-owned `entity_owner` rows, subscribe to
+    /// `entity_owner_sender_view`, and assert the security-scoped result set is exact.
+    EntityOwnerSmoke {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
     },
 }
 
@@ -318,6 +330,13 @@ fn main() -> Result<()> {
                 }
             }
             Ok(())
+        }
+        Command::EntityOwnerSmoke {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_smoke::entity_owner_sender_view_smoke(listen, &module_wasm)
         }
     }
 }
