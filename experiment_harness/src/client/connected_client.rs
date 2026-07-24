@@ -271,7 +271,7 @@ impl ConnectedClient {
         self.measure_writes(operations)
     }
 
-    /// Phase A of a Chronicle dose: issue every op's `chronicle_message` prerequisite insert
+    /// Phase A of a Chronicle dose: issue every op's `message_visibility` prerequisite insert
     /// back-to-back, then barrier until all [`BATCH_SIZE`] have confirmed successfully.
     ///
     /// Called only for the all-Chronicle family, so every op contributes exactly one prerequisite at
@@ -313,8 +313,8 @@ impl ConnectedClient {
     /// trips and seal an issue-ordered [`RawLatencies`].
     ///
     /// For the message family the measured write is the `message` insert; for a Chronicle dose it is
-    /// the `message_visibility` insert (whose prerequisite chronicle row was already confirmed in
-    /// phase A). No prerequisite issue is interleaved here, so the measured writes are genuinely
+    /// the `chronicle_message` insert (whose prerequisite `message_visibility` row was already
+    /// confirmed in phase A). No prerequisite issue is interleaved here, so the measured writes are genuinely
     /// back-to-back. The measured interval is kept free of harness-side allocation: every owned
     /// reducer argument (the message payload) and the callback's `Sender` clone are prebuilt *before*
     /// `Instant::now()`, so only the timestamp capture and the generated issue call fall inside it.
@@ -451,7 +451,7 @@ fn collect_prerequisite_batch(
             }
             PrerequisiteMessage::Failed { index, error } => {
                 return Err(anyhow!(
-                    "prerequisite chronicle_message write index {index} failed: {error}"
+                    "prerequisite message_visibility write index {index} failed: {error}"
                 ));
             }
         }
