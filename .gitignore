@@ -1,2 +1,8 @@
 /target
 
+# direnv's local Nix devshell cache — machine-local, never tracked.
+/.direnv/
+
+# Transient generator swap directories (scripts/generate.nu); present only mid-run.
+/experiment_harness/src/.module_artifact.staged/
+/experiment_harness/src/.module_artifact.backup/

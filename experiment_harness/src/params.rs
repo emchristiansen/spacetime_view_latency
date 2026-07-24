@@ -1,0 +1,141 @@
+//! Preregistered experiment parameters.
+//!
+//! The dose ladder is inherited verbatim from `roundtrip_latency_test/src/main.rs`
+//! for direct comparability with Anton's baseline (spec: "Dataset and multi-identity
+//! design"), not derived from the latency hypotheses. The block count is the fixed
+//! preregistered sample from the classification protocol.
+
+/// Rows written per dose batch.
+pub(crate) const BATCH_SIZE: u64 = 1_000;
+
+/// [`BATCH_SIZE`] as a `usize`, for use as an array length. The conversion is guarded by a
+/// compile-time round-trip assertion rather than a bare `as` cast, so a platform (or a future
+/// `BATCH_SIZE`) on which the value does not fit a `usize` fails to compile instead of silently
+/// truncating the array length.
+pub(crate) const BATCH_SIZE_USIZE: usize = {
+    let as_usize = BATCH_SIZE as usize;
+    assert!(
+        as_usize as u64 == BATCH_SIZE,
+        "BATCH_SIZE does not fit in usize on this platform"
+    );
+    as_usize
+};
+
+/// Number of cumulative doses (`1,000, 2,000, …, 10,000`).
+pub(crate) const NUM_DOSES: u64 = 10;
+
+/// [`NUM_DOSES`] as a `usize`, for use as an array/iterator length bound. Guarded by a compile-time
+/// round-trip assertion rather than a bare `as` cast, mirroring [`BATCH_SIZE_USIZE`], so a platform on
+/// which the value does not fit a `usize` fails to compile instead of silently truncating.
+pub(crate) const NUM_DOSES_USIZE: usize = {
+    let as_usize = NUM_DOSES as usize;
+    assert!(
+        as_usize as u64 == NUM_DOSES,
+        "NUM_DOSES does not fit in usize on this platform"
+    );
+    as_usize
+};
+
+/// The measured identity M's pinned result-slice size in `UnrelatedGrowth` — held
+/// fixed while the growth driver G alone drives `N_total` (spec: "Dataset and
+/// multi-identity design"; Implementation-Time Decision "Preregister concrete
+/// multi-identity cardinalities"). Ten keeps M deliberately small and fixed.
+pub(crate) const M_SLICE_ROWS: u64 = 10;
+
+/// The growth driver G's pinned unrelated size in `OwnSliceGrowth` — 1,000 logical
+/// rows for message arms or 1,000 logical visibility/message pairs for Chronicle
+/// arms, held fixed while M2 alone drives `N_own` (spec: same). One full dose gives a
+/// simple nonzero unrelated baseline.
+pub(crate) const OWN_SLICE_BASELINE: u64 = 1_000;
+
+/// JWT issuer domain-separating the deterministic non-subscribing growth-role
+/// identity derived via `Identity::from_claims` (spec: "Derive the non-subscribing
+/// growth role G deterministically with `Identity::from_claims`, domain-separated by
+/// the experiment identifier, schedule seed, cell, and role"). Only G uses
+/// `from_claims`; the measured role is the server-issued connection identity.
+pub(crate) const EXPERIMENT_ISSUER: &str = "view-read-set-experiment";
+
+/// Domain-separation label for the deterministic global block-order permutation. The
+/// schedule seed and each block's `(cell canonical tag, block index)` coordinate are
+/// hashed under this label to derive a stable pseudo-random ordering key (spec: "Controls
+/// and execution" — "Randomize the temporal order of all arm/regime/block products
+/// globally from the recorded seed"). Named so a rename cannot silently move every seeded
+/// ordering against a recorded seed.
+pub(crate) const BLOCK_ORDER_DOMAIN: &str = "view-read-set-experiment:block-order";
+
+/// Domain-separation label for the per-block arm/control run-order randomization, kept
+/// distinct from [`BLOCK_ORDER_DOMAIN`] so the arm/control bit is a distinct
+/// domain-separated derivation rather than a reuse of the block-order key (spec: "The
+/// arm/control order within each block is randomized").
+pub(crate) const ARM_CONTROL_ORDER_DOMAIN: &str = "view-read-set-experiment:arm-control-order";
+
+/// The fixed row payload written for every seeded row of every role. A single
+/// constant keeps returned columns and payload width identical across matched
+/// arm/control runs and across roles (spec: "Keep returned columns and payload width
+/// equivalent across matched arm/control runs"), so payload never confounds a
+/// result-set comparison.
+pub(crate) const ROW_PAYLOAD: &str = "view-read-set-experiment-fixed-payload";
+
+/// First primary key (`Message.id` / `MessageVisibility.id` / `ChronicleMessage.uuid`)
+/// assigned to the measured role's rows. The measured role (M or M2) never coexists
+/// with itself across regimes, so it always starts at zero.
+pub(crate) const MEASURED_KEY_BASE: u64 = 0;
+
+/// First primary key assigned to the growth driver G's rows. Spaced a full billion
+/// keys above the measured base so the two roles' key spaces stay disjoint across the
+/// entire dose ladder (max 10,000 keys per role), making a primary-key collision
+/// between roles structurally impossible.
+pub(crate) const GROWTH_KEY_BASE: u64 = 1_000_000_000;
+
+/// Milliseconds between dose batches, outside the measured confirmed round trip.
+pub(crate) const BATCH_DELAY_MS: u64 = 100;
+
+/// Exactly this many complete randomized repetition blocks per arm/regime cell.
+/// The distribution-free order-statistic interval assumes this fixed sample; never
+/// stop early or extend (spec: "Classification").
+pub(crate) const REPETITION_BLOCKS: u32 = 30;
+
+/// Confirmed reads are enabled for every primary comparison to delimit the measured
+/// round trip and match Anton's baseline.
+pub(crate) const CONFIRMED_READS: bool = true;
+
+/// Expected semantic version of the official CLI and standalone binaries.
+pub(crate) const EXPECTED_VERSION: &str = "2.7.0";
+
+/// Expected release commit of the official Nix-packaged 2.7.0 (`v2.7.0-hotfix3`)
+/// CLI/standalone, verified directly by building and running the pinned binary
+/// (spec: "Pin the new pass to the latest published 2.7.0-family distribution,
+/// `v2.7.0-hotfix3`").
+pub(crate) const EXPECTED_RELEASE_COMMIT: &str = "d220349adb7af7eefa810eb08a185609356b83f6";
+
+/// Campaign's fixed staging-subdirectory name under `<campaign-root>/`, holding the one
+/// non-authoritative partial artifact (spec: "`<campaign-root>/staging/
+/// campaign-seed20260717.ndjson.partial`").
+pub(crate) const CAMPAIGN_STAGING_DIRNAME: &str = "staging";
+
+/// Campaign's one fixed, non-authoritative staged artifact's filename under
+/// `<campaign-root>/staging/` (spec: "Campaign ... exclusively creates
+/// `<campaign-root>/staging/campaign-seed20260717.ndjson.partial`").
+pub(crate) const PARTIAL_CAMPAIGN_FILENAME: &str = "campaign-seed20260717.ndjson.partial";
+
+/// The promoted corrected-v2 campaign NDJSON's fixed filename, identical inside Analyze's staging
+/// directory and in the final published bundle.
+pub(crate) const CORRECTED_V2_NDJSON_FILENAME: &str = "campaign-seed20260717-corrected-v2.ndjson";
+
+/// The promoted corrected-v2 report JSON's fixed filename, identical inside Analyze's staging
+/// directory and in the final published bundle.
+pub(crate) const CORRECTED_V2_REPORT_FILENAME: &str = "report-seed20260717-corrected-v2.json";
+
+/// The fixed final directory name Analyze's staging directory is atomically renamed to (spec:
+/// "atomically rename the complete directory to deterministic
+/// `<campaign-root>/campaign-seed20260717-corrected-v2/`").
+pub(crate) const CORRECTED_V2_DIRNAME: &str = "campaign-seed20260717-corrected-v2";
+
+/// Suffix appended to [`CORRECTED_V2_DIRNAME`] to name Analyze's staging sibling directory before the
+/// atomic rename to the final bundle name (spec: "exclusively creates deterministic
+/// `<campaign-root>/campaign-seed20260717-corrected-v2.staging/`").
+pub(crate) const CORRECTED_V2_STAGING_SUFFIX: &str = ".staging";
+
+/// Suffix appended to each corrected-v2 bundle artifact's filename to name its digest sidecar (spec:
+/// "corresponding `.sha256` sidecars").
+pub(crate) const SHA256_SIDECAR_SUFFIX: &str = ".sha256";
