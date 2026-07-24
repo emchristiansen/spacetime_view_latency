@@ -3,8 +3,8 @@ resolver = "2"
 members = ["module", "roundtrip_latency_test", "experiment_module", "experiment_harness"]
 
 [workspace.dependencies]
-spacetimedb = "=2.6.1"
-spacetimedb-sdk = "=2.6.1"
+spacetimedb = "=2.7.0"
+spacetimedb-sdk = "=2.7.0"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 semver = { version = "1", features = ["serde"] }

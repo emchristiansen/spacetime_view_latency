@@ -100,11 +100,13 @@ pub(crate) const REPETITION_BLOCKS: u32 = 30;
 pub(crate) const CONFIRMED_READS: bool = true;
 
 /// Expected semantic version of the official CLI and standalone binaries.
-pub(crate) const EXPECTED_VERSION: &str = "2.6.1";
+pub(crate) const EXPECTED_VERSION: &str = "2.7.0";
 
-/// Expected release commit of the official Nix-packaged 2.6.1 CLI/standalone,
-/// matching Anton's retest report (spec: "Official 2.6.1 server provisioning").
-pub(crate) const EXPECTED_RELEASE_COMMIT: &str = "052c83fe984a4c4eb7bb4f9afa5c6b1903891d87";
+/// Expected release commit of the official Nix-packaged 2.7.0 (`v2.7.0-hotfix3`)
+/// CLI/standalone, verified directly by building and running the pinned binary
+/// (spec: "Pin the new pass to the latest published 2.7.0-family distribution,
+/// `v2.7.0-hotfix3`").
+pub(crate) const EXPECTED_RELEASE_COMMIT: &str = "d220349adb7af7eefa810eb08a185609356b83f6";
 
 /// Campaign's fixed staging-subdirectory name under `<campaign-root>/`, holding the one
 /// non-authoritative partial artifact (spec: "`<campaign-root>/staging/

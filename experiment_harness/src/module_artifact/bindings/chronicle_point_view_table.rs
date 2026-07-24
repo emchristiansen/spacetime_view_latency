@@ -18,6 +18,18 @@ pub struct ChroniclePointViewTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `chronicle_point_view`.
+pub struct ChroniclePointViewTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for ChroniclePointViewTableAccessor {
+    type Row = ChronicleMessage;
+    type Handle<'db> = ChroniclePointViewTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.chronicle_point_view()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `chronicle_point_view`.
 ///
@@ -41,6 +53,18 @@ impl ChroniclePointViewTableAccess for super::RemoteTables {
 
 pub struct ChroniclePointViewInsertCallbackId(__sdk::CallbackId);
 pub struct ChroniclePointViewDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for ChroniclePointViewTableHandle<'ctx> {
+    type Row = ChronicleMessage;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ChronicleMessage> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for ChroniclePointViewTableHandle<'ctx> {
     type Row = ChronicleMessage;
@@ -66,6 +90,36 @@ impl<'ctx> __sdk::Table for ChroniclePointViewTableHandle<'ctx> {
         self.imp.remove_on_insert(callback.0)
     }
 
+    type DeleteCallbackId = ChroniclePointViewDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChroniclePointViewDeleteCallbackId {
+        ChroniclePointViewDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: ChroniclePointViewDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithInsert for ChroniclePointViewTableHandle<'ctx> {
+    type InsertCallbackId = ChroniclePointViewInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChroniclePointViewInsertCallbackId {
+        ChroniclePointViewInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: ChroniclePointViewInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for ChroniclePointViewTableHandle<'ctx> {
     type DeleteCallbackId = ChroniclePointViewDeleteCallbackId;
 
     fn on_delete(

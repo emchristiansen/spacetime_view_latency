@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # Regenerate the coupled generated module artifacts from `experiment_module`. Run inside
-# the flake devshell so SPACETIMEDB_2_6_1_BIN is set
+# the flake devshell so SPACETIMEDB_2_7_0_BIN is set
 # (e.g. `direnv exec . scripts/generate.nu`). Rerun whenever `experiment_module` changes.
 #
 # Provenance chain (why this exists): build the module WASM once, hash THAT exact
@@ -23,10 +23,10 @@ def main [] {
     let repo = ($env.FILE_PWD | path dirname)
 
     # Explicit env-key presence check — no default.
-    if ("SPACETIMEDB_2_6_1_BIN" not-in $env) {
-        error make { msg: "SPACETIMEDB_2_6_1_BIN is unset — run inside the flake devshell (direnv exec .)" }
+    if ("SPACETIMEDB_2_7_0_BIN" not-in $env) {
+        error make { msg: "SPACETIMEDB_2_7_0_BIN is unset — run inside the flake devshell (direnv exec .)" }
     }
-    let bin = $env.SPACETIMEDB_2_6_1_BIN
+    let bin = $env.SPACETIMEDB_2_7_0_BIN
     let cli = ([$bin "spacetimedb-cli"] | path join)
     if not ($cli | path exists) {
         error make { msg: $"pinned spacetimedb-cli not found at ($cli)" }

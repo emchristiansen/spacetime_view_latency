@@ -1,5 +1,5 @@
 {
-  description = "SpacetimeDB 2.6.1 view read-set experiment: official prebuilt server/CLI + pinned Rust toolchain";
+  description = "SpacetimeDB 2.7.0 view read-set experiment: official prebuilt server/CLI + pinned Rust toolchain";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -21,9 +21,9 @@
           config.allowUnfreePredicate = pkg: (nixpkgs.lib.getName pkg) == "spacetimedb";
         };
 
-        # Official prebuilt 2.6.1 CLI + standalone, resolved declaratively from
-        # this flake (not ambient PATH, not a /nix/store glob) — spec: "Official
-        # 2.6.1 server provisioning".
+        # Official prebuilt 2.7.0 (v2.7.0-hotfix3) CLI + standalone, resolved declaratively from
+        # this flake (not ambient PATH, not a /nix/store glob) — spec: "Pin the new
+        # pass to the latest published 2.7.0-family distribution, `v2.7.0-hotfix3`".
         spacetimedb = pkgs.callPackage ./nix/spacetimedb.nix { inherit system; };
 
         # Pinned Rust toolchain with the `wasm32-unknown-unknown` target the
@@ -63,7 +63,7 @@
           # Absolute bin directory of the pinned official binaries. The harness
           # reads this (fail-fast if unset) to resolve `spacetimedb-cli` and
           # `spacetimedb-standalone` by absolute path — no ambient PATH, no glob.
-          SPACETIMEDB_2_6_1_BIN = "${spacetimedb}/bin";
+          SPACETIMEDB_2_7_0_BIN = "${spacetimedb}/bin";
         };
       });
 }

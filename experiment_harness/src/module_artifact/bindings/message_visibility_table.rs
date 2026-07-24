@@ -18,6 +18,18 @@ pub struct MessageVisibilityTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `message_visibility`.
+pub struct MessageVisibilityTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for MessageVisibilityTableAccessor {
+    type Row = MessageVisibility;
+    type Handle<'db> = MessageVisibilityTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.message_visibility()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `message_visibility`.
 ///
@@ -41,6 +53,18 @@ impl MessageVisibilityTableAccess for super::RemoteTables {
 
 pub struct MessageVisibilityInsertCallbackId(__sdk::CallbackId);
 pub struct MessageVisibilityDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for MessageVisibilityTableHandle<'ctx> {
+    type Row = MessageVisibility;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = MessageVisibility> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for MessageVisibilityTableHandle<'ctx> {
     type Row = MessageVisibility;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for MessageVisibilityTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for MessageVisibilityTableHandle<'ctx> {
+    type InsertCallbackId = MessageVisibilityInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageVisibilityInsertCallbackId {
+        MessageVisibilityInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: MessageVisibilityInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for MessageVisibilityTableHandle<'ctx> {
+    type DeleteCallbackId = MessageVisibilityDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageVisibilityDeleteCallbackId {
+        MessageVisibilityDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: MessageVisibilityDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct MessageVisibilityUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for MessageVisibilityTableHandle<'ctx> {
+    type UpdateCallbackId = MessageVisibilityUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> MessageVisibilityUpdateCallbackId {
+        MessageVisibilityUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: MessageVisibilityUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for MessageVisibilityTableHandle<'ctx> {
     type UpdateCallbackId = MessageVisibilityUpdateCallbackId;
 
     fn on_update(

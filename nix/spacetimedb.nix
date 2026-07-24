@@ -2,8 +2,9 @@
 #
 # Copied/adapted (overlay -> callPackage form) from the established pattern at
 # ~/.nix-config/overlays/spacetimedb.nix. The experiment repo must provision the
-# official *released* 2.6.1 distribution through its own flake/devshell (spec:
-# "Official 2.6.1 server provisioning"); it must NOT build the server from source
+# official *released* 2.7.0 distribution (v2.7.0-hotfix3) through its own
+# flake/devshell (spec: "Pin the new pass to the latest published 2.7.0-family
+# distribution, `v2.7.0-hotfix3`"); it must NOT build the server from source
 # (the upstream SpacetimeDB flake compiles via crane) and must NOT use an ambient
 # PATH `spacetime`. nixpkgs' `spacetimedb` is unfree (no cache) and would source
 # build, so we fetch the official prebuilt release artifact, pinned by SRI hash:
@@ -21,12 +22,12 @@
 # platform `hash` (get it via `nix store prefetch-file <url>`).
 { lib, stdenv, stdenvNoCC, fetchurl, autoPatchelfHook, system }:
 let
-  version = "2.6.1";
+  version = "2.7.0-hotfix3";
 
   sources = {
     "aarch64-linux" = {
       asset = "spacetime-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-Cds0KPsS+4z5y7A8xTmMSo0CNEhLHciPEFkRmUYgaP0=";
+      hash = "sha256-vv0T95bZPQxbfBdRxz0Vz9CCGZDpXdkFm/FWPTRLqeo=";
     };
   };
 

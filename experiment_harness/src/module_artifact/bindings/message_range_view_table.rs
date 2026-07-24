@@ -18,6 +18,18 @@ pub struct MessageRangeViewTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `message_range_view`.
+pub struct MessageRangeViewTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for MessageRangeViewTableAccessor {
+    type Row = Message;
+    type Handle<'db> = MessageRangeViewTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.message_range_view()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `message_range_view`.
 ///
@@ -39,6 +51,18 @@ impl MessageRangeViewTableAccess for super::RemoteTables {
 
 pub struct MessageRangeViewInsertCallbackId(__sdk::CallbackId);
 pub struct MessageRangeViewDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for MessageRangeViewTableHandle<'ctx> {
+    type Row = Message;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = Message> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for MessageRangeViewTableHandle<'ctx> {
     type Row = Message;
@@ -64,6 +88,36 @@ impl<'ctx> __sdk::Table for MessageRangeViewTableHandle<'ctx> {
         self.imp.remove_on_insert(callback.0)
     }
 
+    type DeleteCallbackId = MessageRangeViewDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageRangeViewDeleteCallbackId {
+        MessageRangeViewDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: MessageRangeViewDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithInsert for MessageRangeViewTableHandle<'ctx> {
+    type InsertCallbackId = MessageRangeViewInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageRangeViewInsertCallbackId {
+        MessageRangeViewInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: MessageRangeViewInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for MessageRangeViewTableHandle<'ctx> {
     type DeleteCallbackId = MessageRangeViewDeleteCallbackId;
 
     fn on_delete(

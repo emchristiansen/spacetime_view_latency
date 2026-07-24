@@ -18,6 +18,18 @@ pub struct MessageQueryViewTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `message_query_view`.
+pub struct MessageQueryViewTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for MessageQueryViewTableAccessor {
+    type Row = Message;
+    type Handle<'db> = MessageQueryViewTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.message_query_view()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `message_query_view`.
 ///
@@ -39,6 +51,18 @@ impl MessageQueryViewTableAccess for super::RemoteTables {
 
 pub struct MessageQueryViewInsertCallbackId(__sdk::CallbackId);
 pub struct MessageQueryViewDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for MessageQueryViewTableHandle<'ctx> {
+    type Row = Message;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = Message> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for MessageQueryViewTableHandle<'ctx> {
     type Row = Message;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for MessageQueryViewTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for MessageQueryViewTableHandle<'ctx> {
+    type InsertCallbackId = MessageQueryViewInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageQueryViewInsertCallbackId {
+        MessageQueryViewInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: MessageQueryViewInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for MessageQueryViewTableHandle<'ctx> {
+    type DeleteCallbackId = MessageQueryViewDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> MessageQueryViewDeleteCallbackId {
+        MessageQueryViewDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: MessageQueryViewDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct MessageQueryViewUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for MessageQueryViewTableHandle<'ctx> {
+    type UpdateCallbackId = MessageQueryViewUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> MessageQueryViewUpdateCallbackId {
+        MessageQueryViewUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: MessageQueryViewUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for MessageQueryViewTableHandle<'ctx> {
     type UpdateCallbackId = MessageQueryViewUpdateCallbackId;
 
     fn on_update(

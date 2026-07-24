@@ -18,6 +18,18 @@ pub struct ChronicleQueryPkViewTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `chronicle_query_pk_view`.
+pub struct ChronicleQueryPkViewTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for ChronicleQueryPkViewTableAccessor {
+    type Row = ChronicleMessage;
+    type Handle<'db> = ChronicleQueryPkViewTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.chronicle_query_pk_view()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `chronicle_query_pk_view`.
 ///
@@ -41,6 +53,18 @@ impl ChronicleQueryPkViewTableAccess for super::RemoteTables {
 
 pub struct ChronicleQueryPkViewInsertCallbackId(__sdk::CallbackId);
 pub struct ChronicleQueryPkViewDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for ChronicleQueryPkViewTableHandle<'ctx> {
+    type Row = ChronicleMessage;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ChronicleMessage> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for ChronicleQueryPkViewTableHandle<'ctx> {
     type Row = ChronicleMessage;
@@ -80,9 +104,54 @@ impl<'ctx> __sdk::Table for ChronicleQueryPkViewTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for ChronicleQueryPkViewTableHandle<'ctx> {
+    type InsertCallbackId = ChronicleQueryPkViewInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChronicleQueryPkViewInsertCallbackId {
+        ChronicleQueryPkViewInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: ChronicleQueryPkViewInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for ChronicleQueryPkViewTableHandle<'ctx> {
+    type DeleteCallbackId = ChronicleQueryPkViewDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChronicleQueryPkViewDeleteCallbackId {
+        ChronicleQueryPkViewDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: ChronicleQueryPkViewDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct ChronicleQueryPkViewUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for ChronicleQueryPkViewTableHandle<'ctx> {
+    type UpdateCallbackId = ChronicleQueryPkViewUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> ChronicleQueryPkViewUpdateCallbackId {
+        ChronicleQueryPkViewUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: ChronicleQueryPkViewUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for ChronicleQueryPkViewTableHandle<'ctx> {
     type UpdateCallbackId = ChronicleQueryPkViewUpdateCallbackId;
 
     fn on_update(

@@ -5,8 +5,8 @@ use anyhow::{anyhow, ensure, Result};
 /// Tracks that each of a fixed number of expected confirmations — addressed by issue index — has
 /// been observed exactly once. Unlike [`DoseLatencyAccumulator`](super::dose_latency_accumulator::DoseLatencyAccumulator)
 /// it carries no payload; it only proves *presence and single-fire*, for confirmations whose success
-/// contributes no latency sample (a Chronicle pair's prerequisite `chronicle_message` insert, whose
-/// job is only to land before its measured `message_visibility` row).
+/// contributes no latency sample (a Chronicle pair's prerequisite `message_visibility` insert, whose
+/// job is only to land before its measured `chronicle_message` row).
 ///
 /// The barrier must require the exact expected set, not merely the measured samples: a prerequisite
 /// callback can fail, and if the barrier stopped as soon as every measured confirmation arrived, a

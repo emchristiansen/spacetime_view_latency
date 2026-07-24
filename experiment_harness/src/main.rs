@@ -1,4 +1,4 @@
-//! SpacetimeDB 2.6.1 view read-set experiment harness.
+//! SpacetimeDB 2.7.0 view read-set experiment harness.
 //!
 //! Phase 2 (in progress): the typed plan model, the version-selection/assertion and
 //! immutable run-manifest types, and the server-provisioning capabilities/driver
@@ -44,7 +44,7 @@ use crate::provision::provision::{provision_and_run, provision_run};
 /// Command-line interface. The mode is an explicit subcommand — no implicit default or
 /// boolean flag selects effectful behavior.
 #[derive(Parser)]
-#[command(about = "SpacetimeDB 2.6.1 view read-set experiment harness")]
+#[command(about = "SpacetimeDB 2.7.0 view read-set experiment harness")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -1,4 +1,4 @@
-//! Official 2.6.1 server provisioning capabilities and the run driver.
+//! Official 2.7.0 server provisioning capabilities and the run driver.
 //!
 //! Binary-internal: entities are crate-visible (`pub(crate)`). Each provisioning capability is
 //! an owning type that gates a live resource and requires explicit consuming cleanup, with a

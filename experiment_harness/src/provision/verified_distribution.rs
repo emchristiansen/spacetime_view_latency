@@ -1,4 +1,4 @@
-//! The verified official 2.6.1 distribution: both binaries resolved and version-checked.
+//! The verified official 2.7.0 distribution: both binaries resolved and version-checked.
 
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
@@ -13,8 +13,9 @@ use crate::manifest::verified_standalone::VerifiedStandalone;
 
 /// Environment variable the flake devshell exports with the absolute bin directory of the
 /// pinned official binaries (see `flake.nix`). The harness reads it fail-fast — no default,
-/// no ambient PATH, no `/nix/store` glob (spec: "Official 2.6.1 server provisioning").
-const STORE_BIN_DIR_ENV: &str = "SPACETIMEDB_2_6_1_BIN";
+/// no ambient PATH, no `/nix/store` glob (spec: "Pin the new pass to the latest published
+/// 2.7.0-family distribution, `v2.7.0-hotfix3`").
+const STORE_BIN_DIR_ENV: &str = "SPACETIMEDB_2_7_0_BIN";
 
 /// File name of the CLI executable inside the store bin directory.
 const CLI_EXE_NAME: &str = "spacetimedb-cli";
@@ -28,7 +29,7 @@ const STANDALONE_EXE_NAME: &str = "spacetimedb-standalone";
 /// name/hash is deliberately not asserted (that is the flake's pin, not the harness's to guess).
 const NIX_STORE_ROOT: &str = "/nix/store";
 
-/// The single official Nix `spacetimedb-2.6.1` store output, with both executables resolved
+/// The single official Nix `spacetimedb-2.7.0-hotfix3` store output, with both executables resolved
 /// by absolute path from the same bin directory and each independently version-checked
 /// (spec: "Resolve both from the same Nix store output"; "do not equate the CLI version with
 /// the server version"). Constructed only by [`Self::resolve`], which fails before any run on
@@ -46,7 +47,7 @@ impl VerifiedDistribution {
     /// Reads [`STORE_BIN_DIR_ENV`] (fail-fast if unset), canonicalizes it, resolves both
     /// executables by absolute path under it, checks each is an executable regular file with
     /// that exact parent, and parses/verifies each `--version` output against the expected
-    /// 2.6.1 version (and, for the CLI, release commit).
+    /// 2.7.0 version (and, for the CLI, release commit).
     pub(crate) fn resolve() -> Result<Self> {
         let raw_bin_dir = env::var(STORE_BIN_DIR_ENV).with_context(|| {
             format!("{STORE_BIN_DIR_ENV} is unset — run inside the flake devshell (direnv exec .)")

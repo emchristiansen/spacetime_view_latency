@@ -18,6 +18,18 @@ pub struct ChronicleMessageTableHandle<'ctx> {
     ctx: std::marker::PhantomData<&'ctx super::RemoteTables>,
 }
 
+/// Lifetime-aware accessor marker for the table `chronicle_message`.
+pub struct ChronicleMessageTableAccessor;
+
+impl __sdk::TableAccessor<super::RemoteTables> for ChronicleMessageTableAccessor {
+    type Row = ChronicleMessage;
+    type Handle<'db> = ChronicleMessageTableHandle<'db>;
+
+    fn get<'db>(db: &'db super::RemoteTables) -> Self::Handle<'db> {
+        db.chronicle_message()
+    }
+}
+
 #[allow(non_camel_case_types)]
 /// Extension trait for access to the table `chronicle_message`.
 ///
@@ -39,6 +51,18 @@ impl ChronicleMessageTableAccess for super::RemoteTables {
 
 pub struct ChronicleMessageInsertCallbackId(__sdk::CallbackId);
 pub struct ChronicleMessageDeleteCallbackId(__sdk::CallbackId);
+
+impl<'ctx> __sdk::TableLike for ChronicleMessageTableHandle<'ctx> {
+    type Row = ChronicleMessage;
+    type EventContext = super::EventContext;
+
+    fn count(&self) -> u64 {
+        self.imp.count()
+    }
+    fn iter(&self) -> impl Iterator<Item = ChronicleMessage> + '_ {
+        self.imp.iter()
+    }
+}
 
 impl<'ctx> __sdk::Table for ChronicleMessageTableHandle<'ctx> {
     type Row = ChronicleMessage;
@@ -78,9 +102,54 @@ impl<'ctx> __sdk::Table for ChronicleMessageTableHandle<'ctx> {
     }
 }
 
+impl<'ctx> __sdk::WithInsert for ChronicleMessageTableHandle<'ctx> {
+    type InsertCallbackId = ChronicleMessageInsertCallbackId;
+
+    fn on_insert(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChronicleMessageInsertCallbackId {
+        ChronicleMessageInsertCallbackId(self.imp.on_insert(Box::new(callback)))
+    }
+
+    fn remove_on_insert(&self, callback: ChronicleMessageInsertCallbackId) {
+        self.imp.remove_on_insert(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithDelete for ChronicleMessageTableHandle<'ctx> {
+    type DeleteCallbackId = ChronicleMessageDeleteCallbackId;
+
+    fn on_delete(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row) + Send + 'static,
+    ) -> ChronicleMessageDeleteCallbackId {
+        ChronicleMessageDeleteCallbackId(self.imp.on_delete(Box::new(callback)))
+    }
+
+    fn remove_on_delete(&self, callback: ChronicleMessageDeleteCallbackId) {
+        self.imp.remove_on_delete(callback.0)
+    }
+}
+
 pub struct ChronicleMessageUpdateCallbackId(__sdk::CallbackId);
 
 impl<'ctx> __sdk::TableWithPrimaryKey for ChronicleMessageTableHandle<'ctx> {
+    type UpdateCallbackId = ChronicleMessageUpdateCallbackId;
+
+    fn on_update(
+        &self,
+        callback: impl FnMut(&Self::EventContext, &Self::Row, &Self::Row) + Send + 'static,
+    ) -> ChronicleMessageUpdateCallbackId {
+        ChronicleMessageUpdateCallbackId(self.imp.on_update(Box::new(callback)))
+    }
+
+    fn remove_on_update(&self, callback: ChronicleMessageUpdateCallbackId) {
+        self.imp.remove_on_update(callback.0)
+    }
+}
+
+impl<'ctx> __sdk::WithUpdate for ChronicleMessageTableHandle<'ctx> {
     type UpdateCallbackId = ChronicleMessageUpdateCallbackId;
 
     fn on_update(
