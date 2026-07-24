@@ -1,6 +1,6 @@
 //! A prerequisite write whose callback reports a failure fails phase A loud rather than proceeding to
 //! the measured batch: the error names the failing write's issue index and carries the underlying
-//! text, so a failed prerequisite can never precede a measured write on a missing chronicle row.
+//! text, so a failed prerequisite can never precede a measured write on a missing message_visibility row.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -26,7 +26,7 @@ fn a_prerequisite_failure_is_rejected() {
         .expect_err("a prerequisite callback failure must be rejected");
     let rendered = error.to_string();
     assert!(
-        rendered.contains("chronicle_message write index 5"),
+        rendered.contains("message_visibility write index 5"),
         "the error names the failing prerequisite write: {rendered}"
     );
     assert!(

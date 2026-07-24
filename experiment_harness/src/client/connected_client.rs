@@ -261,8 +261,8 @@ impl ConnectedClient {
              got {chronicle_pairs} chronicle pairs in a {BATCH_SIZE}-write dose"
         );
 
-        // Phase A: for a Chronicle dose, land and confirm every prerequisite chronicle row before any
-        // measured write is issued. The message family skips this phase entirely.
+        // Phase A: for a Chronicle dose, land and confirm every prerequisite message_visibility row
+        // before any measured write is issued. The message family skips this phase entirely.
         if chronicle_pairs == BATCH_SIZE_USIZE {
             self.confirm_prerequisites(operations)?;
         }
