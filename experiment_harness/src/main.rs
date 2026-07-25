@@ -188,8 +188,10 @@ enum Command {
         /// Path to the built module WASM whose bytes are hash-verified before each publication.
         #[arg(long)]
         module_wasm: PathBuf,
-        /// Explicit seed driving both the frozen block/arm-control order and every attempt's
-        /// deterministic data — one seed, so the order and the seeded data cannot diverge.
+        /// Explicit seed driving the frozen block and arm/control execution order. The seeded data
+        /// is deliberately seed-independent: the five blocks are replicates of one preregistered
+        /// configuration, so every attempt seeds the identical key ranges, ownership, and payload
+        /// and only the order in which they run varies.
         #[arg(long)]
         seed: u64,
         /// Path the durable NDJSON ledger is created at. Created exclusively; an existing path is a

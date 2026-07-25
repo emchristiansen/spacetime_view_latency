@@ -10,12 +10,14 @@ use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Identity, Table};
 
 use crate::dataset::seed_op::SeedOp;
+use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
-    DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess, ReducerEventContext,
+    DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess,
+    ReducerEventContext,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -28,6 +30,9 @@ use crate::params::{BATCH_SIZE, BATCH_SIZE_USIZE, CONFIRMED_READS, ROW_PAYLOAD};
 /// module's `#[view(accessor = entity_owner_sender_view, …)]`, so it is a named constant rather
 /// than an inline literal.
 const TABLE_ENTITY_OWNER_SENDER_VIEW: &str = "entity_owner_sender_view";
+/// The `entity_owner` base-table subscription query name — the same kind of cross-component
+/// contract, with the module's `#[table(accessor = entity_owner, public)]`.
+const TABLE_ENTITY_OWNER: &str = "entity_owner";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -240,10 +245,86 @@ impl ConnectedClient {
     /// measurement primitive. Built directly on [`Self::subscribe_and_await_applied`], the same
     /// generic primitive [`Self::subscribe_and_read`] uses for the historical arms.
     pub(crate) fn subscribe_and_read_entity_owner_sender_view(&self) -> Result<Vec<EntityOwner>> {
-        self.subscribe_and_await_applied(format!(
-            "SELECT * FROM {TABLE_ENTITY_OWNER_SENDER_VIEW}"
-        ))?;
-        Ok(self.conn.db.entity_owner_sender_view().iter().collect())
+        self.subscribe_entity_owner_sender_view()?;
+        Ok(self.read_entity_owner_sender_view())
+    }
+
+    /// Subscribe to `entity_owner_sender_view` and block until its initial snapshot is applied,
+    /// **without** reading — the Arm's subscription. The measured driver subscribes once, after the
+    /// owned slice is seeded and before the ladder starts, then re-reads the cache after each rung;
+    /// that split is what [`Self::subscribe_and_read_entity_owner_sender_view`] cannot express. The
+    /// `subscribe`/`read_current` counterpart for this candidate.
+    pub(crate) fn subscribe_entity_owner_sender_view(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!("SELECT * FROM {TABLE_ENTITY_OWNER_SENDER_VIEW}"))
+    }
+
+    /// Read the caller-scoped view's currently-subscribed rows out of the live client cache,
+    /// issuing no new subscription.
+    pub(crate) fn read_entity_owner_sender_view(&self) -> Vec<EntityOwner> {
+        self.conn.db.entity_owner_sender_view().iter().collect()
+    }
+
+    /// Subscribe to the `entity_owner` base table and block until its initial snapshot is applied —
+    /// the matched **direct public-table control** for the `EntityOwnerSenderView` candidate. The
+    /// same subscription shape as the Arm's, differing only in naming the base table instead of the
+    /// sender-scoped view, so the two roles' plumbing cannot diverge.
+    pub(crate) fn subscribe_entity_owner(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!("SELECT * FROM {TABLE_ENTITY_OWNER}"))
+    }
+
+    /// Read the `entity_owner` base table's currently-subscribed rows out of the live client cache,
+    /// issuing no new subscription.
+    pub(crate) fn read_entity_owner(&self) -> Vec<EntityOwner> {
+        self.conn.db.entity_owner().iter().collect()
+    }
+
+    /// Measure one [`BATCH_SIZE`]-write `entity_owner` batch, returning the issue-ordered
+    /// [`RawLatencies`] — the `EntityOwnerSenderView` candidate's measured-write primitive.
+    ///
+    /// Structurally identical to [`Self::measure_writes`]' phase B, over `insert_entity_owner`
+    /// instead of the historical reducers and with no prerequisite phase (an `entity_owner` row has
+    /// no precondition row). The writes take consecutive `entity_uuid`s from `key_base` so the batch
+    /// occupies a contiguous, caller-allocated key range that cannot overlap another rung's.
+    ///
+    /// The measured interval is kept free of harness-side allocation exactly as the historical batch
+    /// does: the key, the owned `record` payload, and the callback's `Sender` clone are all prebuilt
+    /// *before* `Instant::now()`, so only the timestamp capture and the generated issue call fall
+    /// inside it. The barrier, the callback, and the whole-batch deadline are the historical
+    /// [`collect_measured_batch`] / [`measured_callback`] / [`MEASURED_BATCH_TIMEOUT`], reused
+    /// unchanged.
+    pub(crate) fn measure_entity_owner_batch(
+        &self,
+        key_base: u64,
+        owner: Identity,
+    ) -> Result<RawLatencies> {
+        let (tx, rx) = mpsc::channel::<MeasuredMessage>();
+
+        for index in 0..BATCH_SIZE_USIZE {
+            let offset = u64::try_from(index).expect("a batch index fits u64");
+            let entity_uuid = key_base
+                .checked_add(offset)
+                .expect("the Pilot's global key space must not overflow u64");
+            let record = PILOT_ROW_PAYLOAD.to_string();
+            let measured_tx = tx.clone();
+            let start = Instant::now();
+            self.conn
+                .reducers
+                .insert_entity_owner_then(
+                    entity_uuid,
+                    owner,
+                    record,
+                    measured_callback(index, start, measured_tx),
+                )
+                .map_err(|e| {
+                    anyhow!("issuing measured entity_owner write index {index}: {e:?}")
+                })?;
+        }
+
+        // Anchor the one whole-batch deadline now that issuing is done, matching the historical
+        // measured batch. `tx` outlives the barrier, so the channel cannot disconnect mid-batch and
+        // every stall is a timeout.
+        let deadline = Instant::now() + MEASURED_BATCH_TIMEOUT;
+        collect_measured_batch(rx, deadline)
     }
 
     /// Measure one cumulative dose as an Anton-shaped back-to-back measured batch, returning the

@@ -4,6 +4,8 @@
 //! candidate cannot move a historical constant against a recorded seed. Where a historical parameter
 //! already expresses the needed invariant it is reused rather than restated.
 
+use crate::params::BATCH_SIZE;
+
 /// The frozen `N_global` ladder each attempt walks progressively.
 ///
 /// The spec's frozen finite range for unrelated/global rows. Frozen means frozen: never extended,
@@ -12,6 +14,31 @@ pub(crate) const GLOBAL_ROW_LADDER: [u64; 6] = [1_000, 2_000, 4_000, 8_000, 16_0
 
 /// Number of rungs in [`GLOBAL_ROW_LADDER`], for use as an array length bound.
 pub(crate) const GLOBAL_ROW_LADDER_LEN: usize = GLOBAL_ROW_LADDER.len();
+
+/// Compile-time proof that the frozen ladder is walkable: strictly ascending, and every rung's
+/// increment is at least one measured batch.
+///
+/// The driver reaches a rung by seeding its increment and measuring the final [`BATCH_SIZE`] writes
+/// of that increment, so an increment smaller than a batch would have to measure writes belonging to
+/// the next rung. A non-ascending ladder underflows the subtraction here and also fails to compile.
+/// Both are properties of the frozen ladder, so they are proven where it is declared rather than
+/// re-checked per attempt.
+const _: () = {
+    let mut rung = 0usize;
+    while rung < GLOBAL_ROW_LADDER_LEN {
+        let increment = if rung == 0 {
+            GLOBAL_ROW_LADDER[0]
+        } else {
+            GLOBAL_ROW_LADDER[rung] - GLOBAL_ROW_LADDER[rung - 1]
+        };
+        assert!(
+            increment >= BATCH_SIZE,
+            "every GLOBAL_ROW_LADDER increment must be at least BATCH_SIZE, so a rung's measured \
+             batch fits inside the rows that rung adds"
+        );
+        rung += 1;
+    }
+};
 
 /// Exactly this many complete randomized matched blocks in the Pilot stage.
 ///
@@ -64,3 +91,20 @@ pub(crate) const GLOBAL_KEY_BASE: u64 = 1_000_000_000;
 /// The fixed `record` payload for every seeded and measured row, so payload width never confounds an
 /// Arm/Control comparison.
 pub(crate) const PILOT_ROW_PAYLOAD: &str = "entity-owner-pilot-fixed-payload";
+
+/// Compile-time proof that the two key spaces cannot collide or overflow.
+///
+/// The owned slice and the global slice share one `entity_uuid` primary key space, so an overlap
+/// would surface as an opaque duplicate-key reducer failure at the first rung rather than as the
+/// preregistration error it is. Proven where both bases are declared rather than trusted to the
+/// billion-key spacing staying larger than a future owned slice.
+const _: () = {
+    assert!(
+        OWNED_KEY_BASE + OWNED_SLICE_ROWS <= GLOBAL_KEY_BASE,
+        "the owned key space must end at or before GLOBAL_KEY_BASE"
+    );
+    assert!(
+        GLOBAL_KEY_BASE.checked_add(GLOBAL_ROW_LADDER[GLOBAL_ROW_LADDER_LEN - 1]).is_some(),
+        "the global key space must not overflow u64 at the top of the ladder"
+    );
+};

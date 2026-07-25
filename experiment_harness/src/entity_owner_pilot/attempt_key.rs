@@ -49,6 +49,13 @@ impl AttemptKey {
         }
     }
 
+    /// Whether this attempt measures the module view under test or its matched direct-table
+    /// control. The driver's sole branch: it selects the subscription target, the read-back, and
+    /// the expected result set together, so those three cannot disagree about which side is running.
+    pub(crate) fn role(self) -> RunRole {
+        self.role
+    }
+
     /// Whether two identities address the same logical slot — every component equal except the
     /// retry ordinal.
     pub(crate) fn same_logical_slot(self, other: Self) -> bool {

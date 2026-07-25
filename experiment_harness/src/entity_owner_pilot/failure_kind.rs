@@ -24,8 +24,4 @@ pub(crate) enum FailureKind {
     /// A semantic or authorization check over the observed result set failed — for the Arm, the
     /// sender-scoped view returning anything but exactly the measured identity's own rows.
     Semantics,
-    /// Disconnecting or tearing the server down failed after the measured work. Evidence already
-    /// collected stays valid; the attempt is still failed because isolation for what follows is no
-    /// longer established.
-    Teardown,
 }
