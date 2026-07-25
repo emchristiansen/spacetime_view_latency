@@ -5,26 +5,22 @@ use serde::Serialize;
 use crate::entity_owner_pilot::attempt_inventory::AttemptInventory;
 use crate::entity_owner_pilot::attempt_key::AttemptKey;
 use crate::entity_owner_pilot::attempt_outcome::AttemptOutcome;
-use crate::entity_owner_pilot::pilot_record_kind::PilotRecordKind;
 use crate::entity_owner_pilot::rung_evidence::RungEvidence;
 use crate::manifest::schedule_seed::ScheduleSeed;
 
 /// The body of one durable ledger line.
 ///
-/// The three variants are exactly the three things the Parked Frontier requires the NDJSON to
-/// contain — "block order, progressive rung evidence, and exactly one terminal
-/// Complete/Failed/NotRun record for each of the ten predeclared attempts" — so the ledger's
-/// contract and this enum are the same statement. A fourth thing cannot be written to the ledger,
-/// and none of the three can be omitted without the sink's own accounting noticing.
+/// The three variants are exactly the three things the ledger must contain — block order,
+/// progressive rung evidence, and one terminal disposition per predeclared attempt — so a fourth
+/// kind of line cannot be written.
 ///
-/// Every variant that belongs to an attempt carries the full [`AttemptKey`], not a reference or an
-/// index into the inventory. A ledger line is therefore independently interpretable: recovering what
-/// a rung measured never requires replaying the inventory record first, which matters precisely in
-/// the case the ledger exists for — a run that died partway.
+/// Every attempt-bearing variant carries the full [`AttemptKey`] rather than an index into the
+/// inventory, so a line is independently interpretable without replaying earlier lines — which
+/// matters precisely in the case the ledger exists for, a run that died partway.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum PilotRecord<'a> {
-    /// The frozen inventory in execution order, with the seed it was derived from. Written once,
-    /// before any attempt executes, so the recorded block order precedes the evidence it orders.
+    /// The frozen inventory in execution order with the seed it came from. Written once, before any
+    /// attempt executes, so the recorded order precedes the evidence it orders.
     Inventory {
         seed: ScheduleSeed,
         inventory: &'a AttemptInventory,
@@ -42,13 +38,17 @@ pub(crate) enum PilotRecord<'a> {
 }
 
 impl PilotRecord<'_> {
-    /// This record's kind, derived from its own variant so the tag written into the line's identity
-    /// can never disagree with the body that follows it.
-    pub(crate) fn kind(&self) -> PilotRecordKind {
+    /// This variant's name, for diagnostics only.
+    ///
+    /// A persist failure must name the record it lost, but on a *serialization* failure the body
+    /// cannot be rendered — hence a plain discriminant name rather than reading the serialized line.
+    /// This is not written into the record: serde's external tagging already emits the variant name
+    /// in the line itself.
+    pub(crate) fn variant_name(&self) -> &'static str {
         match self {
-            Self::Inventory { .. } => PilotRecordKind::Inventory,
-            Self::Rung { .. } => PilotRecordKind::Rung,
-            Self::Terminal { .. } => PilotRecordKind::Terminal,
+            Self::Inventory { .. } => "Inventory",
+            Self::Rung { .. } => "Rung",
+            Self::Terminal { .. } => "Terminal",
         }
     }
 }

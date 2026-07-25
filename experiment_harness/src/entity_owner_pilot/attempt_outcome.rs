@@ -9,34 +9,25 @@ use crate::entity_owner_pilot::method_validity::MethodValidity;
 use crate::entity_owner_pilot::not_run_reason::NotRunReason;
 use crate::entity_owner_pilot::partial_evidence::PartialEvidence;
 
-/// The single terminal disposition of one predeclared attempt, transcribed from the spec's "Minimal
-/// type design" `AttemptOutcome`.
+/// The single terminal disposition of one predeclared attempt, per the spec's `AttemptOutcome`.
 ///
-/// The Parked Frontier requires "exactly one terminal Complete/Failed/NotRun record for each of the
-/// ten predeclared attempts". Modelling that as one closed enum — rather than as separate optional
-/// fields on a record — is what makes a half-recorded attempt unrepresentable: an attempt cannot be
-/// both complete and failed, cannot be complete without an artifact, and cannot be failed without a
-/// diagnostic, because each variant carries exactly the payload its disposition requires.
-///
-/// The payload types are what carry the guarantees: only a full ladder walk can seal an
-/// [`EvidenceArtifact`], and only a strict prefix can seal a [`PartialEvidence`], so the two
-/// evidence-bearing variants cannot be assembled from each other's data.
+/// One closed enum rather than optional fields on a record: an attempt cannot be both complete and
+/// failed, complete without an artifact, or failed without a diagnostic, because each variant
+/// carries exactly the payload its disposition requires. The payload types carry the rest of the
+/// guarantee — see [`EvidenceArtifact`] and [`PartialEvidence`].
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum AttemptOutcome {
-    /// The attempt walked the entire frozen ladder. Carries the complete artifact and whether its
-    /// method is still admissible.
+    /// Walked the entire frozen ladder.
     Complete {
         artifact: EvidenceArtifact,
         validity: MethodValidity,
     },
-    /// The attempt terminated partway. Carries the classified cause, whatever rungs had already
-    /// completed, and the retained diagnostic chain — the spec's "failed with partial evidence and
-    /// diagnostics".
+    /// Terminated partway, retaining whatever rungs had completed.
     Failed {
         kind: FailureKind,
         partial: PartialEvidence,
         diagnostic: DiagnosticArtifact,
     },
-    /// The attempt was predeclared but never executed, with the reason it was skipped.
+    /// Predeclared but never executed.
     NotRun { reason: NotRunReason },
 }

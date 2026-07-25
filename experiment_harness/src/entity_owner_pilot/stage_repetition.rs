@@ -2,27 +2,20 @@
 
 use serde::Serialize;
 
-use crate::entity_owner_pilot::confirmatory_block_index::ConfirmatoryBlockIndex;
 use crate::entity_owner_pilot::pilot_block_index::PilotBlockIndex;
 
-/// The stage an attempt belongs to, carrying its block index where the stage is a repeated one.
+/// The stage an attempt belongs to, carrying its block index.
 ///
-/// Transcribed verbatim from the spec's "Minimal type design" `StageRepetition`. Making the block
-/// index part of the stage variant — rather than a separate field beside a stage tag — is what makes
-/// the invalid combinations unrepresentable: a Smoke attempt cannot carry a block index (Smoke is
-/// "one plumbing and semantic sanity execution"), and a Pilot attempt cannot carry a Confirmatory
-/// block index or vice versa. A stage/index mismatch is therefore not a runtime check that could be
-/// forgotten at a call site; it does not typecheck.
+/// Named for the spec's `StageRepetition`, which also names `Smoke` and `Confirmatory`; only the
+/// stage this module executes is declared. A variant added later must not reinterpret evidence
+/// already written under this vocabulary.
 ///
-/// This distinction is load-bearing for analysis: the spec forbids a Pilot attempt from authorizing
-/// a performance conclusion, so evidence must carry its stage inseparably from its identity.
+/// The index lives *inside* the variant so a stage cannot be paired with another stage's block
+/// index — a mismatch fails to typecheck rather than needing a runtime check. Evidence must carry
+/// its stage inseparably from its identity, since the spec forbids a Pilot attempt from authorizing
+/// a performance conclusion and a bare block index would not say which stage produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum StageRepetition {
-    /// The single plumbing and semantic sanity execution. Unrepeated, so it carries no index.
-    Smoke,
-    /// One of the Pilot's five randomized matched blocks. Records raw evidence and data adequacy
-    /// only — never a performance conclusion.
+    /// One of the Pilot's five randomized matched blocks.
     Pilot(PilotBlockIndex),
-    /// One of the Confirmatory stage's thirty randomized matched blocks — the scientific decision.
-    Confirmatory(ConfirmatoryBlockIndex),
 }

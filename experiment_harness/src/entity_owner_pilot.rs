@@ -1,22 +1,18 @@
 //! Pilot stage for the `EntityOwnerSenderView` candidate (spec c33f2e51).
 //!
-//! The spec's Pilot is "five randomized matched blocks for plumbing, controls, and data adequacy
-//! only"; it "never authorizes a performance conclusion". This module implements that stage for one
-//! candidate: the frozen `N_global` ladder walked progressively on a fresh isolated server per
-//! attempt, sender-view Arm against direct-public-table Control, with every attempt's terminal
-//! disposition appended to a durable NDJSON ledger.
-//!
-//! **This candidate has no counterpart in the historical arm machinery.** That ontology (`Cell`,
+//! This candidate has no counterpart in the historical arm machinery. That ontology (`Cell`,
 //! `SeedOp`, `SubscribedTable`, `CampaignDataset`, `RecordKind`, `DoseObservation`,
 //! `ObservationSink`) is fixed to the `Message`/`ChronicleMessage` mechanism study and is preserved,
-//! not reinterpreted — see the spec's "Preserve the historical campaign model" and
-//! [`crate::entity_owner_smoke`]. So this module mints the spec's own "Minimal type design" attempt
-//! vocabulary ([`attempt_key::AttemptKey`], [`attempt_outcome::AttemptOutcome`]) and its own durable
-//! sink, while reusing every ontology-free primitive underneath verbatim: provisioning
-//! ([`crate::provision`]), the connected client, [`crate::observation::raw_latencies::RawLatencies`],
+//! not reinterpreted — see [`crate::entity_owner_smoke`]. So this module mints its own attempt
+//! vocabulary and durable ledger, while reusing every ontology-free primitive underneath verbatim:
+//! [`crate::provision`], [`crate::client::connected_client`],
+//! [`crate::observation::raw_latencies::RawLatencies`],
 //! [`crate::observation::latency_summary::LatencySummary`], and the
 //! [`crate::observation::durable_line_writer::DurableLineWriter`] /
 //! [`crate::observation::file_line_writer::FileLineWriter`] durability seam.
+//!
+//! Enums here carry only variants this module can actually produce. A variant added later must not
+//! reinterpret evidence already written under this vocabulary.
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
@@ -25,7 +21,6 @@ pub(crate) mod attempt_key;
 pub(crate) mod attempt_outcome;
 pub(crate) mod candidate_id;
 pub(crate) mod candidate_version;
-pub(crate) mod confirmatory_block_index;
 pub(crate) mod diagnostic_artifact;
 pub(crate) mod evidence_artifact;
 pub(crate) mod experiment_axis;
@@ -38,8 +33,6 @@ pub(crate) mod pilot_block_index;
 pub(crate) mod pilot_driver;
 pub(crate) mod pilot_params;
 pub(crate) mod pilot_record;
-pub(crate) mod pilot_record_id;
-pub(crate) mod pilot_record_kind;
 pub(crate) mod pilot_sink;
 pub(crate) mod retry_ordinal;
 pub(crate) mod rung_evidence;
