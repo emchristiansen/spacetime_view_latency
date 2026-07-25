@@ -12,6 +12,7 @@ mod analysis;
 mod campaign;
 mod client;
 mod dataset;
+mod entity_owner_pilot;
 mod entity_owner_smoke;
 mod execute_run;
 mod manifest;
@@ -175,6 +176,27 @@ enum Command {
         #[arg(long)]
         module_wasm: PathBuf,
     },
+    /// Pilot stage for the `EntityOwnerSenderView` candidate (spec c33f2e51): freeze the ten
+    /// predeclared attempts in a seeded randomized order, then walk the frozen `N_global` ladder on
+    /// a fresh isolated server per attempt, appending progressive rung evidence and exactly one
+    /// terminal record per attempt to a durable NDJSON ledger. Records raw evidence and data
+    /// adequacy only — never a performance conclusion.
+    EntityOwnerPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Explicit seed driving both the frozen block/arm-control order and every attempt's
+        /// deterministic data — one seed, so the order and the seeded data cannot diverge.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at. Created exclusively; an existing path is a
+        /// fail-fast error rather than a truncation, so a rerun cannot overwrite prior evidence.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -337,6 +359,20 @@ fn main() -> Result<()> {
         } => {
             let listen = ListenAddress::parse(&server)?;
             crate::entity_owner_smoke::entity_owner_sender_view_smoke(listen, &module_wasm)
+        }
+        Command::EntityOwnerPilot {
+            server,
+            module_wasm,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_pilot::entity_owner_sender_view_pilot(
+                listen,
+                &module_wasm,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
+            )
         }
     }
 }
