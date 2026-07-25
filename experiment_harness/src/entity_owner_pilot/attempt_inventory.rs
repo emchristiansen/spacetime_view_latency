@@ -159,3 +159,6 @@ fn control_first(block: PilotBlockIndex, seed: ScheduleSeed) -> bool {
     let digest: [u8; 32] = hasher.finalize().into();
     digest[0] & 1 == 1
 }
+
+#[cfg(test)]
+mod tests;

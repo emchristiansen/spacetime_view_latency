@@ -42,3 +42,6 @@ impl PartialEvidence {
         Ok(Self { rungs })
     }
 }
+
+#[cfg(test)]
+mod tests;

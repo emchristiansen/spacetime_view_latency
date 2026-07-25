@@ -47,11 +47,19 @@ impl PilotSink {
     pub(crate) fn create(output: &OutputPath) -> Result<Self> {
         let writer = FileLineWriter::create(output)
             .map_err(|e| anyhow!("creating the Pilot ledger: {}", e.diagnostic()))?;
-        Ok(Self {
-            writer: Box::new(writer),
+        Ok(Self::with_writer(Box::new(writer)))
+    }
+
+    /// Wrap an already-constructed durable writer. Private so production can only reach a sink
+    /// through [`Self::create`] and the one required output file — an arbitrary writer must never be
+    /// able to stand in for the ledger. Mirrors
+    /// [`ObservationSink::with_writer`](crate::observation::observation_sink::ObservationSink).
+    fn with_writer(writer: Box<dyn DurableLineWriter>) -> Self {
+        Self {
+            writer,
             next_seq: RecordSeq::zero(),
             poisoned: None,
-        })
+        }
     }
 
     /// Durably append one record, returning the sequence it was written at. The sequence advances
@@ -116,3 +124,16 @@ impl PilotSink {
         }
     }
 }
+
+#[cfg(test)]
+impl PilotSink {
+    /// Inject a durable writer to observe the exact lines the ledger emits. Test-only: production
+    /// reaches a sink solely through [`Self::create`] and the one required output file. Mirrors
+    /// [`ObservationSink::from_writer`](crate::observation::observation_sink::ObservationSink).
+    pub(crate) fn from_writer(writer: Box<dyn DurableLineWriter>) -> Self {
+        Self::with_writer(writer)
+    }
+}
+
+#[cfg(test)]
+mod tests;
