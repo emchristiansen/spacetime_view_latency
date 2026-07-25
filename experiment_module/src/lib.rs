@@ -132,7 +132,12 @@ pub fn chronicle_point_view(ctx: &ViewContext) -> Vec<ChronicleMessage> {
         .message_visibility()
         .viewer()
         .filter(ctx.sender())
-        .filter_map(|visibility| ctx.db.chronicle_message().uuid().find(visibility.message_uuid))
+        .filter_map(|visibility| {
+            ctx.db
+                .chronicle_message()
+                .uuid()
+                .find(visibility.message_uuid)
+        })
         .collect()
 }
 
@@ -159,11 +164,20 @@ pub fn entity_owner_sender_view(ctx: &ViewContext) -> impl Query<EntityOwner> {
 
 #[reducer]
 pub fn insert_message(ctx: &ReducerContext, id: u64, sender: Identity, payload: String) {
-    ctx.db.message().insert(Message { id, sender, payload });
+    ctx.db.message().insert(Message {
+        id,
+        sender,
+        payload,
+    });
 }
 
 #[reducer]
-pub fn insert_message_visibility(ctx: &ReducerContext, id: u64, viewer: Identity, message_uuid: u64) {
+pub fn insert_message_visibility(
+    ctx: &ReducerContext,
+    id: u64,
+    viewer: Identity,
+    message_uuid: u64,
+) {
     // SpacetimeDB 2.6.1 cannot express a composite (viewer, message_uuid) UNIQUE
     // constraint — the table macro derives uniqueness only from single-field
     // `#[unique]`/`#[primary_key]`, and neither column is individually unique — so
@@ -189,11 +203,18 @@ pub fn insert_message_visibility(ctx: &ReducerContext, id: u64, viewer: Identity
 
 #[reducer]
 pub fn insert_chronicle_message(ctx: &ReducerContext, uuid: u64, payload: String) {
-    ctx.db.chronicle_message().insert(ChronicleMessage { uuid, payload });
+    ctx.db
+        .chronicle_message()
+        .insert(ChronicleMessage { uuid, payload });
 }
 
 #[reducer]
-pub fn insert_entity_owner(ctx: &ReducerContext, entity_uuid: u64, owner: Identity, record: String) {
+pub fn insert_entity_owner(
+    ctx: &ReducerContext,
+    entity_uuid: u64,
+    owner: Identity,
+    record: String,
+) {
     ctx.db.entity_owner().insert(EntityOwner {
         entity_uuid,
         owner,

@@ -39,7 +39,10 @@ const OTHER_OWNER_ROW_COUNT: u64 = 3;
 /// Provision, publish, seed, subscribe, and verify the `EntityOwnerSenderView` candidate end to
 /// end, tearing the server down on every exit path — mirrors
 /// [`crate::quick_run::quick_run`]'s acquisition/teardown pipeline exactly.
-pub(crate) fn entity_owner_sender_view_smoke(listen: ListenAddress, module_wasm: &Path) -> Result<()> {
+pub(crate) fn entity_owner_sender_view_smoke(
+    listen: ListenAddress,
+    module_wasm: &Path,
+) -> Result<()> {
     let distribution = VerifiedDistribution::resolve()?;
     let staged = StagedModuleWasm::load(module_wasm, WasmSha256::new(MODULE_WASM_SHA256))?;
 
@@ -117,7 +120,8 @@ fn drive(server: &RunningPinnedServer, database_identity: &str) -> Result<()> {
 /// not own") applied to this candidate's Smoke stage.
 fn run_smoke(client: &ConnectedClient) -> Result<()> {
     let owner = client.measured_identity();
-    let other_owner = Identity::from_claims(EXPERIMENT_ISSUER, ENTITY_OWNER_SMOKE_OTHER_OWNER_SUBJECT);
+    let other_owner =
+        Identity::from_claims(EXPERIMENT_ISSUER, ENTITY_OWNER_SMOKE_OTHER_OWNER_SUBJECT);
 
     let start = Instant::now();
     for i in 0..OWNED_ROW_COUNT {
