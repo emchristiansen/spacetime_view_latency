@@ -1,0 +1,5 @@
+//! Focused tests for the frozen measured-write schedule. One test entity per file.
+
+mod every_measured_write_targets_a_seeded_owned_key;
+mod no_measured_write_repeats_a_payload;
+mod the_final_payload_is_the_last_write_to_reach_that_offset;

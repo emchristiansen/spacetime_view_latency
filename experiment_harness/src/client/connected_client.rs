@@ -16,8 +16,8 @@ use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
-    DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess,
-    ReducerEventContext,
+    update_entity_owner, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
+    EntityOwnerTableAccess, ReducerEventContext,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -238,6 +238,33 @@ impl ConnectedClient {
                 .insert_entity_owner_then(entity_uuid, owner, record, cb)
         })
         .with_context(|| format!("seeding entity_owner entity_uuid={entity_uuid}"))
+    }
+
+    /// Apply one confirmed fixed-cardinality `entity_owner` update — the fresh-server campaign's
+    /// measured mutation, issued one confirmed round trip at a time.
+    ///
+    /// Copies [`Self::insert_entity_owner`] exactly, over `update_entity_owner` instead of the
+    /// insertion reducer, so the two writes share one confirmation primitive and cannot diverge in
+    /// how they wait. The module's reducer panics when no row holds `entity_uuid`, which rolls the
+    /// transaction back and arrives here as a reducer error — so an update aimed at an unseeded key
+    /// fails loud at this call rather than silently inserting one and raising the cardinality the
+    /// measurement holds fixed.
+    ///
+    /// **Takes no `owner`**, unlike its insertion counterpart, because the reducer preserves the
+    /// existing row's owner. The measured write changes the payload alone, and a caller cannot ask
+    /// for anything else: transferring ownership is not expressible through this method, so the
+    /// measured channels cannot be pointed at a mutation with a different read-set effect.
+    ///
+    /// This is the *paced*, one-outstanding-write shape. The saturated channel issues its batch
+    /// back-to-back without awaiting, which is a different primitive built on the measured-batch
+    /// barrier, and arrives with the driver stage that needs it.
+    pub(crate) fn update_entity_owner(&self, entity_uuid: u64, record: String) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn
+                .reducers
+                .update_entity_owner_then(entity_uuid, record, cb)
+        })
+        .with_context(|| format!("updating entity_owner entity_uuid={entity_uuid}"))
     }
 
     /// Subscribe to `entity_owner_sender_view` and, once its initial snapshot is applied, read the

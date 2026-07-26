@@ -26,6 +26,7 @@ pub mod message_type;
 pub mod message_visibility_table;
 pub mod message_visibility_type;
 pub mod messages_point_view_table;
+pub mod update_entity_owner_reducer;
 
 pub use chronicle_message_table::*;
 pub use chronicle_message_type::ChronicleMessage;
@@ -47,6 +48,7 @@ pub use message_type::Message;
 pub use message_visibility_table::*;
 pub use message_visibility_type::MessageVisibility;
 pub use messages_point_view_table::*;
+pub use update_entity_owner_reducer::update_entity_owner;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -75,6 +77,10 @@ pub enum Reducer {
         viewer: __sdk::Identity,
         message_uuid: u64,
     },
+    UpdateEntityOwner {
+        entity_uuid: u64,
+        record: String,
+    },
 }
 
 impl __sdk::InModule for Reducer {
@@ -88,6 +94,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::InsertEntityOwner { .. } => "insert_entity_owner",
             Reducer::InsertMessage { .. } => "insert_message",
             Reducer::InsertMessageVisibility { .. } => "insert_message_visibility",
+            Reducer::UpdateEntityOwner { .. } => "update_entity_owner",
             _ => unreachable!(),
         }
     }
@@ -129,6 +136,13 @@ impl __sdk::Reducer for Reducer {
                     message_uuid: message_uuid.clone(),
                 },
             ),
+            Reducer::UpdateEntityOwner {
+                entity_uuid,
+                record,
+            } => __sats::bsatn::to_vec(&update_entity_owner_reducer::UpdateEntityOwnerArgs {
+                entity_uuid: entity_uuid.clone(),
+                record: record.clone(),
+            }),
             _ => unreachable!(),
         }
     }

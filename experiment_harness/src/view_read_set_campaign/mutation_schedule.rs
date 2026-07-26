@@ -13,7 +13,8 @@ mod sealed {
     use serde::Serialize;
 
     use crate::view_read_set_campaign::campaign_params::{
-        CHANNEL_SAMPLE_COUNT, SUBSCRIBER_VISIBLE_ROWS_BASELINE,
+        CHANNEL_SAMPLE_COUNT, MUTATION_PAYLOAD_PREFIX, OWNED_KEY_BASE,
+        SUBSCRIBER_VISIBLE_ROWS_BASELINE,
     };
     use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
 
@@ -73,10 +74,12 @@ mod sealed {
     /// return a well-formed answer to a question about a write that is never issued and a row that
     /// does not exist.
     ///
-    /// **Phase 1 boundary.** The channel projection and the two walks are complete; the three
-    /// derivations are explicit `todo!()` stubs. They also depend on an update path the module does
-    /// not have yet: the approved spec authorizes that fixed-cardinality update for Phase 2, but it
-    /// is not Phase-1 work.
+    /// The whole schedule is now derived: the channel projection, the two walks, and the three
+    /// derivations. The update path they describe exists as the module's `update_entity_owner`
+    /// reducer, reached through
+    /// [`ConnectedClient::update_entity_owner`](crate::client::connected_client::ConnectedClient::update_entity_owner).
+    /// Issuing the schedule against a live server is the driver's measurement stage, which is still
+    /// a `todo!()`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
     pub(crate) struct MutationSchedule {
         channel: MeasurementChannel,
@@ -118,22 +121,25 @@ mod sealed {
         }
 
         /// The `entity_uuid` this measured write updates.
+        ///
+        /// Cycling the owned slice is what holds cardinality fixed: every target is a key the
+        /// attempt already seeded, so the write replaces a row rather than adding one. The modulus
+        /// cannot escape the slice, and the addition cannot overflow — the compile-time proof at
+        /// [`crate::view_read_set_campaign::campaign_params`] keeps
+        /// `OWNED_KEY_BASE + SUBSCRIBER_VISIBLE_ROWS_BASELINE` at or below `GLOBAL_KEY_BASE`, which
+        /// is itself far below `u64::MAX`.
         pub(crate) fn target_key(self, write: ChannelWriteIndex) -> u64 {
-            let _ = write;
-            todo!(
-                "Phase 2: OWNED_KEY_BASE + (write index mod SUBSCRIBER_VISIBLE_ROWS_BASELINE), so \
-                 the batch cycles the owned slice and cardinality never changes"
-            )
+            OWNED_KEY_BASE + (write.get() % SUBSCRIBER_VISIBLE_ROWS_BASELINE)
         }
 
         /// The payload this measured write writes.
+        ///
+        /// Distinct for every `(channel, write index)` pair, which is what makes the write a real
+        /// one: the pinned source elides a byte-identical update outright, so a repeated payload
+        /// would measure nothing. The tag is what keeps E1's write `i` from reproducing the payload
+        /// E2 already left on that same key.
         pub(crate) fn payload(self, write: ChannelWriteIndex) -> String {
-            let _ = write;
-            todo!(
-                "Phase 2: format MUTATION_PAYLOAD_PREFIX, this schedule's tag, and the write index \
-                 as <prefix>:<tag>:<index>, so no write repeats a payload and no channel collides \
-                 with the other at its batch boundary"
-            )
+            format!("{MUTATION_PAYLOAD_PREFIX}:{}:{}", self.tag, write.get())
         }
 
         /// The payload the owned key at `offset` holds once this channel's whole batch has
@@ -145,12 +151,9 @@ mod sealed {
         /// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k`, which for the frozen
         /// constants is 990 through 999.
         pub(crate) fn final_payload_at_offset(self, offset: OwnedSliceOffset) -> String {
-            let _ = offset;
-            todo!(
-                "Phase 2: this schedule's payload at write index CHANNEL_SAMPLE_COUNT - \
-                 SUBSCRIBER_VISIBLE_ROWS_BASELINE + offset — the last write of the batch to touch \
-                 that key"
-            )
+            self.payload(ChannelWriteIndex(
+                CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + offset.get(),
+            ))
         }
     }
 }
@@ -160,3 +163,6 @@ mod sealed {
 // by inference — and a re-export nothing uses is a warning, not a surface. Phase 2 adds it here the
 // moment the driver spells the type out.
 pub(crate) use sealed::{MutationSchedule, OwnedSliceOffset};
+
+#[cfg(test)]
+mod tests;

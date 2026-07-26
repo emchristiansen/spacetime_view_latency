@@ -221,3 +221,51 @@ pub fn insert_entity_owner(
         record,
     });
 }
+
+/// The fixed-cardinality measured mutation for the `EntityOwnerSenderView` candidate: replace an
+/// existing row's `record` in place, preserving its owner, keyed by the `entity_uuid` primary key.
+///
+/// **There is no `owner` parameter, and that is the contract.** The measured channels change the
+/// payload and nothing else: cardinality is held at the scale point, and the row must stay inside
+/// the same identity's read set for E2's "observable in the subscriber cache" to mean what it says.
+/// An `owner` argument would make ownership transfer representable in the measured write — a
+/// different operation with a different read-set effect, since it moves the row *out* of one
+/// sender's view and into another's. Reading the existing owner back and writing it unchanged makes
+/// that state unreachable rather than merely unused, so no future caller can measure a transfer by
+/// mistake. Ownership transfer is a real production semantic and belongs to the security/semantics
+/// gates, under its own reducer, not to the trend channels.
+///
+/// Fixed-cardinality is the rest of the point. `insert` on an existing key violates the constraint
+/// outright. Caller-managed replacement — a delete reducer followed by an insert reducer — would
+/// hold cardinality only *between* transactions: those commit separately, so subscribers observe
+/// the row genuinely absent in between, and a failure after the first leaves the slice one row
+/// short. This reducer is one atomic transaction: the `update` does lower to a delete plus an
+/// insert in transaction state, as the pinned source establishes, but that pair commits together,
+/// so no intermediate absence is ever externally observable and cardinality is constant at every
+/// committed state.
+///
+/// **Fail-loud on a missing row.** The lookup is required anyway to recover the owner, so the
+/// absent case is caught here with the offending key named, rather than reaching the pinned
+/// `update`'s own missing-row panic. Either way a reducer panic rolls the transaction back and
+/// surfaces as a reducer error on the caller's completion callback. A silent upsert is what must
+/// not happen: it would insert an unseeded key, raising cardinality mid-measurement, and the
+/// composition check would then be judging a scale point the attempt never held.
+///
+/// **What the lookup adds to the measured path.** Preserving the owner requires one primary-key
+/// lookup inside the measured transaction, so that lookup's cost is deliberately part of what the
+/// E1 and E2 channels measure and is not separable from the update. That is the
+/// production-representative shape — a real ownership-preserving update reads the row it replaces —
+/// and it must stay visible in provenance and in how the results are interpreted. What it does to
+/// the measured numbers over the frozen finite range is for the experiment to determine, not for
+/// this comment to assert.
+#[reducer]
+pub fn update_entity_owner(ctx: &ReducerContext, entity_uuid: u64, record: String) {
+    let Some(existing) = ctx.db.entity_owner().entity_uuid().find(entity_uuid) else {
+        panic!("update_entity_owner: no entity_owner row with entity_uuid={entity_uuid}");
+    };
+    ctx.db.entity_owner().entity_uuid().update(EntityOwner {
+        entity_uuid,
+        owner: existing.owner,
+        record,
+    });
+}

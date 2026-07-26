@@ -1,13 +1,28 @@
 //! One measured channel's lossless evidence and the statistic it reduces to.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::analysis::stats::median::median;
+use crate::analysis::stats::rational::Rational;
+use crate::analysis::stats::theil_sen::theil_sen_slope;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::raw_latencies::RawLatencies;
 use crate::view_read_set_campaign::cell_statistic::CellStatistic;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
 use crate::view_read_set_campaign::saturated_timing_batch::SaturatedTimingBatch;
+
+/// One apply duration as the exact rational number of nanoseconds it lasted.
+///
+/// Shared by the two single-sample channels so their one-line reductions cannot drift apart in how
+/// they convert a sample — the difference between E3 and E4 is which window was measured, never how
+/// the number was formed.
+fn apply_duration(applied: LatencySample) -> Rational {
+    Rational::new(
+        i128::try_from(applied.nanos()).expect("a measured latency in nanoseconds fits i128"),
+        1,
+    )
+}
 
 /// One channel's complete evidence at one scale point: what it observed, and the `S` it reduced to.
 ///
@@ -33,8 +48,9 @@ use crate::view_read_set_campaign::saturated_timing_batch::SaturatedTimingBatch;
 /// path, as it is for
 /// [`RawLatencies`](crate::observation::raw_latencies::RawLatencies).
 ///
-/// **Phase 1 boundary.** The variants, their payload shapes, and the shape validation on the way in
-/// are complete; the four reductions are explicit `todo!()` stubs until Phase 2.
+/// The variants, their payload shapes, the shape validation on the way in, and the four reductions
+/// are all complete. What produces the observations — the measured window against a live server —
+/// is the driver's measurement stage, which is still a `todo!()`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum ChannelEvidence {
     /// Marginal per-write cost under a saturated pipeline. Retains both offsets per write rather
@@ -65,38 +81,65 @@ pub(crate) enum ChannelEvidence {
 impl ChannelEvidence {
     /// Reduce a sealed saturated batch to its exact all-pairs Theil–Sen slope of latency against
     /// issue index — the marginal per-write cost.
+    /// The abscissa is the *issue index*, not the issue offset. The spec's estimand is the marginal
+    /// cost per additional queued write, so the slope is taken against position in the batch; the
+    /// recorded offsets stay in the batch precisely so that reading can be falsified rather than
+    /// assumed.
     pub(crate) fn saturated(timings: SaturatedTimingBatch) -> Result<Self> {
-        let _ = timings;
-        todo!(
-            "Phase 2: take the exact all-pairs Theil-Sen slope over (issue index, latency) using \
-             crate::analysis::stats::theil_sen::theil_sen_slope, then admit it through \
-             CellStatistic::validated so a nonpositive slope fails the attempt"
-        )
+        let points: Vec<(i128, i128)> = timings
+            .writes()
+            .iter()
+            .enumerate()
+            .map(|(index, timing)| {
+                let issue_index = i128::try_from(index).expect("a saturated batch index fits i128");
+                let latency = i128::try_from(timing.latency_nanos())
+                    .expect("a measured latency in nanoseconds fits i128");
+                (issue_index, latency)
+            })
+            .collect();
+        let slope = CellStatistic::validated(theil_sen_slope(&points))
+            .context("reducing a saturated batch to its Theil–Sen slope")?;
+        Ok(Self::SaturatedQueueGrowthPerWrite { timings, slope })
     }
 
     /// Reduce a paced batch to the exact rational median of its samples.
+    ///
+    /// The batch size is even, so this is the exact mean of the two central order statistics — a
+    /// rational that is generally not an integer number of nanoseconds, which is why the statistic
+    /// is carried as a [`Rational`] rather than rounded here.
     pub(crate) fn paced(samples: RawLatencies) -> Result<Self> {
-        let _ = samples;
-        todo!(
-            "Phase 2: take the exact rational median using crate::analysis::stats::median::median \
-             (the batch size is even, so this is the exact mean of the two central order \
-             statistics), then admit it through CellStatistic::validated"
-        )
+        let values: Vec<Rational> = samples
+            .samples()
+            .iter()
+            .map(|sample| {
+                Rational::new(
+                    i128::try_from(sample.nanos())
+                        .expect("a measured latency in nanoseconds fits i128"),
+                    1,
+                )
+            })
+            .collect();
+        let median = CellStatistic::validated(median(&values))
+            .context("reducing a paced batch to its exact rational median")?;
+        Ok(Self::PacedVisibleApplyLatency { samples, median })
     }
 
     /// Take the cold-subscription apply duration as its own statistic.
+    ///
+    /// Measured exactly once per attempt, so there is nothing to reduce *across* — the admission
+    /// through [`CellStatistic::validated`] is the whole reduction, and it is what refuses a
+    /// zero-nanosecond apply rather than reporting it as instantaneous.
     pub(crate) fn cold_subscription(applied: LatencySample) -> Result<Self> {
-        let _ = applied;
-        todo!(
-            "Phase 2: admit the apply duration through CellStatistic::validated, so a \
-             zero-nanosecond apply is refused rather than treated as instantaneous"
-        )
+        let duration = CellStatistic::validated(apply_duration(applied))
+            .context("admitting the cold-subscription apply duration")?;
+        Ok(Self::ColdSubscriptionApplyTime { applied, duration })
     }
 
     /// Take the reconnect apply duration as its own statistic.
     pub(crate) fn reconnect(applied: LatencySample) -> Result<Self> {
-        let _ = applied;
-        todo!("Phase 2: as ChannelEvidence::cold_subscription, for the reconnect window")
+        let duration = CellStatistic::validated(apply_duration(applied))
+            .context("admitting the reconnect apply duration")?;
+        Ok(Self::ReconnectApplyTime { applied, duration })
     }
 
     /// Which channel this evidence belongs to, read off the variant.
@@ -121,3 +164,6 @@ impl ChannelEvidence {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
