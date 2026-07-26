@@ -30,6 +30,7 @@ pub(crate) mod attempt_key;
 pub(crate) mod attempt_outcome;
 pub(crate) mod attempt_provenance;
 pub(crate) mod axis_ladder;
+pub(crate) mod campaign_driver;
 pub(crate) mod campaign_ledger_line;
 pub(crate) mod campaign_parameters;
 pub(crate) mod campaign_params;
@@ -71,3 +72,5 @@ pub(crate) mod superseded_scope;
 pub(crate) mod supersession_justification;
 pub(crate) mod terminal_attempt_record;
 pub(crate) mod unrelated_global_rows_ladder_evidence;
+
+pub(crate) use campaign_driver::view_read_set_campaign_pilot;

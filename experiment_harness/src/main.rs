@@ -200,6 +200,29 @@ enum Command {
         #[arg(long)]
         ledger: PathBuf,
     },
+    /// Calibration-Pilot stage of the fresh-server campaign for the `EntityOwnerSenderView`
+    /// candidate (spec c33f2e51): provision a fresh isolated server per scale point, hold that
+    /// point's cardinality fixed while measuring all four channels in the frozen E3/E4/E2/E1 order,
+    /// and append exactly one terminal record per attempt that runs — every frozen logical slot's
+    /// original, plus any retry identity a slot earned — to a durable NDJSON ledger. Records raw
+    /// evidence and data adequacy only — never a performance conclusion.
+    ViewReadSetCampaignPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Path the durable NDJSON ledger is created at. Created exclusively; an existing path is a
+        /// fail-fast error rather than a truncation, so a rerun cannot overwrite prior evidence.
+        #[arg(long)]
+        ledger: PathBuf,
+        /// Directory the content-addressed observed row sets are retained under. Composition
+        /// findings point at these files rather than summarizing them, so a reader can re-run every
+        /// comparison instead of trusting that a validator once returned `Ok`.
+        #[arg(long)]
+        artifacts_dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -375,6 +398,23 @@ fn main() -> Result<()> {
                 &module_wasm,
                 &OutputPath::new(ledger),
                 ScheduleSeed::new(seed),
+            )
+        }
+        Command::ViewReadSetCampaignPilot {
+            server,
+            module_wasm,
+            ledger,
+            artifacts_dir,
+        } => {
+            // No seed argument: this campaign's execution order derives from the frozen
+            // CAMPAIGN_SEED, so there is no run-time input that could produce a different
+            // preregistration.
+            let listen = ListenAddress::parse(&server)?;
+            crate::view_read_set_campaign::view_read_set_campaign_pilot(
+                listen,
+                &module_wasm,
+                &OutputPath::new(ledger),
+                &artifacts_dir,
             )
         }
     }
