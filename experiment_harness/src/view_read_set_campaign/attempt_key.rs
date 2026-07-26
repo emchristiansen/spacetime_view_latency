@@ -83,4 +83,18 @@ impl AttemptKey {
             && self.stage == other.stage
             && self.version == other.version
     }
+
+    /// Whether two identities belong to the same ladder — the same `(candidate, block, role, axis,
+    /// version)`, differing only in which rung they sit at and which retry they are.
+    ///
+    /// This is the grouping the endpoint factor is computed over: `T = S_last / S_first` compares two
+    /// rungs of one ladder, so evidence from a different block, role, candidate, axis, or version
+    /// must never be pooled into it.
+    pub(crate) fn same_ladder(self, other: Self) -> bool {
+        self.candidate == other.candidate
+            && self.scale.axis() == other.scale.axis()
+            && self.role == other.role
+            && self.stage == other.stage
+            && self.version == other.version
+    }
 }

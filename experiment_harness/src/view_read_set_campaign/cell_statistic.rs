@@ -22,6 +22,11 @@ use crate::analysis::stats::rational::Rational;
 /// Nonpositivity is genuinely anomalous rather than the flat case: the saturated channel's statistic
 /// is a queue service time and the other three are durations, all structurally above zero, so
 /// rejecting them costs no power against the flat hypothesis.
+///
+/// The guarantee is exactly "this value is a strictly positive exact rational" — no more. Any caller
+/// may mint one from any positive rational, so this type says nothing about where the number came
+/// from; that is [`ChannelEvidence`](super::channel_evidence::ChannelEvidence)'s job, which is why
+/// the reductions live there and not at call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CellStatistic(Rational);
 

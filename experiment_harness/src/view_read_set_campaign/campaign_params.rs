@@ -5,7 +5,7 @@
 //! protocol cannot move either against evidence already recorded under it. Where a historical
 //! parameter already expresses the needed invariant it is reused rather than restated.
 
-use crate::params::{BATCH_DELAY_MS, BATCH_SIZE};
+use crate::params::{BATCH_DELAY_MS, BATCH_SIZE, BATCH_SIZE_USIZE};
 
 /// The frozen campaign seed, from which the rung order of every `(block, role)` is derived.
 ///
@@ -87,6 +87,11 @@ pub(crate) const SYNTHETIC_FAN_OUT_BASELINE: u64 = 1;
 /// channel takes. Reused from [`crate::params`] rather than restated, so the two protocols cannot
 /// disagree about the batch this harness actually issues.
 pub(crate) const CHANNEL_SAMPLE_COUNT: u64 = BATCH_SIZE;
+
+/// [`CHANNEL_SAMPLE_COUNT`] as a `usize`, for use as an array length. Reused from
+/// [`crate::params::BATCH_SIZE_USIZE`], which already carries the compile-time round-trip proof, so
+/// the two cannot disagree about the batch this harness issues.
+pub(crate) const CHANNEL_SAMPLE_COUNT_USIZE: usize = BATCH_SIZE_USIZE;
 
 /// Milliseconds between completed paced samples, outside the measured window. Reused from
 /// [`crate::params`] for the same reason as [`CHANNEL_SAMPLE_COUNT`].
