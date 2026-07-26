@@ -7,9 +7,12 @@ use crate::view_read_set_campaign::experiment_axis::ExperimentAxis;
 /// Coverage: the bulk minting path agrees with the frozen literal in count, order, and scale value.
 ///
 /// This is one half of the range guarantee. The other half is structural and has no runtime test to
-/// write: `LadderRungIndex::at` lives in this module's private child, so no code outside
-/// `axis_ladder` can call it, and the only two crate-visible paths to a rung are this one and
-/// `validated` — both of which read `len()` first.
+/// write, because the compiler rejects the code that would test it: `LadderRungIndex`'s field is
+/// private to the childless `sealed` module, so nothing outside that module — including *this* test,
+/// which is a sibling of it rather than a descendant — can construct one. The only two paths to a
+/// rung are `rungs` and `validated`, both inside `sealed`, and both read `len()` first. Verified by
+/// compile probe: a `LadderRungIndex(9)` here is `E0423: cannot initialize a tuple struct which
+/// contains private fields`.
 #[test]
 fn rungs_are_exactly_the_frozen_ladder_positions() {
     let ladder = AxisLadder::of(ExperimentAxis::UnrelatedGlobalRows);

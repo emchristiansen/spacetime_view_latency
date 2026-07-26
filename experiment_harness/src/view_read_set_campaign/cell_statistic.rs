@@ -1,61 +1,73 @@
 //! One channel's reduced statistic `S` at one scale point.
+//!
+//! The type lives in the private, *childless* inline module [`sealed`] because its whole guarantee
+//! is that its sole constructor ran. A private field is visible to its declaring module **and every
+//! descendant**, so leaving it beside `#[cfg(test)] mod tests` would let that test module write
+//! `CellStatistic(r)` for a zero or negative rational — the exact value the type exists to exclude.
+//! `sealed` has no children, and the tests are its sibling, so the constructor really is the only
+//! door.
 
-use anyhow::{ensure, Result};
-use serde::{Serialize, Serializer};
+mod sealed {
+    use anyhow::{ensure, Result};
+    use serde::{Serialize, Serializer};
 
-use crate::analysis::stats::rational::Rational;
+    use crate::analysis::stats::rational::Rational;
 
-/// The spec's `S`: one channel's cell statistic at one scale point, exact and strictly positive.
-///
-/// Finiteness is structural — [`Rational`] is an `i128/i128` pair in lowest terms with a strictly
-/// positive denominator, so no infinity or NaN can be represented at all. Strict positivity is the
-/// one property that needs proving, and [`Self::validated`] is the sole constructor, so a
-/// nonpositive statistic cannot exist rather than being checked for at each of the several places
-/// that consume one.
-///
-/// That matters because the endpoint factor is `T = S_last / S_first`: a zero `S_first` would make
-/// the estimand undefined, and a negative one would let a nonsense ratio satisfy the flat inequality
-/// and be reported as flat. The spec's rule — a missing, non-finite, or nonpositive statistic
-/// invalidates its block and can never be counted as flat — is therefore enforced here, at the only
-/// door into the type.
-///
-/// Nonpositivity is genuinely anomalous rather than the flat case: the saturated channel's statistic
-/// is a queue service time and the other three are durations, all structurally above zero, so
-/// rejecting them costs no power against the flat hypothesis.
-///
-/// The guarantee is exactly "this value is a strictly positive exact rational" — no more. Any caller
-/// may mint one from any positive rational, so this type says nothing about where the number came
-/// from; that is [`ChannelEvidence`](super::channel_evidence::ChannelEvidence)'s job, which is why
-/// the reductions live there and not at call sites.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CellStatistic(Rational);
+    /// The spec's `S`: one channel's cell statistic at one scale point, exact and strictly positive.
+    ///
+    /// Finiteness is structural — [`Rational`] is an `i128/i128` pair in lowest terms with a
+    /// strictly positive denominator, so no infinity or NaN can be represented at all. Strict
+    /// positivity is the one property that needs proving, and [`Self::validated`] is the sole
+    /// constructor reachable from anywhere in the crate, so a nonpositive statistic cannot exist
+    /// rather than being checked for at each of the several places that consume one.
+    ///
+    /// That matters because the endpoint factor is `T = S_last / S_first`: a zero `S_first` would
+    /// make the estimand undefined, and a negative one would let a nonsense ratio satisfy the flat
+    /// inequality and be reported as flat. The spec's rule — a missing, non-finite, or nonpositive
+    /// statistic invalidates its block and can never be counted as flat — is therefore enforced
+    /// here, at the only door into the type.
+    ///
+    /// Nonpositivity is genuinely anomalous rather than the flat case: the saturated channel's
+    /// statistic is a queue service time and the other three are durations, all structurally above
+    /// zero, so rejecting them costs no power against the flat hypothesis.
+    ///
+    /// The guarantee is exactly "this value is a strictly positive exact rational" — no more. Any
+    /// caller may mint one from any positive rational, so this type says nothing about where the
+    /// number came from; that is
+    /// [`ChannelEvidence`](crate::view_read_set_campaign::channel_evidence::ChannelEvidence)'s job,
+    /// which is why the reductions live there and not at call sites.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct CellStatistic(Rational);
 
-impl CellStatistic {
-    /// Admit a reduced channel statistic, failing loud unless it is strictly positive.
-    pub(crate) fn validated(value: Rational) -> Result<Self> {
-        ensure!(
-            value.numerator() > 0,
-            "a channel cell statistic must be strictly positive; got {}/{}",
-            value.numerator(),
-            value.denominator(),
-        );
-        Ok(Self(value))
+    impl CellStatistic {
+        /// Admit a reduced channel statistic, failing loud unless it is strictly positive.
+        pub(crate) fn validated(value: Rational) -> Result<Self> {
+            ensure!(
+                value.numerator() > 0,
+                "a channel cell statistic must be strictly positive; got {}/{}",
+                value.numerator(),
+                value.denominator(),
+            );
+            Ok(Self(value))
+        }
+
+        /// The exact value, for the endpoint-factor arithmetic that consumes it.
+        pub(crate) fn get(self) -> Rational {
+            self.0
+        }
     }
 
-    /// The exact value, for the endpoint-factor arithmetic that consumes it.
-    pub(crate) fn get(self) -> Rational {
-        self.0
+    impl Serialize for CellStatistic {
+        /// Serialized as the exact `[numerator, denominator]` pair rather than a float, so the
+        /// ledger retains the value classification actually used. Floating point is display-only
+        /// throughout this contract.
+        fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+            serializer.collect_seq([self.0.numerator(), self.0.denominator()].iter())
+        }
     }
 }
 
-impl Serialize for CellStatistic {
-    /// Serialized as the exact `[numerator, denominator]` pair rather than a float, so the ledger
-    /// retains the value classification actually used. Floating point is display-only throughout
-    /// this contract.
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        serializer.collect_seq([self.0.numerator(), self.0.denominator()].iter())
-    }
-}
+pub(crate) use sealed::CellStatistic;
 
 #[cfg(test)]
 mod tests;
