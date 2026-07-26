@@ -23,6 +23,7 @@ mod plan;
 mod provision;
 mod quick_run;
 mod roles;
+mod view_read_set_campaign;
 
 use std::path::PathBuf;
 
