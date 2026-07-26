@@ -42,17 +42,23 @@ pub(crate) enum ProvisioningDisposition {
 }
 
 mod sealed {
-    use anyhow::Result;
+    use anyhow::{bail, ensure, Context, Result};
     use serde::Serialize;
 
+    use crate::observation::record_seq::RecordSeq;
     use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
     use crate::view_read_set_campaign::attempt_key::AttemptKey;
+    use crate::view_read_set_campaign::attempt_outcome::AttemptOutcome;
     use crate::view_read_set_campaign::attempt_provenance::AttemptProvenance;
     use crate::view_read_set_campaign::campaign_ledger_line::CampaignLedgerLine;
     use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
+    use crate::view_read_set_campaign::campaign_record::CampaignRecord;
     use crate::view_read_set_campaign::evidence_artifact::EvidenceArtifact;
+    use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
     use crate::view_read_set_campaign::method_supersession::MethodSupersession;
     use crate::view_read_set_campaign::reconciled_campaign::ProvisioningDisposition;
+    use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
+    use crate::view_read_set_campaign::retry_ordinal::RetryOrdinal;
     use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecord;
 
     /// A campaign's whole ledger, accounted line by line against the frozen inventory it opens with.
@@ -105,9 +111,8 @@ mod sealed {
     /// reconciliation outright — and never a per-attempt selection input, since a rule that preferred
     /// one runtime over another would be choosing evidence by its provenance.
     ///
-    /// **Phase 1 boundary.** The accounting and the selection fold are explicit `todo!()` stubs. What
-    /// is fixed here is the *signature*, which is what decides whether the checks are possible at
-    /// all.
+    /// **Phase boundary.** The accounting is implemented; the selection fold is still an explicit
+    /// `todo!()` stub.
     #[derive(Debug, Clone, Serialize)]
     pub(crate) struct ReconciledCampaign {
         inventory: AttemptInventory,
@@ -208,63 +213,37 @@ mod sealed {
         /// the ledger must instead show is one original per frozen logical slot, and a retry only
         /// where the original earned one.
         ///
-        /// **Phase 1 boundary.** The checks land in Phase 2 and are frozen in the `todo!()` below.
+        /// **The passes, in the order a failure is most usefully reported.** Each is a free function
+        /// below, and each states the rule it enforces where it enforces it:
+        /// [`contiguous_from_zero`], [`opening_inventory`], [`bucketed_by_identity`],
+        /// [`account_identities`], [`AttemptLines::account_auxiliary_lines`],
+        /// [`AttemptLines::admit_provenance`], [`reaching_supersessions`], and finally
+        /// [`accounted_in_terminal_order`], which is infallible because every preceding pass has
+        /// already established what it joins.
+        ///
+        /// The ordering is deliberate where two rules overlap: a ledger missing a predeclared
+        /// original *and* carrying a retry of it violates both the inventory rule and the retry
+        /// rule, and the inventory rule names the missing slot, which is the more actionable of the
+        /// two reports.
         pub(crate) fn reconciled(lines: Vec<CampaignLedgerLine>) -> Result<Self> {
-            let _ = lines;
-            todo!(
-                "Phase 2, over the ordered line stream:
+            contiguous_from_zero(&lines)?;
+            let (inventory, provenance) = opening_inventory(&lines)?;
 
-                 Sequences — require the sequences to start at RecordSeq::zero and be contiguous and \
-                 strictly ascending in stream order, so a hole or a reordering is a rejection rather \
-                 than a gap a reader interpolates over.
+            let identities = bucketed_by_identity(&lines)?;
+            account_identities(&identities, &inventory)?;
+            for identity in &identities {
+                identity.account_auxiliary_lines()?;
+                identity.admit_provenance(&provenance)?;
+            }
+            let supersessions = reaching_supersessions(&lines, &identities)?;
+            let attempts = accounted_in_terminal_order(&lines, &identities);
 
-                 Inventory — require exactly one CampaignRecord::Inventory, at the first line; take \
-                 the frozen AttemptInventory and the CampaignProvenance from it, so the ledger is \
-                 accounted against the preregistration it was actually written under.
-
-                 Terminal identities — require exactly one Terminal per identity that appears. For \
-                 each frozen logical slot of AttemptInventory::attempts, require exactly one \
-                 terminal at RetryOrdinal::ORIGINAL. Permit at most one further terminal for that \
-                 slot, at RetryOrdinal::RETRY, and only when the original's \
-                 TerminalAttemptRecord::retry_eligibility is RetryEligibility::Eligible. Reject a \
-                 retry whose original is absent or ineligible, a second retry, and any terminal \
-                 identity matching no frozen slot at all.
-
-                 Preflight clearances — total over the terminal outcome, because which attempts \
-                 launched is exactly what the outcome says. Complete and Failed each require exactly \
-                 one preceding PreflightCleared line for their identity: they launched. \
-                 PreflightRejected requires none — its gate refused before launch and is already \
-                 carried, as a FailedEnvironmentGate, inside the terminal record itself; a clearance \
-                 for such an identity is a contradiction and is rejected. NotRun requires none, \
-                 having never been gated. Reject a second clearance for one identity, and any \
-                 clearance for an identity with no terminal record.
-
-                 Provisioned provenance — total over the terminal outcome's own typed lifecycle \
-                 facts, never inferred from a cause. Complete requires exactly one preceding \
-                 Provisioned line: it measured, so it published. Failed requires exactly one if and \
-                 only if its FailureStage::published is true, and none otherwise — which is why that \
-                 stage is recorded, since FailureKind cannot distinguish a server-start Timeout from \
-                 a reducer Timeout. PreflightRejected and NotRun require none. Reject a second \
-                 provisioned line for one identity, and any provisioned line for an identity with no \
-                 terminal record.
-
-                 Provenance admission — run AttemptProvenance::agrees_with against the campaign \
-                 provenance for every retained Provisioned line, and fail the whole reconciliation \
-                 on any disagreement. This is all-or-nothing: a per-attempt exemption would let \
-                 evidence be chosen by its runtime.
-
-                 Post-attempt diagnostics — the spec requires one reading immediately after every \
-                 measured attempt, so this is exactly-one, not at-most-one. Require exactly one \
-                 PostAttemptEnvironment line, following that identity's terminal line, for Complete \
-                 and for Failed whose FailureStage::measured_sample_boundary is \
-                 MeasuredSampleBoundary::AfterFirst. Require none for Failed at BeforeFirst, for \
-                 PreflightRejected, and for NotRun — none of them measured anything. Check it here \
-                 and store none of it: it is deliberately absent from every field of this type.
-
-                 Supersessions — require each Supersession's scope to reach at least one terminal \
-                 identity present in this ledger, so an invalidation cannot silently name evidence \
-                 this campaign never wrote."
-            )
+            Ok(Self {
+                inventory,
+                provenance,
+                attempts,
+                supersessions,
+            })
         }
 
         /// The frozen inventory this ledger was accounted against, taken from its own first line.
@@ -329,6 +308,505 @@ mod sealed {
         }
     }
 
+    /// Every line the ledger wrote under one attempt identity, gathered so each frozen per-attempt
+    /// rule is checked against the terminal outcome that explains it.
+    ///
+    /// Borrows rather than owns: reconciliation may reject, and cloning a whole ledger's records to
+    /// discover that would be work done for nothing. Only [`accounted_in_terminal_order`] clones,
+    /// and only after every pass has accepted.
+    struct AttemptLines<'a> {
+        key: AttemptKey,
+        terminal_line: Option<(RecordSeq, &'a TerminalAttemptRecord)>,
+        clearances: Vec<RecordSeq>,
+        provisioned: Vec<(RecordSeq, &'a AttemptProvenance)>,
+        post_attempt: Vec<RecordSeq>,
+    }
+
+    /// Where an auxiliary line must sit relative to the terminal line of its own attempt.
+    ///
+    /// Only *relative to its own terminal*: retry adjacency and cross-identity execution ordering
+    /// are properties of the driver's schedule, not of the ledger, and reconciliation does not
+    /// re-derive them.
+    /// **The two are not the same strength, because their frozen clauses are not.** A clearance and
+    /// a provisioned line are required to *precede* their terminal line and nothing more: the
+    /// protocol writes each as soon as the fact it records becomes true — the gate passed, the
+    /// module published — and an arbitrary number of other attempts' lines may legitimately fall
+    /// between one of them and the terminal record it belongs to. The post-attempt reading is
+    /// different: the spec requires it *immediately after* the measured attempt, and a reading taken
+    /// once other work has intervened is a reading of a different host state than the one the
+    /// measurement finished in.
+    #[derive(Clone, Copy)]
+    enum RequiredPosition {
+        /// Written at any earlier sequence than the terminal line — the clearance that let the
+        /// attempt launch, and the provenance of the instance it published.
+        BeforeTerminal,
+        /// Written at exactly the sequence after the terminal line, with nothing in between.
+        ImmediatelyAfterTerminal,
+    }
+
+    impl RequiredPosition {
+        /// Whether `seq` sits where this position requires, relative to `terminal_seq`.
+        fn admits(self, seq: RecordSeq, terminal_seq: RecordSeq) -> bool {
+            match self {
+                Self::BeforeTerminal => seq < terminal_seq,
+                Self::ImmediatelyAfterTerminal => seq == terminal_seq.next(),
+            }
+        }
+
+        /// How a refusal spells this requirement.
+        fn requirement(self) -> &'static str {
+            match self {
+                Self::BeforeTerminal => "at some sequence before",
+                Self::ImmediatelyAfterTerminal => "at the sequence immediately after",
+            }
+        }
+    }
+
+    impl<'a> AttemptLines<'a> {
+        /// A bucket for `key` with no lines in it yet.
+        fn empty(key: AttemptKey) -> Self {
+            Self {
+                key,
+                terminal_line: None,
+                clearances: Vec::new(),
+                provisioned: Vec::new(),
+                post_attempt: Vec::new(),
+            }
+        }
+
+        /// This identity's single terminal line.
+        ///
+        /// Infallible past [`account_identities`], which refuses any identity the ledger wrote a
+        /// line for without also writing its terminal record.
+        fn terminal(&self) -> (RecordSeq, &'a TerminalAttemptRecord) {
+            self.terminal_line
+                .expect("every recorded attempt identity was proven to have one terminal record")
+        }
+
+        /// Require this identity's auxiliary lines to be exactly the ones its terminal outcome
+        /// calls for, each where the protocol writes it relative to that terminal line.
+        fn account_auxiliary_lines(&self) -> Result<()> {
+            let (terminal_seq, terminal) = self.terminal();
+            let outcome = terminal.outcome();
+
+            let provisioned: Vec<RecordSeq> =
+                self.provisioned.iter().map(|(seq, _)| *seq).collect();
+
+            self.account_family(
+                "preflight clearance",
+                &self.clearances,
+                required_clearances(outcome),
+                RequiredPosition::BeforeTerminal,
+                terminal_seq,
+            )?;
+            self.account_family(
+                "provisioned provenance",
+                &provisioned,
+                required_provisioned(outcome),
+                RequiredPosition::BeforeTerminal,
+                terminal_seq,
+            )?;
+            self.account_family(
+                "post-attempt environment",
+                &self.post_attempt,
+                required_post_attempt(outcome),
+                RequiredPosition::ImmediatelyAfterTerminal,
+                terminal_seq,
+            )
+        }
+
+        /// Require one auxiliary line family to have exactly `required` members, each at a sequence
+        /// [`RequiredPosition`] admits.
+        ///
+        /// Cardinality first, then position: a duplicate and a misplaced line are different
+        /// mistakes, and reporting "there are two of these" before "this one is in the wrong place"
+        /// is the order that names the actual defect.
+        fn account_family(
+            &self,
+            family: &str,
+            seqs: &[RecordSeq],
+            required: usize,
+            position: RequiredPosition,
+            terminal_seq: RecordSeq,
+        ) -> Result<()> {
+            ensure!(
+                seqs.len() == required,
+                "attempt {} has {} {family} line(s), but its terminal outcome requires exactly \
+                 {required}",
+                self.key.canonical_tag(),
+                seqs.len(),
+            );
+            for seq in seqs {
+                ensure!(
+                    position.admits(*seq, terminal_seq),
+                    "attempt {}'s {family} line is at sequence {}, but must be written {} its \
+                     terminal line at sequence {}",
+                    self.key.canonical_tag(),
+                    seq.get(),
+                    position.requirement(),
+                    terminal_seq.get(),
+                );
+            }
+            Ok(())
+        }
+
+        /// Check every provisioned instance this identity recorded against the campaign's pins.
+        ///
+        /// All-or-nothing by being a `?` inside the whole-ledger constructor: one disagreeing
+        /// attempt fails the reconciliation rather than being dropped from it. A per-attempt
+        /// exemption would let evidence be chosen by the runtime it happened to be measured on.
+        fn admit_provenance(&self, campaign: &CampaignProvenance) -> Result<()> {
+            for (seq, provenance) in &self.provisioned {
+                provenance.agrees_with(campaign).with_context(|| {
+                    format!(
+                        "attempt {}'s provisioned instance, recorded at sequence {}, disagrees with \
+                         this campaign's pins",
+                        self.key.canonical_tag(),
+                        seq.get(),
+                    )
+                })?;
+            }
+            Ok(())
+        }
+
+        /// Whether this attempt reached a published instance, and the provenance of the one it
+        /// reached.
+        ///
+        /// Reading the first provisioned line is exact rather than approximate: cardinality was
+        /// already checked *total over the terminal outcome*, so a line is present here precisely
+        /// when the outcome required one.
+        fn provisioning(&self) -> ProvisioningDisposition {
+            match self.provisioned.first() {
+                Some((_, provenance)) => {
+                    ProvisioningDisposition::Provisioned((*provenance).clone())
+                }
+                None => ProvisioningDisposition::NeverPublished,
+            }
+        }
+    }
+
+    /// How many preflight clearances an attempt with this outcome must have.
+    ///
+    /// Total over the outcome, because which attempts launched is exactly what the outcome says.
+    /// [`AttemptOutcome::Complete`] and [`AttemptOutcome::Failed`] launched.
+    /// [`AttemptOutcome::PreflightRejected`] did not — its gate refused before launch and is
+    /// already carried, as a
+    /// [`FailedEnvironmentGate`](crate::view_read_set_campaign::failed_environment_gate::FailedEnvironmentGate),
+    /// inside the terminal record itself, so a clearance for that identity is a contradiction.
+    /// [`AttemptOutcome::NotRun`] was never gated.
+    fn required_clearances(outcome: &AttemptOutcome) -> usize {
+        match outcome {
+            AttemptOutcome::Complete { .. } | AttemptOutcome::Failed { .. } => 1,
+            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+        }
+    }
+
+    /// How many provisioned-provenance lines an attempt with this outcome must have.
+    ///
+    /// Total over the outcome's own *typed lifecycle facts*, never inferred from a cause: a
+    /// complete attempt measured, so it published, and a failed one published exactly when
+    /// [`FailureStage::published`](crate::view_read_set_campaign::failure_stage::FailureStage::published)
+    /// says so. That stage is recorded precisely because
+    /// [`FailureKind`](crate::view_read_set_campaign::failure_kind::FailureKind) cannot distinguish
+    /// a server-start timeout from a reducer timeout.
+    fn required_provisioned(outcome: &AttemptOutcome) -> usize {
+        match outcome {
+            AttemptOutcome::Complete { .. } => 1,
+            AttemptOutcome::Failed { stage, .. } => usize::from(stage.published()),
+            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+        }
+    }
+
+    /// How many post-attempt environment readings an attempt with this outcome must have.
+    ///
+    /// Exactly-one rather than at-most-one for a measured attempt: the spec requires a reading
+    /// immediately after every measured attempt, so a missing one is a gap in the diagnostics
+    /// record. That "immediately" is carried by
+    /// [`RequiredPosition::ImmediatelyAfterTerminal`] rather than by this count, and the two
+    /// together are the whole clause. Nothing measured means none — and none of these values is
+    /// stored anywhere on the reconciled view, by design.
+    fn required_post_attempt(outcome: &AttemptOutcome) -> usize {
+        match outcome {
+            AttemptOutcome::Complete { .. } => 1,
+            AttemptOutcome::Failed { stage, .. } => match stage.measured_sample_boundary() {
+                MeasuredSampleBoundary::AfterFirst => 1,
+                MeasuredSampleBoundary::BeforeFirst => 0,
+            },
+            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+        }
+    }
+
+    /// Require the ledger's sequences to start at zero and step by one in stream order.
+    ///
+    /// One check covers a nonzero start, a hole, a duplicate, and a reordering, because all four
+    /// are the same defect seen from different sides: the position a line claims is not the
+    /// position it occupies. A hole must be a rejection rather than a gap a reader interpolates
+    /// over, since the missing line could be the very clearance or terminal record an accounting
+    /// rule turns on.
+    fn contiguous_from_zero(lines: &[CampaignLedgerLine]) -> Result<()> {
+        let mut expected = RecordSeq::zero();
+        for line in lines {
+            ensure!(
+                line.seq() == expected,
+                "a campaign ledger's sequences must start at {} and be contiguous in stream order; \
+                 found {} where {} was expected",
+                RecordSeq::zero().get(),
+                line.seq().get(),
+                expected.get(),
+            );
+            expected = expected.next();
+        }
+        Ok(())
+    }
+
+    /// Take the frozen preregistration from the ledger's own first line, requiring exactly one.
+    ///
+    /// *From* the stream rather than beside it: a ledger accounted against an inventory it was not
+    /// written under would check the wrong slots, and pins supplied by the caller would let the
+    /// admission gate be chosen after the fact.
+    fn opening_inventory(
+        lines: &[CampaignLedgerLine],
+    ) -> Result<(AttemptInventory, CampaignProvenance)> {
+        let first = lines
+            .first()
+            .context("a campaign ledger must open with its frozen inventory, but has no lines")?;
+        let CampaignRecord::Inventory {
+            inventory,
+            provenance,
+        } = first.body()
+        else {
+            bail!(
+                "a campaign ledger must open with its frozen inventory; its first line is a {} \
+                 record",
+                first.body().variant_name(),
+            );
+        };
+        for line in lines.iter().skip(1) {
+            ensure!(
+                !matches!(line.body(), CampaignRecord::Inventory { .. }),
+                "a campaign ledger records exactly one inventory, at its first line; a second one \
+                 is at sequence {}",
+                line.seq().get(),
+            );
+        }
+        Ok((inventory.clone(), provenance.clone()))
+    }
+
+    /// Gather every line under the identity it names, rejecting a second terminal record for one
+    /// identity.
+    ///
+    /// Duplicate terminals are caught here rather than in a later pass because this is where the
+    /// two would collide: a bucket holds one terminal line, so the second has nowhere to go and is
+    /// refused at the moment it is seen, with its own sequence to name.
+    fn bucketed_by_identity(lines: &[CampaignLedgerLine]) -> Result<Vec<AttemptLines<'_>>> {
+        let mut identities: Vec<AttemptLines> = Vec::new();
+        for line in lines {
+            let seq = line.seq();
+            match line.body() {
+                // Neither names an attempt identity: the inventory is campaign-wide, and a
+                // supersession's reach is checked against the identities rather than filed under
+                // one.
+                CampaignRecord::Inventory { .. } | CampaignRecord::Supersession { .. } => {}
+                CampaignRecord::PreflightCleared { attempt, .. } => {
+                    bucket(&mut identities, *attempt).clearances.push(seq);
+                }
+                CampaignRecord::Provisioned {
+                    attempt,
+                    provenance,
+                } => {
+                    bucket(&mut identities, *attempt)
+                        .provisioned
+                        .push((seq, provenance));
+                }
+                CampaignRecord::PostAttemptEnvironment { attempt, .. } => {
+                    bucket(&mut identities, *attempt).post_attempt.push(seq);
+                }
+                CampaignRecord::Terminal { record } => {
+                    let identity = bucket(&mut identities, record.key());
+                    if let Some((first_seq, _)) = identity.terminal_line {
+                        bail!(
+                            "attempt {} has more than one terminal record: sequences {} and {}",
+                            record.key().canonical_tag(),
+                            first_seq.get(),
+                            seq.get(),
+                        );
+                    }
+                    identity.terminal_line = Some((seq, record));
+                }
+            }
+        }
+        Ok(identities)
+    }
+
+    /// The bucket for `key`, created empty the first time that identity is seen.
+    ///
+    /// Linear search on [`AttemptKey`] equality rather than a hash lookup, deliberately: hashing
+    /// would mean deriving [`std::hash::Hash`] on the frozen identity type for the benefit of one
+    /// reconciliation pass. A campaign predeclares sixty originals and at most one representable
+    /// retry each, so the bounded quadratic comparison is negligible, and the identity type stays
+    /// exactly as small as its own contract requires.
+    fn bucket<'a, 'b>(
+        identities: &'b mut Vec<AttemptLines<'a>>,
+        key: AttemptKey,
+    ) -> &'b mut AttemptLines<'a> {
+        let position = match identities.iter().position(|identity| identity.key == key) {
+            Some(position) => position,
+            None => {
+                identities.push(AttemptLines::empty(key));
+                identities
+                    .len()
+                    .checked_sub(1)
+                    .expect("a vector just pushed to is nonempty")
+            }
+        };
+        identities
+            .get_mut(position)
+            .expect("a position taken from this vector indexes it")
+    }
+
+    /// Account every recorded identity against the frozen inventory, and every retry against the
+    /// original that had to earn it.
+    ///
+    /// **The identity model, which is why this is two loops rather than a set comparison.** The
+    /// inventory predeclares originals only, so "every terminal identity must be predeclared" would
+    /// reject every legitimate retry, and "every predeclared identity must appear" says nothing
+    /// about the retries. The first loop requires each frozen slot's original; the second requires
+    /// each recorded identity to be either that original or a permitted retry of it.
+    ///
+    /// **A second retry is unrepresentable, so it is not checked.**
+    /// [`RetryOrdinal`](crate::view_read_set_campaign::retry_ordinal::RetryOrdinal) has exactly two
+    /// values, buckets are keyed by whole-identity equality, and one bucket holds one terminal — so
+    /// a slot cannot carry a third terminal record at all. The cap is the type's, not this
+    /// function's.
+    fn account_identities(
+        identities: &[AttemptLines<'_>],
+        inventory: &AttemptInventory,
+    ) -> Result<()> {
+        for slot in inventory.attempts() {
+            ensure!(
+                identities
+                    .iter()
+                    .any(|identity| identity.key == *slot && identity.terminal_line.is_some()),
+                "the frozen inventory predeclares attempt {}, for which this ledger has no terminal \
+                 record",
+                slot.canonical_tag(),
+            );
+        }
+
+        for identity in identities {
+            ensure!(
+                identity.terminal_line.is_some(),
+                "the ledger writes preflight, provisioning or post-attempt lines for attempt {}, \
+                 which has no terminal record of its own",
+                identity.key.canonical_tag(),
+            );
+
+            // Currently unreachable, and kept as a runtime rejection rather than an `expect`
+            // precisely because it is unreachable only by accident of today's vocabulary: every
+            // component of an `AttemptKey` is closed to the values this one campaign uses, so the
+            // frozen inventory happens to be the complete cross product of every representable
+            // logical slot. A later candidate, axis, block, or candidate version makes foreign
+            // identities representable without changing a line here, and an `expect` would then be
+            // a false claim rather than a compile error.
+            let slot = inventory
+                .attempts()
+                .iter()
+                .find(|frozen| frozen.same_logical_slot(identity.key))
+                .with_context(|| {
+                    format!(
+                        "the ledger records attempt {}, which addresses no logical slot the frozen \
+                         inventory predeclares",
+                        identity.key.canonical_tag(),
+                    )
+                })?;
+
+            // An identity at `ORIGINAL` sharing a logical slot with a frozen entry *is* that entry:
+            // the slot comparison covers every component but the retry ordinal, and every frozen
+            // entry is an original. So only a retry has anything left to establish.
+            if identity.key.retry() != RetryOrdinal::ORIGINAL {
+                let (_, original) = identities
+                    .iter()
+                    .find(|other| other.key == *slot)
+                    .and_then(|other| other.terminal_line)
+                    .with_context(|| {
+                        format!(
+                            "attempt {} retries a logical slot whose original has no terminal \
+                             record in this ledger",
+                            identity.key.canonical_tag(),
+                        )
+                    })?;
+                ensure!(
+                    original.retry_eligibility() == RetryEligibility::Eligible,
+                    "attempt {} retries a logical slot whose original is {:?} for a retry",
+                    identity.key.canonical_tag(),
+                    original.retry_eligibility(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect the ledger's supersessions, requiring each to reach an attempt this ledger records.
+    ///
+    /// Reach *anywhere* in the ledger, not merely earlier: a
+    /// [`CandidateVersion`](crate::view_read_set_campaign::superseded_scope::SupersededScope::CandidateVersion)
+    /// scope is a finding about the measured code path, and it is meant to cover matching attempts
+    /// appended after the finding as well as before it. What is refused is an invalidation that
+    /// names evidence this campaign never wrote — a deletion with nothing to dispute.
+    fn reaching_supersessions(
+        lines: &[CampaignLedgerLine],
+        identities: &[AttemptLines<'_>],
+    ) -> Result<Vec<MethodSupersession>> {
+        let mut supersessions = Vec::new();
+        for line in lines {
+            let CampaignRecord::Supersession { supersession } = line.body() else {
+                continue;
+            };
+            ensure!(
+                identities
+                    .iter()
+                    .any(|identity| supersession.covers(identity.key)),
+                "the supersession at sequence {} is scoped to {:?}, which reaches no attempt this \
+                 ledger records",
+                line.seq().get(),
+                supersession.scope(),
+            );
+            supersessions.push(supersession.clone());
+        }
+        Ok(supersessions)
+    }
+
+    /// Join every terminal record to its provisioning disposition, in the order the ledger wrote
+    /// the terminal lines.
+    ///
+    /// Ledger order rather than inventory order, so `attempts()` displays the campaign as it
+    /// actually unfolded — originals, failures and retries where they happened. Analysis
+    /// reconstructs ladders by scale-point identity and never by this order.
+    ///
+    /// Infallible: every preceding pass has already established that each terminal line has a
+    /// bucket, and that the bucket's provisioned line is present exactly when the outcome requires
+    /// one.
+    fn accounted_in_terminal_order(
+        lines: &[CampaignLedgerLine],
+        identities: &[AttemptLines<'_>],
+    ) -> Vec<AccountedAttemptRecord> {
+        let mut attempts = Vec::new();
+        for line in lines {
+            let CampaignRecord::Terminal { record } = line.body() else {
+                continue;
+            };
+            let identity = identities
+                .iter()
+                .find(|identity| identity.key == record.key())
+                .expect("every terminal line was bucketed under its own identity");
+            attempts.push(AccountedAttemptRecord {
+                terminal: record.clone(),
+                provisioning: identity.provisioning(),
+            });
+        }
+        attempts
+    }
+
     impl SelectedCompleteAttempt {
         /// The full identity of the selected attempt, retry ordinal included — so a reader sees
         /// *which* attempt of the slot was taken, not merely that one was.
@@ -360,3 +838,10 @@ mod sealed {
 pub(crate) type ReconciledCampaign = sealed::ReconciledCampaign;
 pub(crate) type AccountedAttemptRecord = sealed::AccountedAttemptRecord;
 pub(crate) type SelectedCompleteAttempt = sealed::SelectedCompleteAttempt;
+
+// A *sibling* of `sealed`, never a child — which is the whole point of the topology this file's
+// header describes. These tests build ledgers and reconcile them through the real constructor; they
+// cannot write any of the three sealed struct literals, so an accounting rule they fail to exercise
+// is a rule no test here can fake having passed.
+#[cfg(test)]
+mod tests;
