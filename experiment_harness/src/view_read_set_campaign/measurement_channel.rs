@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::view_read_set_campaign::campaign_params::{PACED_MUTATION_TAG, SATURATED_MUTATION_TAG};
+
 /// The four measurement channels required for every applicable candidate/axis pair.
 ///
 /// Each channel is a separate estimand answering a different question, so they are a closed
@@ -39,4 +41,22 @@ impl MeasurementChannel {
         MeasurementChannel::PacedVisibleApplyLatency,
         MeasurementChannel::SaturatedQueueGrowthPerWrite,
     ];
+
+    /// This channel's stable payload tag, or `None` when it issues no measured writes.
+    ///
+    /// `None` is the honest answer for the two apply channels rather than an omission: E3 measures a
+    /// cold subscription and E4 a reconnect, and neither writes anything, so there is no payload for
+    /// them to tag. Returning an `Option` from a total match means a caller must confront that
+    /// instead of receiving a tag that names writes the channel never issues.
+    ///
+    /// The two tags differ so E2's and E1's batches cannot collide: both walk the same write indices
+    /// over the same ten owned keys, and an untagged payload from E1's write `i` would reproduce
+    /// E2's byte-for-byte — which the pinned source elides, measuring nothing.
+    pub(crate) fn mutation_tag(self) -> Option<&'static str> {
+        match self {
+            Self::PacedVisibleApplyLatency => Some(PACED_MUTATION_TAG),
+            Self::SaturatedQueueGrowthPerWrite => Some(SATURATED_MUTATION_TAG),
+            Self::ColdSubscriptionApplyTime | Self::ReconnectApplyTime => None,
+        }
+    }
 }

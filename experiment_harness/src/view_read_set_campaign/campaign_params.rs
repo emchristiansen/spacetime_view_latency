@@ -101,3 +101,98 @@ pub(crate) const PACED_SAMPLE_DELAY_MS: u64 = BATCH_DELAY_MS;
 /// ledger — recorded explicitly in this campaign's parameters so a ledger-only check can verify it
 /// without inferring it from build provenance.
 pub(crate) const CONFIRMED_READS: bool = crate::params::CONFIRMED_READS;
+
+/// How far apart the environment gate's two samples must be, in nanoseconds — the spec's sixty
+/// seconds, expressed in the unit the samples' monotonic offsets are recorded in so no conversion
+/// happens at the comparison.
+pub(crate) const ENVIRONMENT_SAMPLE_SEPARATION_NANOS: u64 = 60 * 1_000_000_000;
+
+/// The minimum available RAM the environment gate admits, in bytes: sixteen gibibytes.
+///
+/// The spec records why this is 16 GiB and not the operationally-rejected 48: bounded build
+/// parallelism and a 32k-row scale point need roughly this much, while swap flow and PSI are what
+/// actually guard against pressure.
+pub(crate) const ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES: u64 = 16 * 1_024 * 1_024 * 1_024;
+
+/// The maximum memory PSI `full avg60` the environment gate admits, in hundredths — the spec's "at
+/// most 1", in the exact integer resolution `/proc/pressure/memory` reports.
+pub(crate) const ENVIRONMENT_MAX_MEMORY_PSI_CENTI: u64 = 100;
+
+/// Fixed literal subject deriving the non-owner global identity, as
+/// [`crate::entity_owner_pilot::pilot_params::ENTITY_OWNER_PILOT_GLOBAL_SUBJECT`] does for the
+/// completed Pilot. Every scale point gets a fresh isolated server, so no per-attempt domain
+/// separation is needed. Distinct from that Pilot's literal so the two campaigns' seeded identities
+/// are never confused when their ledgers are read side by side.
+pub(crate) const GLOBAL_IDENTITY_SUBJECT: &str = "view-read-set-campaign-global";
+
+/// The first `entity_uuid` assigned to the measured identity's own rows.
+pub(crate) const OWNED_KEY_BASE: u64 = 0;
+
+/// The first `entity_uuid` assigned to the global identity's rows. A billion above
+/// [`OWNED_KEY_BASE`] so the two key spaces stay disjoint at every rung, making a primary-key
+/// collision structurally impossible — the spacing discipline of
+/// [`crate::params::GROWTH_KEY_BASE`].
+pub(crate) const GLOBAL_KEY_BASE: u64 = 1_000_000_000;
+
+/// The one fixed `record` payload every *seeded* row carries, so payload width never confounds a
+/// comparison.
+///
+/// Deliberately named for seeding alone: the measured mutation updates existing primary-key rows
+/// with a payload that differs on every write, because the pinned SpacetimeDB source elides a
+/// byte-identical update outright. Seeded composition and measured mutation therefore have different
+/// payload contracts, and one constant must not appear to cover both.
+pub(crate) const SEEDED_ROW_PAYLOAD: &str = "view-read-set-campaign-seeded-payload";
+
+/// The literal prefix of every measured-mutation payload.
+///
+/// A measured write's payload is `<prefix>:<channel-tag>:<write-index>`, so it differs bytewise from
+/// whatever it replaces — which the pinned SpacetimeDB source requires, since a byte-identical
+/// update is elided outright and would measure nothing.
+pub(crate) const MUTATION_PAYLOAD_PREFIX: &str = "view-read-set-campaign-mutation";
+
+/// The stable payload tag of the paced visible-apply channel's measured writes.
+///
+/// Tagging by channel is what stops E2 and E1 colliding at their batch boundary: both walk write
+/// indices `0..CHANNEL_SAMPLE_COUNT` over the same ten owned keys, so without the tag E1's write `i`
+/// could reproduce the payload E2 already left there and be elided as byte-identical.
+pub(crate) const PACED_MUTATION_TAG: &str = "e2-paced-visible-apply";
+
+/// The stable payload tag of the saturated channel's measured writes.
+pub(crate) const SATURATED_MUTATION_TAG: &str = "e1-saturated-queue-growth";
+
+/// Compile-time proof that a measured batch covers the owned slice a whole number of times.
+///
+/// The frozen after-state — owned key at offset `k` carrying the payload of write index
+/// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k` — is only correct when the batch
+/// divides evenly by the slice; a remainder would leave the last partial cycle's keys holding
+/// payloads from indices the formula does not name. Proven where both constants are visible rather
+/// than assumed by the expectation that reads them.
+const _: () = {
+    assert!(
+        CHANNEL_SAMPLE_COUNT % SUBSCRIBER_VISIBLE_ROWS_BASELINE == 0,
+        "a measured batch must cover the owned slice a whole number of times, or the frozen \
+         final-state formula does not hold"
+    );
+};
+
+/// Compile-time proof that the two key spaces cannot collide or overflow.
+///
+/// The owned slice and the global slice share one `entity_uuid` primary key space, so an overlap
+/// would surface as an opaque duplicate-key reducer failure rather than as the preregistration error
+/// it is. Proven where both bases are declared rather than trusted to the billion-key spacing
+/// staying larger than a future owned slice.
+///
+/// Unlike the completed Pilot's identical proof, the top of the global range is the ladder's largest
+/// rung rather than a cumulative total, because no attempt here walks the ladder.
+const _: () = {
+    assert!(
+        OWNED_KEY_BASE + SUBSCRIBER_VISIBLE_ROWS_BASELINE <= GLOBAL_KEY_BASE,
+        "the owned key space must end at or before GLOBAL_KEY_BASE"
+    );
+    assert!(
+        GLOBAL_KEY_BASE
+            .checked_add(UNRELATED_GLOBAL_ROWS_LADDER[UNRELATED_GLOBAL_ROWS_LADDER_LEN - 1])
+            .is_some(),
+        "the global key space must not overflow u64 at the top of the ladder"
+    );
+};

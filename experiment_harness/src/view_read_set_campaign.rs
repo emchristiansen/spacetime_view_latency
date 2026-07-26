@@ -25,19 +25,38 @@
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod attempt_inventory;
 pub(crate) mod attempt_key;
+pub(crate) mod attempt_outcome;
 pub(crate) mod axis_ladder;
+pub(crate) mod campaign_parameters;
 pub(crate) mod campaign_params;
+pub(crate) mod campaign_provenance;
 pub(crate) mod candidate_id;
 pub(crate) mod candidate_version;
 pub(crate) mod cell_statistic;
 pub(crate) mod channel_evidence;
 pub(crate) mod composition_validation;
+pub(crate) mod diagnostic_artifact;
+pub(crate) mod environment_gate_evidence;
+pub(crate) mod environment_sample;
+pub(crate) mod evidence_artifact;
 pub(crate) mod experiment_axis;
+pub(crate) mod failed_environment_gate;
+pub(crate) mod failure_kind;
+pub(crate) mod infrastructure_phase;
+pub(crate) mod measured_sample_boundary;
 pub(crate) mod measurement_channel;
+pub(crate) mod method_validity;
+pub(crate) mod mutation_schedule;
+pub(crate) mod not_run_reason;
+pub(crate) mod partial_evidence;
 pub(crate) mod pilot_block_index;
+pub(crate) mod retry_eligibility;
 pub(crate) mod retry_ordinal;
 pub(crate) mod saturated_timing_batch;
 pub(crate) mod saturated_write_timing;
 pub(crate) mod scale_point;
+pub(crate) mod scale_point_evidence;
 pub(crate) mod stage_repetition;
+pub(crate) mod terminal_attempt_record;
