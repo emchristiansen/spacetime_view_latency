@@ -31,6 +31,19 @@ mod sealed {
     #[serde(transparent)]
     pub(crate) struct CandidateVersion(u32);
 
+    impl CandidateVersion {
+        /// This version as its number, for the canonical identity spelling.
+        ///
+        /// An explicit accessor rather than `Debug` or serde output, for the same reason
+        /// [`RetryOrdinal::get`](crate::view_read_set_campaign::retry_ordinal::RetryOrdinal::get)
+        /// is one: the number reaches an artifact directory name a reader locates evidence by.
+        /// Reading it out adds no constructor, so the declared version constants remain the only
+        /// values in existence.
+        pub(crate) fn get(self) -> u32 {
+            self.0
+        }
+    }
+
     /// The current fresh-server implementation version of the `EntityOwnerSenderView` candidate.
     ///
     /// Bump when the measured path's semantics change — the view body, the seeded composition, the

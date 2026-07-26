@@ -74,8 +74,9 @@ mod sealed {
     /// return a well-formed answer to a question about a write that is never issued and a row that
     /// does not exist.
     ///
-    /// The whole schedule is now derived: the channel projection, the two walks, and the three
-    /// derivations. The update path they describe exists as the module's `update_entity_owner`
+    /// The whole schedule is now derived: the channel projection, the two walks, the two payload
+    /// derivations, and the final write's own offset and pre-image. The update path they describe
+    /// exists as the module's `update_entity_owner`
     /// reducer, reached through
     /// [`ConnectedClient::update_entity_owner`](crate::client::connected_client::ConnectedClient::update_entity_owner).
     /// Issuing the schedule against a live server is the driver's measurement stage, which is still
@@ -142,27 +143,85 @@ mod sealed {
             format!("{MUTATION_PAYLOAD_PREFIX}:{}:{}", self.tag, write.get())
         }
 
+        /// The owned-slice offset this channel's *last* measured write targets.
+        ///
+        /// Derived from the frozen batch length rather than named as a literal, and returned as an
+        /// [`OwnedSliceOffset`] so it is interchangeable with the offsets
+        /// [`Self::owned_slice_offsets`] yields. For the frozen constants the last write is index
+        /// 999 and this is offset 9.
+        ///
+        /// This is what makes the final-mutation witness unforgeable by a caller: the offset the
+        /// witness is taken at comes from the schedule itself, so "witness a different row" is not
+        /// a request that can be made.
+        pub(crate) fn final_write_offset(self) -> OwnedSliceOffset {
+            let last = CHANNEL_SAMPLE_COUNT
+                .checked_sub(1)
+                .expect("a measured batch issues at least one write");
+            OwnedSliceOffset(last % SUBSCRIBER_VISIBLE_ROWS_BASELINE)
+        }
+
+        /// The index of the last measured write to reach `offset`.
+        ///
+        /// Shared by the two payload derivations below so the cycle arithmetic is written once: a
+        /// second copy could drift, and the two payloads it produces are compared against each
+        /// other by the composition check, where a drift would read as a real mutation.
+        ///
+        /// Because the batch covers the slice a whole number of times — proven at compile time
+        /// where the two constants are declared — that index is
+        /// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k`, which for the frozen
+        /// constants is 990 through 999. The subtraction is checked despite that proof: this
+        /// derivation is read far from where the premise is written, and a drift in either constant
+        /// must fail loud here rather than wrap into a plausible index.
+        fn final_write_index(offset: OwnedSliceOffset) -> u64 {
+            CHANNEL_SAMPLE_COUNT
+                .checked_sub(SUBSCRIBER_VISIBLE_ROWS_BASELINE)
+                .expect("a measured batch covers the owned slice at least once")
+                .checked_add(offset.get())
+                .expect("the last write to an owned-slice offset has an index within the batch")
+        }
+
         /// The payload the owned key at `offset` holds once this channel's whole batch has
         /// confirmed.
         ///
-        /// This is the derivable final state the composition check compares against: because the
-        /// batch covers the slice a whole number of times — proven at compile time where the two
-        /// constants are declared — the last write to reach offset `k` is index
-        /// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k`, which for the frozen
-        /// constants is 990 through 999.
+        /// This is the derivable final state the composition check compares against.
         pub(crate) fn final_payload_at_offset(self, offset: OwnedSliceOffset) -> String {
-            self.payload(ChannelWriteIndex(
-                CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + offset.get(),
-            ))
+            self.payload(ChannelWriteIndex(Self::final_write_index(offset)))
+        }
+
+        /// The payload the owned key at `offset` held *immediately before* this channel's last
+        /// write to it — the pre-image of the final measured mutation at that key.
+        ///
+        /// Writes reach an offset once per cycle, so the write before index
+        /// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k` is one whole slice earlier;
+        /// for the frozen constants the final write 999 at offset 9 is preceded by write 989.
+        ///
+        /// **Why this is derived and not observed.** No retained observation can hold it: capturing
+        /// the state between two writes of a saturated batch would mean stopping the pipeline that
+        /// is under measurement. It is exactly reconstructible from the frozen schedule instead,
+        /// which is why the witness records it as an *expectation* rather than as an observation.
+        /// Pairing it with the validated after-state is what witnesses the final mutation
+        /// specifically, rather than merely witnessing that something changed since seeding.
+        ///
+        /// The subtraction is checked against the compile-time premise that a batch covers the
+        /// slice at least twice, for the same reason [`Self::final_write_index`] is.
+        pub(crate) fn penultimate_payload_at_offset(self, offset: OwnedSliceOffset) -> String {
+            let previous = Self::final_write_index(offset)
+                .checked_sub(SUBSCRIBER_VISIBLE_ROWS_BASELINE)
+                .expect(
+                    "a measured batch covers the owned slice at least twice, so the final write to \
+                     an offset has a predecessor in its own batch",
+                );
+            self.payload(ChannelWriteIndex(previous))
         }
     }
 }
 
-// `ChannelWriteIndex` is deliberately not re-exported yet. Nothing outside this module names it —
-// the two derivations that take one are reached through `writes()`, whose element type callers get
-// by inference — and a re-export nothing uses is a warning, not a surface. Phase 2 adds it here the
-// moment the driver spells the type out.
-pub(crate) use sealed::{MutationSchedule, OwnedSliceOffset};
+// Neither index type is re-exported. Nothing outside this module names either one: the derivations
+// that take an index are reached through `writes()` and `owned_slice_offsets()`, whose element types
+// callers get by inference, and the composition check derives the final write's offset through
+// `final_write_offset()` rather than spelling the type. A re-export nothing uses is a warning, not a
+// surface; each is added here the moment a caller genuinely names it.
+pub(crate) use sealed::MutationSchedule;
 
 #[cfg(test)]
 mod tests;

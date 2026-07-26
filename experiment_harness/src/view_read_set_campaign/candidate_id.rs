@@ -16,3 +16,17 @@ pub(crate) enum CandidateId {
     /// Sender-scoped entity-ownership view; an analogue of Muninn's real `entity_owner_view`.
     EntityOwnerSenderView,
 }
+
+impl CandidateId {
+    /// A stable canonical token naming this candidate, for the identity-derived artifact directory.
+    ///
+    /// Deliberately an explicit `&'static str` contract rather than `Debug`, variant-name, or serde
+    /// output, copying [`Cell::canonical_tag`](crate::plan::cell::Cell::canonical_tag): the token
+    /// reaches a directory name a reader locates recorded evidence by, so renaming the Rust variant
+    /// must not move evidence already written.
+    pub(crate) fn canonical_tag(self) -> &'static str {
+        match self {
+            Self::EntityOwnerSenderView => "entity-owner-sender-view",
+        }
+    }
+}

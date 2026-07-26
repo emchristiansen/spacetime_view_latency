@@ -17,3 +17,16 @@ pub(crate) enum ExperimentAxis {
     /// without growing the measured result set.
     UnrelatedGlobalRows,
 }
+
+impl ExperimentAxis {
+    /// A stable canonical token naming this axis, for the identity-derived artifact directory.
+    ///
+    /// Frozen independently of the variant name, exactly as
+    /// [`CandidateId::canonical_tag`](super::candidate_id::CandidateId::canonical_tag) is, so a
+    /// later rename cannot move the directory a recorded finding points into.
+    pub(crate) fn canonical_tag(self) -> &'static str {
+        match self {
+            Self::UnrelatedGlobalRows => "unrelated-global-rows",
+        }
+    }
+}

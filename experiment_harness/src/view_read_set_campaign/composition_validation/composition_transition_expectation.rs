@@ -13,6 +13,9 @@ mod sealed {
 
     use crate::plan::run_role::RunRole;
     use crate::view_read_set_campaign::composition_validation::expected_composition::ExpectedComposition;
+    use crate::view_read_set_campaign::composition_validation::expected_payload_state::ExpectedPayloadState;
+    use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
+    use crate::view_read_set_campaign::mutation_schedule::MutationSchedule;
     use crate::view_read_set_campaign::scale_point::ScalePoint;
 
     /// The two phase-matched expectations spanning an attempt's whole measured schedule: seeded
@@ -61,22 +64,56 @@ mod sealed {
         /// transition would be a different constructor with a different name, so neither can be
         /// mistaken for the other at a call site.
         ///
-        /// **Phase 1 boundary.** The derivation lands in Phase 2 together with
-        /// [`ExpectedComposition::required`], which it calls twice.
+        /// Both sides come from one call to [`ExpectedComposition::required`] each, over the same
+        /// scale, role, and identities, so the only thing that differs between them is the phase —
+        /// which is the whole point of minting the pair together.
         pub(crate) fn required_final(
             scale: ScalePoint,
             role: RunRole,
             owned_owner: Identity,
             foreign_owner: Identity,
         ) -> Self {
-            let _ = (scale, role, owned_owner, foreign_owner);
-            todo!(
-                "Phase 2: call ExpectedComposition::required twice for this same scale, role, and \
-                 pair of identities — once with ExpectedPayloadState::Seeded for the before phase, \
-                 and once with AfterMeasuredBatch of \
-                 MutationSchedule::of(SaturatedQueueGrowthPerWrite), which is the final state because \
-                 E1 runs last in the frozen execution order"
-            )
+            let saturated = MutationSchedule::of(MeasurementChannel::SaturatedQueueGrowthPerWrite)
+                .expect("the saturated channel issues measured writes, so it has a schedule");
+            Self {
+                before: ExpectedComposition::required(
+                    scale,
+                    role,
+                    owned_owner,
+                    foreign_owner,
+                    ExpectedPayloadState::Seeded,
+                ),
+                after: ExpectedComposition::required(
+                    scale,
+                    role,
+                    owned_owner,
+                    foreign_owner,
+                    ExpectedPayloadState::AfterMeasuredBatch(saturated),
+                ),
+            }
+        }
+
+        /// The measured-write schedule the after phase is bound to.
+        ///
+        /// Read back out of the after-expectation rather than stored beside it, so there is no
+        /// second copy of the schedule to disagree with the phase it describes. This is what lets
+        /// the composition check derive the final mutation — its offset, its payload, and the
+        /// payload it replaced — from the transition it was handed, instead of from a caller's
+        /// separate claim about which write to look at.
+        ///
+        /// [`Self::required_final`] fixes the after phase to
+        /// [`AfterMeasuredBatch`](ExpectedPayloadState::AfterMeasuredBatch) and is the only
+        /// constructor, so the seeded arm is unreachable and says so loudly rather than inventing a
+        /// schedule.
+        pub(crate) fn after_schedule(&self) -> MutationSchedule {
+            let ExpectedPayloadState::AfterMeasuredBatch(schedule) = self.after.payload_state()
+            else {
+                panic!(
+                    "required_final fixes the after phase to the saturated batch, so a transition \
+                     always names the schedule its final state was derived from"
+                )
+            };
+            schedule
         }
 
         /// What must be observed before any measured write: the seeded payload on every row.

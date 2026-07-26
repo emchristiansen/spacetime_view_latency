@@ -3,3 +3,5 @@
 mod every_measured_write_targets_a_seeded_owned_key;
 mod no_measured_write_repeats_a_payload;
 mod the_final_payload_is_the_last_write_to_reach_that_offset;
+mod the_final_write_is_index_999_at_offset_9;
+mod the_penultimate_payload_is_the_write_before_the_last_one;

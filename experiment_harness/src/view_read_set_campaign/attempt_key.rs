@@ -87,6 +87,38 @@ impl AttemptKey {
         self.retry
     }
 
+    /// The complete identity as one frozen canonical string — the spelling its retained artifacts
+    /// are filed under.
+    ///
+    /// **Every coordinate, because every coordinate distinguishes an attempt.** Two attempts can
+    /// agree on all but one component, so a tag omitting any of the six would collide two distinct
+    /// identities' evidence: the block coordinate in particular is the *only* thing separating the
+    /// matched blocks' same-rung, same-role attempts.
+    ///
+    /// **Nothing here is `Debug`, a variant name, or serde output.** Each token and number comes
+    /// from an explicit canonical accessor on its own typed component, following
+    /// [`Cell::canonical_tag`](crate::plan::cell::Cell::canonical_tag) and the keyed-sort subject
+    /// in [`Schedule`](crate::plan::schedule::Schedule) — including its semicolon-separated
+    /// `key=value` shape. That is what stops a Rust rename or a serde attribute from moving
+    /// evidence a reader has already been pointed at.
+    ///
+    /// The result is one safe filename component: the frozen vocabulary contains no path separator,
+    /// no `.` or `..` spelling, and nothing empty, and it stays far below the POSIX component
+    /// limit.
+    pub(crate) fn canonical_tag(self) -> String {
+        format!(
+            "candidate={};axis={};rung={};role={};stage={};block={};version={};retry={}",
+            self.candidate.canonical_tag(),
+            self.scale.axis().canonical_tag(),
+            self.scale.rung().get(),
+            self.role.canonical_tag(),
+            self.stage.stage_tag(),
+            self.stage.block_index(),
+            self.version.get(),
+            self.retry.get(),
+        )
+    }
+
     /// Whether two identities address the same logical slot — every component equal except the
     /// retry ordinal.
     pub(crate) fn same_logical_slot(self, other: Self) -> bool {
@@ -111,3 +143,6 @@ impl AttemptKey {
             && self.version == other.version
     }
 }
+
+#[cfg(test)]
+mod tests;

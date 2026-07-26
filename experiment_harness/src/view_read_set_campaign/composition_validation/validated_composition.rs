@@ -12,13 +12,27 @@
 //! it, so it is not re-exported at all.
 
 mod sealed {
-    use anyhow::Result;
+    use std::collections::HashMap;
+
+    use anyhow::{bail, ensure, Context, Result};
     use serde::Serialize;
 
+    use crate::view_read_set_campaign::campaign_params::OWNED_KEY_BASE;
     use crate::view_read_set_campaign::composition_validation::composition_transition_expectation::CompositionTransitionExpectation;
+    use crate::view_read_set_campaign::composition_validation::expected_composition::ExpectedComposition;
+    use crate::view_read_set_campaign::composition_validation::expected_foreign_visibility::ExpectedForeignVisibility;
+    use crate::view_read_set_campaign::composition_validation::expected_payload_state::ExpectedPayloadState;
     use crate::view_read_set_campaign::composition_validation::observed_row_set::ObservedRowSet;
-    use crate::view_read_set_campaign::mutation_schedule::OwnedSliceOffset;
     use crate::view_read_set_campaign::scale_point::ScalePoint;
+
+    /// How many rows of each preregistered slice one observation held.
+    ///
+    /// A named pair rather than a tuple because the two counts are the same type and swapping them
+    /// would turn the Arm's passing security gate into its failure.
+    struct SliceCensus {
+        owned: u64,
+        foreign: u64,
+    }
 
     /// The record of a composition check that was performed, pointing at the rows it checked.
     ///
@@ -44,9 +58,23 @@ mod sealed {
     /// [`ExpectedForeignVisibility`](crate::view_read_set_campaign::composition_validation::expected_foreign_visibility::ExpectedForeignVisibility),
     /// which for the Arm is zero and is the candidate's security gate; and payloads match the phase —
     /// seeded everywhere before, and the schedule's derived final payload on each owned key after,
-    /// with the foreign slice seeded throughout. It then requires the witness row to appear in both
-    /// observations with a changed payload, since the pinned SpacetimeDB source elides a
-    /// byte-identical update outright.
+    /// with the foreign slice seeded throughout. It then derives the final saturated write's own
+    /// target from the bound schedule, requires that row to be present in both observations, and
+    /// requires its final payload to differ from the one the *previous* write to that key left —
+    /// since the pinned SpacetimeDB source elides a byte-identical update outright, an equal pair
+    /// would mean the batch's last write measured nothing.
+    ///
+    /// **How the two arguments are bound to their phases — precisely.** Nothing compares the two
+    /// [`ObservedRowSet`]s' paths or digests, so this is not an identity check, and handing the
+    /// *same* artifact twice is not rejected as a duplicate. It is rejected by the phase
+    /// expectations themselves: the before-census requires the seeded payload on every owned row and
+    /// the after-census requires that key's derived final payload, and those two payloads differ
+    /// bytewise by construction — the seeded constant and the mutation prefix are distinct frozen
+    /// literals. With the owned slice fixed at ten rows and both censuses requiring exactly that
+    /// count, no single artifact can satisfy both sides, so one passed twice always fails the second
+    /// census. Swapping the two likewise fails. What is *not* established here is that either
+    /// artifact came from the phase it is claimed for — only that it satisfies that phase's rule;
+    /// which observation was taken when is the driver's measurement path, as genuineness always is.
     ///
     /// **What it does not cover.** E2's per-sample visibility, which lives in the paced channel's own
     /// samples. This is the composition claim spanning the attempt, not a record of every
@@ -74,65 +102,119 @@ mod sealed {
         subscription_handles: u32,
     }
 
-    /// The concrete before/after state of the owned row the check used as its visibility witness.
+    /// The concrete witness to the **final saturated write** — the last measured mutation of the
+    /// attempt — at the owned key that write targets.
     ///
     /// Private to this childless module, so it cannot be assembled independently of the check that
-    /// produced it. It records the key and both payloads rather than asserting that a change was
-    /// seen, so "the mutation was visible" is something a reader verifies against two values instead
-    /// of a flag they must believe — and the two values are also in the retained row sets, so the
-    /// record can be cross-checked.
+    /// produced it. It records concrete values rather than asserting that a change was seen, so
+    /// "the final mutation was visible" is something a reader verifies against payloads instead of
+    /// a flag they must believe.
+    ///
+    /// **Each field names its own provenance, because they do not share one.** The pre-image of the
+    /// final write is *never observed*: capturing the state between two writes of a saturated batch
+    /// would mean stopping the pipeline under measurement. It is instead exactly reconstructible
+    /// from the frozen schedule, so it is recorded as an expectation and named as one. The other
+    /// two really were validated against retained artifacts and are independently cross-checkable
+    /// there. Giving a derived value and an observed value the same shape — `payload_before` beside
+    /// `payload_after` — would have let a reader take the reconstruction for a measurement.
+    ///
+    /// The expected-immediate-before and validated-after pair is what witnesses *this* mutation.
+    /// The seeded value is retained beside them because it is what makes the record checkable
+    /// against the pre-E2 artifact, but seeded-versus-final alone would witness only that something
+    /// changed at some point since seeding — not that the batch's last write landed.
     #[derive(Debug, Clone, Serialize)]
     struct MutationWitness {
         entity_key: u64,
-        payload_before: String,
-        payload_after: String,
+        /// Validated against the pre-E2 artifact: the seeded payload this key carried before any
+        /// measured write.
+        seeded_payload_validated_before_e2: String,
+        /// Derived from the bound after-phase schedule: the payload this key held immediately
+        /// before the final saturated write replaced it. Not an observation.
+        expected_payload_before_final_write: String,
+        /// Validated against the post-E1 artifact: the payload this key carried once the saturated
+        /// batch confirmed.
+        payload_validated_after_e1: String,
     }
 
     impl ValidatedComposition {
         /// Check both observed result sets against their own side of `expected`, minting the
         /// artifact only if every applicable gate holds.
         ///
-        /// The witness is named by an [`OwnedSliceOffset`] rather than a raw key: the witness must be
-        /// a row the schedule actually targets, and an arbitrary `u64` could name a foreign row —
-        /// which no measured write ever touches, so its payload is unchanged by construction and it
-        /// would witness visibility that never happened. The offset can only have come from a walk of
-        /// the frozen owned slice, and the owned key is derived from it.
+        /// **There is no witness parameter, and that is the contract.** The witness is *the final
+        /// saturated write*, so which row it is at is a fact about the frozen schedule, not a choice
+        /// a caller makes: it is derived here from the bound after-phase schedule's own
+        /// [`final_write_offset`](crate::view_read_set_campaign::mutation_schedule::MutationSchedule::final_write_offset).
+        /// An offset parameter — even a well-typed one confined to the owned slice — would have let
+        /// a caller witness any of the ten owned keys, nine of which were last written earlier in
+        /// the batch, so a finding could claim the final mutation while evidencing a different one.
+        /// Witnessing another mutation is now unrepresentable rather than discouraged.
         ///
-        /// **Phase 1 boundary.** The comparison lands in Phase 2. The signature is what fixes which
-        /// observations a finding must derive from: it takes the retained row sets rather than
-        /// counts, so no caller can pre-reduce the evidence into something this function cannot
-        /// contradict.
+        /// The signature also fixes which observations a finding derives from: it takes the retained
+        /// row sets rather than counts, so no caller can pre-reduce the evidence into something this
+        /// function cannot contradict.
         pub(crate) fn validate(
             expected: CompositionTransitionExpectation,
             before: ObservedRowSet,
             after: ObservedRowSet,
-            witness: OwnedSliceOffset,
             delivered_rows: u64,
             client_cache_rows: u64,
             subscription_handles: u32,
         ) -> Result<Self> {
-            let _ = (
+            let before_census = census(&before, expected.before())
+                .context("censusing the observation retained before the first measured write")?;
+            let after_census = census(&after, expected.after())
+                .context("censusing the observation retained once the saturated batch confirmed")?;
+
+            ensure!(
+                before_census.owned == after_census.owned,
+                "the measured identity's own slice held {} rows before measurement and {} after; \
+                 the measured mutation updates in place, so cardinality is constant at every \
+                 committed state",
+                before_census.owned,
+                after_census.owned,
+            );
+
+            let schedule = expected.after_schedule();
+            let offset = schedule.final_write_offset();
+            let entity_key = OWNED_KEY_BASE
+                .checked_add(offset.get())
+                .expect("an owned-slice offset names a key inside the frozen owned range");
+
+            let seeded = payload_at(&before, entity_key).context(
+                "reading the final saturated write's target from the pre-measurement observation",
+            )?;
+            let after_payload = payload_at(&after, entity_key)
+                .context("reading the final saturated write's target from the final observation")?;
+            let expected_before_final = schedule.penultimate_payload_at_offset(offset);
+
+            ensure!(
+                after_payload != expected_before_final,
+                "the final saturated write's target entity_uuid={entity_key} ends the batch \
+                 carrying the payload its *previous* write left there; a byte-identical update is \
+                 elided at the pinned commit, so the final write measured nothing",
+            );
+
+            // The only allocation of witness payloads happens here, at the mint: the two validated
+            // values are borrowed out of the retained artifacts for the checks above and owned only
+            // once they become part of the record.
+            let mutation = MutationWitness {
+                entity_key,
+                seeded_payload_validated_before_e2: seeded.to_string(),
+                expected_payload_before_final_write: expected_before_final,
+                payload_validated_after_e1: after_payload.to_string(),
+            };
+
+            Ok(Self {
                 expected,
                 before,
                 after,
-                witness,
+                observed_owned_rows: after_census.owned,
+                observed_foreign_rows: after_census.foreign,
+                mutation,
                 delivered_rows,
                 client_cache_rows,
                 subscription_handles,
-            );
-            todo!(
-                "Phase 2: census each retained row set against its own side of the transition, \
-                 rejecting any row outside both key ranges and any row whose owner is not its \
-                 range's expected identity; require the owned count to be exact and identical across \
-                 the two phases, since the schedule updates in place; require the foreign count to \
-                 match ExpectedForeignVisibility (zero for the Arm — the security gate) and every \
-                 foreign row to carry the seeded payload in both phases; match each side's \
-                 ExpectedPayloadState, requiring the seeded payload on every owned row for Seeded \
-                 and the schedule's final_payload_at_offset for each owned slice offset after the \
-                 measured batch; and require the witness key, derived as OWNED_KEY_BASE plus the \
-                 witness offset, to be present in both observations with a changed payload, since a \
-                 byte-identical update is elided at the pinned commit"
-            )
+            })
         }
 
         /// The scale point this finding was checked at, taken from the transition that fixed it.
@@ -162,14 +244,26 @@ mod sealed {
             self.observed_foreign_rows
         }
 
-        /// The witness row's key and its payload before and after the measured schedule ran — the
-        /// concrete values behind the visibility claim.
-        pub(crate) fn mutation(&self) -> (u64, &str, &str) {
-            (
-                self.mutation.entity_key,
-                &self.mutation.payload_before,
-                &self.mutation.payload_after,
-            )
+        /// The owned key the final saturated write targeted — derived from the schedule, never
+        /// chosen.
+        pub(crate) fn witness_entity_key(&self) -> u64 {
+            self.mutation.entity_key
+        }
+
+        /// The seeded payload that key carried in the pre-E2 artifact.
+        pub(crate) fn witness_seeded_payload(&self) -> &str {
+            &self.mutation.seeded_payload_validated_before_e2
+        }
+
+        /// The payload that key held immediately before the final saturated write, derived from the
+        /// frozen schedule. Named as an expectation because no observation can hold it.
+        pub(crate) fn witness_expected_payload_before_final_write(&self) -> &str {
+            &self.mutation.expected_payload_before_final_write
+        }
+
+        /// The payload that key carried in the post-E1 artifact.
+        pub(crate) fn witness_payload_after(&self) -> &str {
+            &self.mutation.payload_validated_after_e1
         }
 
         /// Rows delivered to this subscriber, recorded as supporting evidence rather than a trend
@@ -188,6 +282,134 @@ mod sealed {
             self.subscription_handles
         }
     }
+
+    /// Check one observation against one phase's expectation, returning what each slice held.
+    ///
+    /// Every row must fall in one of the two preregistered key ranges and carry that range's
+    /// expected owner and that phase's expected payload; a row outside both is rejected outright,
+    /// because nothing else was ever seeded and an unexplained key means the observation is not the
+    /// composition it claims to be. Counting rather than materializing the expected key set is
+    /// sufficient because `entity_uuid` is the primary key, so distinct rows have distinct keys and
+    /// range membership plus an exact count pins the set.
+    fn census(observed: &ObservedRowSet, expected: &ExpectedComposition) -> Result<SliceCensus> {
+        let (owned_start, owned_end) = expected.owned_key_range();
+        let (foreign_start, foreign_end) = expected.foreign_key_range();
+
+        // For the after phase, the expected payload differs per owned key, so the schedule's own
+        // walk of the frozen slice is replayed once into an offset-keyed map. Building it from
+        // `owned_slice_offsets` rather than from arithmetic on each key is what keeps the cycle
+        // formula stated in exactly one place — the schedule.
+        let final_payloads: Option<HashMap<u64, String>> = match expected.payload_state() {
+            ExpectedPayloadState::Seeded => None,
+            ExpectedPayloadState::AfterMeasuredBatch(schedule) => Some(
+                schedule
+                    .owned_slice_offsets()
+                    .into_iter()
+                    .map(|offset| (offset.get(), schedule.final_payload_at_offset(offset)))
+                    .collect(),
+            ),
+        };
+
+        let mut owned = 0u64;
+        let mut foreign = 0u64;
+
+        for row in observed.rows() {
+            let owner_hex = row.owner.to_hex().to_string();
+
+            if (owned_start..owned_end).contains(&row.entity_uuid) {
+                ensure!(
+                    owner_hex == expected.owned_owner_hex(),
+                    "owned row entity_uuid={} is owned by {owner_hex}, not the measured identity \
+                     its key range was seeded for",
+                    row.entity_uuid,
+                );
+                let expected_payload: &str = match final_payloads.as_ref() {
+                    None => expected.seeded_payload(),
+                    Some(payloads) => {
+                        let offset = row
+                            .entity_uuid
+                            .checked_sub(owned_start)
+                            .expect("the row's key was just proven to be inside the owned range");
+                        payloads.get(&offset).map(String::as_str).with_context(|| {
+                            format!(
+                                "owned row entity_uuid={} sits at slice offset {offset}, which the \
+                                 frozen owned slice does not contain",
+                                row.entity_uuid,
+                            )
+                        })?
+                    }
+                };
+                ensure!(
+                    row.record == expected_payload,
+                    "owned row entity_uuid={} carries {:?}, not the {:?} this phase requires",
+                    row.entity_uuid,
+                    row.record,
+                    expected_payload,
+                );
+                owned += 1;
+            } else if (foreign_start..foreign_end).contains(&row.entity_uuid) {
+                ensure!(
+                    owner_hex == expected.foreign_owner_hex(),
+                    "foreign row entity_uuid={} is owned by {owner_hex}, not the identity its key \
+                     range was seeded for",
+                    row.entity_uuid,
+                );
+                // No measured write ever targets the foreign slice, in any phase.
+                ensure!(
+                    row.record == expected.seeded_payload(),
+                    "foreign row entity_uuid={} carries {:?} rather than the seeded payload; no \
+                     measured write targets the foreign slice",
+                    row.entity_uuid,
+                    row.record,
+                );
+                foreign += 1;
+            } else {
+                bail!(
+                    "row entity_uuid={} lies outside both preregistered key ranges [{owned_start}, \
+                     {owned_end}) and [{foreign_start}, {foreign_end}); nothing else was ever seeded",
+                    row.entity_uuid,
+                );
+            }
+        }
+
+        ensure!(
+            owned == expected.owned_rows(),
+            "the observation holds {owned} of the measured identity's {} own rows",
+            expected.owned_rows(),
+        );
+
+        // A closed match, not a numeric threshold: `None` is the Arm's security gate, where one
+        // leaked row is the candidate's answer rather than a small discrepancy.
+        let expected_foreign = match expected.foreign_visibility() {
+            ExpectedForeignVisibility::None => 0,
+            ExpectedForeignVisibility::All { rows } => rows,
+        };
+        ensure!(
+            foreign == expected_foreign,
+            "the observation holds {foreign} foreign rows, expected {expected_foreign} for this \
+             role; for the sender-scoped Arm any foreign row is a read-set leak",
+        );
+
+        Ok(SliceCensus { owned, foreign })
+    }
+
+    /// The payload one observation recorded at `key`, failing loud when the row is absent.
+    ///
+    /// Borrows out of the retained artifact rather than cloning: the comparisons this feeds need
+    /// only a `&str`, so the record's single allocation happens where the witness is minted.
+    fn payload_at(observed: &ObservedRowSet, key: u64) -> Result<&str> {
+        let row = observed
+            .rows()
+            .iter()
+            .find(|row| row.entity_uuid == key)
+            .with_context(|| {
+                format!("no row with entity_uuid={key} is present in the observation")
+            })?;
+        Ok(&row.record)
+    }
 }
 
 pub(crate) use sealed::ValidatedComposition;
+
+#[cfg(test)]
+mod tests;

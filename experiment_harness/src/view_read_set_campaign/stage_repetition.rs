@@ -20,3 +20,28 @@ pub(crate) enum StageRepetition {
     /// One of the Pilot's five randomized matched blocks.
     Pilot(PilotBlockIndex),
 }
+
+impl StageRepetition {
+    /// A stable canonical token naming the stage, for the identity-derived artifact directory.
+    ///
+    /// Frozen independently of the variant name, as every other canonical tag is. A later stage
+    /// arrives as its own variant and must be spelled here, so an unnamed stage fails to compile
+    /// rather than borrowing this one's directory.
+    pub(crate) fn stage_tag(self) -> &'static str {
+        match self {
+            Self::Pilot(..) => "pilot",
+        }
+    }
+
+    /// The 0-based block index within this stage.
+    ///
+    /// Read out of the variant rather than stored beside it, so the block cannot be paired with a
+    /// stage it does not belong to. The coordinate is mandatory in the artifact directory name: two
+    /// attempts of the same candidate, axis, rung, role, version, and retry differ *only* by block,
+    /// so omitting it would collide the matched blocks' evidence.
+    pub(crate) fn block_index(self) -> u32 {
+        match self {
+            Self::Pilot(block) => block.get(),
+        }
+    }
+}

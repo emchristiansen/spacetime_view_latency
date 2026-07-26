@@ -40,12 +40,23 @@
 //! the exact rows and redo every comparison rather than trusting that a validator once returned
 //! `Ok`.
 //!
+//! **Where those artifacts land.** The CLI supplies one campaign-wide root, so an attempt's two
+//! observations are written into an
+//! [`attempt_artifact_directory::AttemptArtifactDirectory`] — the exclusively-created child named by
+//! the whole [`AttemptKey`](crate::view_read_set_campaign::attempt_key::AttemptKey) — under an
+//! [`observed_row_set_label::ObservedRowSetLabel`] naming which phase each one is. The two types
+//! answer different questions and neither can stand in for the other: cross-attempt collision fails
+//! at the directory's exclusive creation, while phase misspelling, phase overwrite, and path
+//! traversal are unrepresentable in the label.
+//!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod attempt_artifact_directory;
 pub(crate) mod composition_transition_expectation;
 pub(crate) mod digest_algorithm;
 pub(crate) mod expected_composition;
 pub(crate) mod expected_foreign_visibility;
 pub(crate) mod expected_payload_state;
 pub(crate) mod observed_row_set;
+pub(crate) mod observed_row_set_label;
 pub(crate) mod validated_composition;

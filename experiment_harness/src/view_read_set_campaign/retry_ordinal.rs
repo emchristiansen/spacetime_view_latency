@@ -37,6 +37,19 @@ mod sealed {
         /// invalidation or an infrastructure failure that occurred before the original's first
         /// measured sample. If it also fails, the slot is not complete — there is no successor.
         pub(crate) const RETRY: RetryOrdinal = RetryOrdinal(1);
+
+        /// This ordinal as its 0-based number, for the canonical identity spelling.
+        ///
+        /// An explicit accessor rather than `Debug` or serde output: the number reaches an
+        /// artifact directory name that a reader locates evidence by, so a Rust rename or a serde
+        /// attribute must not be able to move it. Same contract as
+        /// [`Cell::canonical_tag`](crate::plan::cell::Cell::canonical_tag).
+        ///
+        /// Reading it out cannot widen the type: there is still no constructor, so the only values
+        /// this can report are [`Self::ORIGINAL`]'s and [`Self::RETRY`]'s.
+        pub(crate) fn get(self) -> u32 {
+            self.0
+        }
     }
 }
 

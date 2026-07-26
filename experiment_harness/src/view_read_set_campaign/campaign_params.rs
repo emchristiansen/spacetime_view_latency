@@ -44,7 +44,8 @@ pub(crate) const PILOT_BLOCKS_USIZE: usize = {
 /// literal, these rungs are **not** walked cumulatively on one server: each is a separately
 /// provisioned fresh server holding exactly this many rows for the whole measurement, so no
 /// increment or per-rung difference is derived from it.
-pub(crate) const UNRELATED_GLOBAL_ROWS_LADDER: [u64; 6] = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000];
+pub(crate) const UNRELATED_GLOBAL_ROWS_LADDER: [u64; 6] =
+    [1_000, 2_000, 4_000, 8_000, 16_000, 32_000];
 
 /// Number of rungs in [`UNRELATED_GLOBAL_ROWS_LADDER`], for use as an array length bound.
 pub(crate) const UNRELATED_GLOBAL_ROWS_LADDER_LEN: usize = UNRELATED_GLOBAL_ROWS_LADDER.len();
@@ -160,18 +161,43 @@ pub(crate) const PACED_MUTATION_TAG: &str = "e2-paced-visible-apply";
 /// The stable payload tag of the saturated channel's measured writes.
 pub(crate) const SATURATED_MUTATION_TAG: &str = "e1-saturated-queue-growth";
 
-/// Compile-time proof that a measured batch covers the owned slice a whole number of times.
+/// The frozen file stem of the observed row set retained *before* any measured write.
+///
+/// Part of the preregistration for the same reason the payload tags are: it is recorded in every
+/// finding's artifact path, so changing it changes where a reader looks for evidence already
+/// written. Declared here rather than at the persistence call site so the two artifacts of one
+/// attempt cannot be renamed independently.
+pub(crate) const SEEDED_ROW_SET_STEM: &str = "seeded-before-measurement";
+
+/// The frozen file stem of the observed row set retained once the saturated batch has confirmed —
+/// the final state, because E1 runs last in the frozen execution order.
+pub(crate) const AFTER_SATURATED_ROW_SET_STEM: &str = "after-saturated-batch";
+
+/// Compile-time proof that a measured batch covers the owned slice a whole number of times, and at
+/// least twice.
 ///
 /// The frozen after-state — owned key at offset `k` carrying the payload of write index
 /// `CHANNEL_SAMPLE_COUNT - SUBSCRIBER_VISIBLE_ROWS_BASELINE + k` — is only correct when the batch
 /// divides evenly by the slice; a remainder would leave the last partial cycle's keys holding
 /// payloads from indices the formula does not name. Proven where both constants are visible rather
 /// than assumed by the expectation that reads them.
+///
+/// The second premise is what the final-mutation witness rests on. That witness pairs the payload
+/// written by the *last* write to reach an offset with the payload written by the one before it, so
+/// a batch of only one cycle would leave the final write with no predecessor at all and the derived
+/// pre-image would name a write index below zero. Two whole cycles is the weakest premise under
+/// which every offset's final write has a predecessor *within the same batch* — which is what makes
+/// the pair a witness to this channel's own mutation rather than to the seeding that preceded it.
 const _: () = {
     assert!(
         CHANNEL_SAMPLE_COUNT % SUBSCRIBER_VISIBLE_ROWS_BASELINE == 0,
         "a measured batch must cover the owned slice a whole number of times, or the frozen \
          final-state formula does not hold"
+    );
+    assert!(
+        CHANNEL_SAMPLE_COUNT >= 2 * SUBSCRIBER_VISIBLE_ROWS_BASELINE,
+        "a measured batch must cover the owned slice at least twice, or the final write to an \
+         offset has no predecessor in its own batch and the final-mutation witness cannot be derived"
     );
 };
 
