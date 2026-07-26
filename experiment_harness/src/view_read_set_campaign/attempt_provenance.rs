@@ -29,6 +29,7 @@ mod sealed {
     use crate::provision::verified_distribution::VerifiedDistribution;
     use crate::view_read_set_campaign::campaign_params::CONFIRMED_READS;
     use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
+    use crate::view_read_set_campaign::observed_runtime_pins::ObservedRuntimePins;
 
     /// One attempt's observed provisioning facts: the runtime that ran it, the process that served
     /// it, the fresh database instance it published, and the confirmed-read setting its measurement
@@ -141,30 +142,50 @@ mod sealed {
         /// Check this attempt's observed runtime, module, and confirmed-read facts against the
         /// campaign's pins, failing loud on any disagreement.
         ///
-        /// Takes the whole [`CampaignProvenance`] rather than four loose expected values, so a caller
+        /// Takes the whole [`CampaignProvenance`] rather than five loose expected values, so a caller
         /// cannot check an attempt against one campaign's version and another's module digest.
         ///
-        /// **Which clauses are real observations, and which is not.** The CLI and standalone
-        /// versions, the CLI release commit, and the module digest were read off the live
-        /// distribution and the published artifact, so those four can genuinely disagree with the
-        /// pins and are the substance of the gate. `confirmed_reads` cannot disagree *within one
-        /// process*, since both records read [`CONFIRMED_READS`]; what it catches is a ledger
-        /// assembled from lines written by two different builds, which is exactly the case a
-        /// ledger-only reader has no other way to detect.
+        /// Which of the five clauses are real observations, and which one cannot disagree within a
+        /// single process, is stated once at
+        /// [`ObservedRuntimePins::agrees_with`](crate::view_read_set_campaign::observed_runtime_pins::ObservedRuntimePins::agrees_with)
+        /// — where the comparison now lives — rather than restated here, where a second copy would be
+        /// free to drift from the rule it describes.
         ///
-        /// **Phase 1 boundary.** This is a campaign-wide admission gate, not a local newtype
-        /// constructor, so it is stubbed exactly as the retry and selection rules are. What is fixed
-        /// here is the signature — one whole [`CampaignProvenance`], so the comparison cannot be run
-        /// against a mixture of pins.
+        /// **Where the comparison lives.** In [`ObservedRuntimePins`], a sibling argument bundle,
+        /// and not in this module. The five compared facts are ordinary typed scalars, but they are
+        /// held here behind fields that only [`Self::observed`] may write — and that constructor
+        /// needs a live distribution and a running server. A comparison written inside this childless
+        /// module would therefore be reachable by no test at all: a sibling `tests` module cannot see
+        /// private items of `sealed`, and a child of `sealed` is exactly what the module's topology
+        /// forbids. Projecting the five values out lets the rule be proven against real campaign pins
+        /// without provisioning anything, while the record's fields, its sole constructor, and the
+        /// "only door" guarantee above are untouched.
+        ///
+        /// This method is the whole of the coupling: one named-field projection, then immediate
+        /// delegation. It compares nothing itself, so there is no second copy of the rule to drift.
+        ///
+        /// **The residue, stated rather than hidden.** `cli_version` and `standalone_version` are the
+        /// same Rust type, so a projection that wrote one of them into both named fields would
+        /// compile and would pass the pure tests, silently ending the check on the standalone binary.
+        /// The named fields make the mapping explicit and the other three projected values are
+        /// type-distinct, so this five-line literal is accepted on direct source inspection.
+        ///
+        /// Three routes could close it instead. A live-server test and a forged-provenance
+        /// constructor are *rejected* — the first defers the whole gate's proof to provisioning, the
+        /// second reopens the door this module exists to keep shut. The third is real and is not
+        /// rejected: giving the two binaries' versions distinct source types would make the mapping
+        /// checkable by the compiler. That is a change to the distribution types this record projects
+        /// from, wider than this checkpoint, and is deliberately left outside it rather than ruled
+        /// out.
         pub(crate) fn agrees_with(&self, campaign: &CampaignProvenance) -> Result<()> {
-            let _ = campaign;
-            todo!(
-                "Phase 2: require this attempt's observed CLI version and standalone version to \
-                 equal CampaignProvenance::expected_version, its CLI release commit to equal \
-                 expected_release_commit, its published module digest to equal \
-                 expected_module_wasm_sha256, and its confirmed_reads to equal the campaign \
-                 parameters' — failing loud, naming both sides, on any disagreement"
-            )
+            ObservedRuntimePins {
+                cli_version: &self.distribution.cli_version,
+                standalone_version: &self.distribution.standalone_version,
+                cli_release_commit: self.distribution.cli_release_commit,
+                module_wasm_sha256: self.module.wasm_sha256,
+                confirmed_reads: self.confirmed_reads,
+            }
+            .agrees_with(campaign)
         }
     }
 }

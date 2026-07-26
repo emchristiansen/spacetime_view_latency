@@ -1,0 +1,9 @@
+//! Focused tests for the attempt-pin comparison. One test entity per file.
+
+mod a_cli_version_other_than_the_pin_is_refused;
+mod a_confirmed_reads_setting_from_another_build_is_refused;
+mod a_module_digest_other_than_the_pin_is_refused;
+mod a_release_commit_other_than_the_pin_is_refused;
+mod a_standalone_version_other_than_the_pin_is_refused;
+mod fixture;
+mod pins_matching_the_campaign_are_admitted;

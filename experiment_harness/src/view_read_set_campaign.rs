@@ -57,6 +57,7 @@ pub(crate) mod method_supersession;
 pub(crate) mod method_validity;
 pub(crate) mod mutation_schedule;
 pub(crate) mod not_run_reason;
+pub(crate) mod observed_runtime_pins;
 pub(crate) mod partial_evidence;
 pub(crate) mod passed_environment_gate;
 pub(crate) mod pilot_block_index;
