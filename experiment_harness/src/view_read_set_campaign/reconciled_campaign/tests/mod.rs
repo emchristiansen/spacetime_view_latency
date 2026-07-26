@@ -1,15 +1,17 @@
-//! Focused tests for whole-ledger accounting. One test entity per file.
+//! Focused tests for whole-ledger accounting and the selection fold over it. One test entity per
+//! file.
 //!
-//! **What this suite proves, and where it stops.** One test establishes the healthy baseline: a real
-//! sixty-slot campaign ledger is accepted, and its accounted attempts come back in terminal-line
-//! order with the provisioning disposition each outcome implies. Every other test takes that
-//! baseline and makes exactly one change — augmenting it with a retry or a supersession it does not
+//! **What this suite proves, and where it stops.** Two tests read the healthy baseline directly: a
+//! real sixty-slot campaign ledger is accepted, with its accounted attempts in terminal-line order
+//! and the provisioning disposition each outcome implies; and selecting over that same campaign
+//! yields nothing, because no attempt in it completed. Every other test takes that baseline and
+//! makes exactly one change — augmenting it with a retry or a supersession it does not
 //! otherwise contain, or perturbing one line — so that what it reports is the consequence of that
 //! single difference. Between them they cover every rule reachable without a live server: sequence
 //! contiguity, the opening inventory, one terminal per identity, every predeclared original
 //! present, retries only off eligible originals, preflight-clearance cardinality and position,
-//! post-attempt readings for attempts that measured nothing, orphan auxiliary lines, and
-//! supersession reach.
+//! post-attempt readings for attempts that measured nothing, orphan auxiliary lines, supersession
+//! reach, and the one path through selection that a ledger with no complete attempt can take.
 //!
 //! Four rules are **compile-checked and directly inspected only**, because each needs an
 //! [`AttemptProvenance`](crate::view_read_set_campaign::attempt_provenance::AttemptProvenance),
@@ -22,7 +24,12 @@
 //!   the rule, that the reading sits at exactly the sequence after its terminal line with nothing in
 //!   between. Only an outcome requiring one reading reaches that clause at all, since for every
 //!   reachable outcome the required count is zero and cardinality is refused first;
-//! - acceptance of any `Complete` attempt at all, and therefore every selection over one.
+//! - acceptance of any `Complete` attempt at all, and therefore every *nonempty* selection: minting
+//!   a selection, carrying its admitted provenance onto it, excluding a superseded record before the
+//!   ordinal minimum, and competing two ordinals. The empty-result path is reachable and is tested;
+//!   nothing past it is. Lowest-ordinal competition is doubly unreachable — reconciliation admits a
+//!   retry only off a non-complete original — so a provisioning-capable fixture alone would not
+//!   close it.
 //!
 //! A fifth rule is unreachable for a different reason, and will not stay so: "a terminal identity
 //! addressing no frozen logical slot" cannot be constructed today, because every component of an
@@ -36,6 +43,7 @@
 //! make the admission gate forgeable, and every guarantee that rests on it would become a
 //! convention.
 
+mod a_campaign_with_no_complete_attempt_selects_nothing;
 mod a_fully_accounted_campaign_ledger_is_accepted;
 mod a_ledger_whose_sequences_are_not_contiguous_from_zero_is_refused;
 mod a_ledger_without_exactly_one_opening_inventory_is_refused;

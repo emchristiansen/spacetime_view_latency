@@ -56,6 +56,7 @@ mod sealed {
     use crate::view_read_set_campaign::evidence_artifact::EvidenceArtifact;
     use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
     use crate::view_read_set_campaign::method_supersession::MethodSupersession;
+    use crate::view_read_set_campaign::method_validity::MethodValidity;
     use crate::view_read_set_campaign::reconciled_campaign::ProvisioningDisposition;
     use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
     use crate::view_read_set_campaign::retry_ordinal::RetryOrdinal;
@@ -111,8 +112,10 @@ mod sealed {
     /// reconciliation outright — and never a per-attempt selection input, since a rule that preferred
     /// one runtime over another would be choosing evidence by its provenance.
     ///
-    /// **Phase boundary.** The accounting is implemented; the selection fold is still an explicit
-    /// `todo!()` stub.
+    /// **Both halves now exist.** [`Self::reconciled`] establishes the whole-ledger facts;
+    /// [`Self::selections`] folds the supersessions over them. The second is only sound because the
+    /// first ran, which is why they are methods of one type rather than two passes a caller
+    /// sequences.
     #[derive(Debug, Clone, Serialize)]
     pub(crate) struct ReconciledCampaign {
         inventory: AttemptInventory,
@@ -281,17 +284,75 @@ mod sealed {
         /// accounted for, singly recorded, and provenance-admitted, so there is no unexplained record
         /// left for this fold to encounter.
         ///
-        /// **Phase 1 boundary.** The fold lands in Phase 2, frozen in the `todo!()` below.
+        /// **The slots come from the frozen inventory, not from the records.** Reconciliation proved
+        /// the two coincide — every predeclared slot has its original, and every recorded identity
+        /// addresses a predeclared slot — but "per logical slot" names the *preregistration*, and
+        /// reading the slots from it keeps the result's membership a property of the frozen plan
+        /// rather than of whatever the ledger happened to contain. The output order is therefore the
+        /// inventory's; it is deliberately not ledger order, and nothing downstream may depend on
+        /// either, since analysis reconstructs ladders by scale-point identity.
+        ///
+        /// **Provenance is copied, never compared.** It was an admission gate at reconciliation; a
+        /// rule here that preferred one runtime over another would be choosing evidence by its
+        /// provenance.
         pub(crate) fn selections(&self) -> Vec<SelectedCompleteAttempt> {
-            todo!(
-                "Phase 2: group this campaign's attempts by logical slot with \
-                 AttemptKey::same_logical_slot; within each group keep only records whose outcome is \
-                 AttemptOutcome::Complete and which no MethodSupersession covers; take the survivor \
-                 with the lowest RetryOrdinal, and mint SelectedCompleteAttempt from that one \
-                 record's key, its artifact, and the already-admitted AttemptProvenance its accounted \
-                 record carries — a slot with no survivor yields nothing. Provenance is copied, never \
-                 compared: it was an admission gate at reconciliation, not a preference here"
-            )
+            let mut selections = Vec::new();
+            for slot in self.inventory.attempts() {
+                let Some(selected) = self.lowest_ordinal_survivor(*slot) else {
+                    continue;
+                };
+                selections.push(SelectedCompleteAttempt {
+                    key: selected.key,
+                    artifact: selected.artifact.clone(),
+                    provenance: selected.provenance.clone(),
+                });
+            }
+            selections
+        }
+
+        /// The one attempt a logical slot contributes: complete, method-valid as written, reached by
+        /// no supersession, and the lowest such retry ordinal.
+        ///
+        /// **Exclusion strictly precedes the minimum, because that is the general rule the spec
+        /// states** — select the lowest ordinal *among the survivors*, not "the lowest ordinal, kept
+        /// only if it survives". The two differ exactly when a slot holds more than one complete
+        /// candidate and the lower-ordinal one is superseded: this order then selects the surviving
+        /// higher ordinal, while the reversed order would discard the slot entirely.
+        ///
+        /// **That difference is vacuous under today's retry policy, and is written this way anyway.**
+        /// Reconciliation admits a retry only where the original's
+        /// [`retry_eligibility`](crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecord::retry_eligibility)
+        /// is [`RetryEligibility::Eligible`], which no complete outcome ever is, so at most one
+        /// complete candidate per slot is currently representable and both orders agree on every
+        /// reachable ledger. The ordering is therefore direct-inspection-only, exactly as the test
+        /// module records. It is the spec's rule rather than an encoding of the present policy
+        /// because the policy is the part that can change: were multiple complete candidates ever
+        /// admitted, this order would already be the correct one, with no compile error to prompt a
+        /// revisit.
+        ///
+        /// **Supersessions are matched against the full key, retry ordinal included.** That is what
+        /// [`SupersededScope`](crate::view_read_set_campaign::superseded_scope::SupersededScope)
+        /// means: an attempt-scoped invalidation of an original says nothing about its retry, while
+        /// a candidate-version scope reaches both. Excluding by logical slot would over-delete the
+        /// first case.
+        ///
+        /// The minimum needs no tie rule. Reconciliation admits one terminal record per identity,
+        /// and an identity is its slot plus its ordinal, so two candidates of one slot cannot share
+        /// an ordinal.
+        fn lowest_ordinal_survivor(&self, slot: AttemptKey) -> Option<SelectedEvidence<'_>> {
+            self.attempts
+                .iter()
+                .filter(|record| record.terminal().key().same_logical_slot(slot))
+                .filter_map(selectable)
+                .filter(|selected| !self.superseded(selected.key))
+                .min_by_key(|selected| selected.key.retry())
+        }
+
+        /// Whether any invalidation this ledger recorded reaches exactly this attempt identity.
+        fn superseded(&self, attempt: AttemptKey) -> bool {
+            self.supersessions
+                .iter()
+                .any(|supersession| supersession.covers(attempt))
         }
     }
 
@@ -306,6 +367,63 @@ mod sealed {
         pub(crate) fn provisioning(&self) -> &ProvisioningDisposition {
             &self.provisioning
         }
+    }
+
+    /// Everything one selectable record contributes, borrowed from the accounted record holding it.
+    ///
+    /// Extracted before the ordinal comparison rather than after it, so the bridge in
+    /// [`selectable`] is crossed once per candidate and never again on the winner — the selection is
+    /// then a copy of facts already in hand.
+    struct SelectedEvidence<'a> {
+        key: AttemptKey,
+        artifact: &'a EvidenceArtifact,
+        provenance: &'a AttemptProvenance,
+    }
+
+    /// What an accounted record contributes to its slot's selection, or `None` when its terminal
+    /// outcome makes it no candidate at all.
+    ///
+    /// **The validity state is total-matched together with the outcome, deliberately.**
+    /// [`MethodValidity`] has one variant today, so naming it changes nothing that runs. But it
+    /// answers "did the campaign already know, as it wrote this line, that the method was unsound?",
+    /// and a future state meaning *yes* would otherwise be selected in silence. Written this way,
+    /// adding one fails to compile here until it states its own selection disposition. This does not
+    /// replace the supersession fold, which carries everything learned *after* the line was written;
+    /// the two answer different questions and both must hold.
+    ///
+    /// **The one `.expect` bridges a guarantee the accounting established and this pair cannot
+    /// carry.** [`required_provisioned`] returns 1 for a complete outcome and
+    /// [`AttemptLines::account_family`] refused any attempt whose provisioned-line count differed, so
+    /// a complete record reaching here always has its admitted provenance —
+    /// [`AccountedAttemptRecord`] simply stores the outcome and the disposition side by side rather
+    /// than in one variant, so the compiler cannot see it. The alternatives were worse: silently
+    /// dropping admitted evidence, or a fallible signature contradicting this fold's frozen
+    /// infallibility. A variant coupling complete evidence to its provenance would make the bridge
+    /// unnecessary, but that is a rewrite of the sealed accounted-record boundary rather than part of
+    /// this fold. Same shape and same justification as [`AttemptLines::terminal`].
+    fn selectable(record: &AccountedAttemptRecord) -> Option<SelectedEvidence<'_>> {
+        let artifact = match record.terminal().outcome() {
+            AttemptOutcome::Complete {
+                artifact,
+                validity: MethodValidity::Valid,
+            } => artifact,
+            AttemptOutcome::PreflightRejected { .. }
+            | AttemptOutcome::Failed { .. }
+            | AttemptOutcome::NotRun { .. } => return None,
+        };
+        let provenance = match record.provisioning() {
+            ProvisioningDisposition::Provisioned(provenance) => Some(provenance),
+            ProvisioningDisposition::NeverPublished => None,
+        }
+        .expect(
+            "reconciliation requires exactly one provisioned line for every complete attempt, so a \
+             complete accounted record always carries its admitted provenance",
+        );
+        Some(SelectedEvidence {
+            key: record.terminal().key(),
+            artifact,
+            provenance,
+        })
     }
 
     /// Every line the ledger wrote under one attempt identity, gathered so each frozen per-attempt
