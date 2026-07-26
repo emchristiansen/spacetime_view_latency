@@ -5,8 +5,14 @@
 //! the sender-scoped view leaks none of the foreign slice. This module is where those claims are
 //! checked.
 //!
-//! **Who can construct what.** [`expected_composition::ExpectedComposition`] is validator *input*:
-//! its fields are private and [`ExpectedComposition::required`](expected_composition::ExpectedComposition::required)
+//! **Who can construct what.** Each invariant-bearing type here lives in a private, *childless*
+//! inline `sealed` module inside its own file, and is re-exported from it. That topology is what
+//! makes the claims below compiler-enforced rather than conventional: a private field is visible to
+//! its declaring module **and every descendant**, so a type declared beside a `#[cfg(test)] mod
+//! tests` — or beside any child added later — would be directly constructible by it.
+//!
+//! [`expected_composition::ExpectedComposition`] is validator *input*: its fields are private and
+//! [`ExpectedComposition::required`](expected_composition::ExpectedComposition::required)
 //! is its only constructor, so an expectation is always derived from an attempt's identity and role
 //! rather than fitted to an observation — but it asserts nothing about what a server returned, and
 //! no observed-fact guarantee attaches to it. [`expected_foreign_visibility::ExpectedForeignVisibility`]
@@ -17,9 +23,13 @@
 //! prevent is an after-E2 expectation judged against the final after-E1 row set, since the two
 //! batches differ only in their channel tag.
 //! [`validated_composition::ValidatedComposition`] has entirely private fields and a single
-//! constructor declared in its own file, so no other module — sibling, parent, or elsewhere in the
-//! crate — can mint one without going through the comparison. Its nested digest and mutation
-//! payloads are private types in that same file, so they cannot be assembled independently either.
+//! constructor sealed alongside them, so no other module — sibling, parent, or elsewhere in the
+//! crate — can mint one without going through the comparison. Its mutation-witness payload is a
+//! private type sealed in that same module and is not re-exported at all, so it cannot be assembled
+//! independently either. The recorded digests are not a nested type: they live on
+//! [`observed_row_set::ObservedRowSet`], whose fields are sealed the same way, alongside a
+//! [`digest_algorithm::DigestAlgorithm`] that is deliberately freely constructible because naming a
+//! hash asserts nothing about what was hashed.
 //!
 //! **What makes a finding auditable.** A digest cannot be inverted and counts cannot re-run an
 //! owner, payload, or key-range comparison, so the ledger alone would never be enough. The observed

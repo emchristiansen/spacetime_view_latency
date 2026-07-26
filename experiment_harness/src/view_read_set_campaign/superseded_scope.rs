@@ -45,7 +45,7 @@ impl SupersededScope {
     /// covers exactly its own key, and a version scope covers exactly the attempts whose candidate
     /// and version it names. The *selection* rule that folds these over terminal outcomes is the
     /// deferred part, and it lives on
-    /// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign).
+    /// `ReconciledCampaign`.
     pub(crate) fn covers(self, attempt: AttemptKey) -> bool {
         match self {
             Self::Attempt(superseded) => superseded == attempt,

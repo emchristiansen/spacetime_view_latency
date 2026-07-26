@@ -11,9 +11,14 @@ use crate::view_read_set_campaign::saturated_write_timing::SaturatedWriteTiming;
 /// Every write of one saturated batch, in issue order, each carrying its issue and confirmation
 /// offsets from the batch's common origin.
 ///
-/// The count is proven *structurally*: the sole constructor [`Self::sealed`] converts into a
-/// fixed-size array, so after sealing a batch cannot hold any other number of writes — "exactly
-/// [`CHANNEL_SAMPLE_COUNT`]" is the type rather than a check someone must remember. Mirrors
+/// The count is proven *structurally*, by the field's type rather than by who may construct one:
+/// the field is a fixed-size array, so a batch cannot hold any other number of writes however it was
+/// built — "exactly [`CHANNEL_SAMPLE_COUNT`]" is the type rather than a check someone must remember.
+/// That is why this type is deliberately *not* confined to a private childless module the way its
+/// element type and the validated evidence types are: [`Self::sealed`] adds only the conversion the
+/// field already demands, so a struct literal written by some future child module of this file could
+/// bypass nothing. The elements themselves remain unforgeable, because
+/// [`SaturatedWriteTiming`] is sealed and admits no inverted pair. Mirrors
 /// [`RawLatencies`](crate::observation::raw_latencies::RawLatencies)' treatment of the same count,
 /// and differs from it in exactly the way the spec requires: this retains both offsets rather than
 /// only their difference, so the FIFO and stable-issue-spacing interpretation stays falsifiable

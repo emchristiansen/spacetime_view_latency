@@ -15,7 +15,7 @@ use crate::view_read_set_campaign::supersession_justification::SupersessionJusti
 /// campaign already know, when it wrote this line, that the method was unsound?" — and this record
 /// carries everything learned afterwards. A selection rule that reads that field alone will select
 /// superseded evidence; the rule must fold these records over the terminal outcomes, which is
-/// [`ReconciledCampaign::selections`](super::reconciled_campaign::ReconciledCampaign::selections).
+/// `ReconciledCampaign::selections`.
 ///
 /// **What it is keyed by.** A [`SupersededScope`] and nothing else. The candidate version is inside
 /// the scope — either within the named [`AttemptKey`] or as the version scope's own component — so

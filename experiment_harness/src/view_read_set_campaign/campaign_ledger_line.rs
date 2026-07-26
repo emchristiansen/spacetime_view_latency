@@ -9,7 +9,7 @@ use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 ///
 /// The same `{seq, body}` shape the Pilot's sink emits, promoted from a private struct inside that
 /// sink to a named type here because it is now read as well as written:
-/// [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign) consumes a
+/// `ReconciledCampaign::reconciled` consumes a
 /// stream of these, and the sequence is part of what it checks. A reconciliation handed bare
 /// [`CampaignRecord`]s could not tell a ledger whose lines are contiguous and correctly ordered from
 /// one with a hole in it.
@@ -22,7 +22,7 @@ use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 /// That is the honest surface: a line is a transport shape, and the invariants that matter — one
 /// `Inventory` first, contiguous sequences, one terminal per identity — are properties of a *whole
 /// stream*, so none of them is checkable here. They are checked exactly once, in
-/// [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign), and this type
+/// `ReconciledCampaign::reconciled`, and this type
 /// makes no claim to have anticipated any of them.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CampaignLedgerLine {

@@ -25,7 +25,7 @@ use serde::Serialize;
 /// supersession record, keyed to the attempt identity and candidate version — and the selection rule
 /// must *fold those records over* the terminal outcomes rather than reading this field alone. That
 /// record is [`MethodSupersession`](super::method_supersession::MethodSupersession), and the fold is
-/// [`ReconciledCampaign::selections`](super::reconciled_campaign::ReconciledCampaign::selections).
+/// `ReconciledCampaign::selections`.
 ///
 /// So this field answers one narrow question — did the campaign already know, when it wrote this
 /// line, that the method was unsound? — and a reader who treats it as the final word will select

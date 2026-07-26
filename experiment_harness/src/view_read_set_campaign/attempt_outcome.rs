@@ -35,7 +35,7 @@ use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
 /// lines an attempt must have is fixed by its disposition: a launched attempt has exactly one
 /// preflight clearance, a published one has a provisioned provenance, and a measured one has exactly
 /// one post-attempt reading. Those rules are stated where they are checked, in
-/// [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign::reconciled).
+/// `ReconciledCampaign::reconciled`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum AttemptOutcome {
     /// Measured all four channels at its scale point and passed composition validation.

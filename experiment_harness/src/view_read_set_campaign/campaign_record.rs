@@ -20,7 +20,7 @@ use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecor
 ///
 /// - **Owned, not borrowing.** The Pilot's record borrows because it is a write-only vocabulary. This
 ///   one is also the input to
-///   [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign), which holds
+///   `ReconciledCampaign::reconciled`, which holds
 ///   a whole campaign's records at once; a stream of borrows could not express that.
 /// - **No progressive `Rung` line.** A rung was a step of the Pilot's cumulative walk, so evidence
 ///   accrued mid-attempt and needed durability before the terminal record. Here an attempt is one
@@ -47,7 +47,7 @@ use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecor
 /// requires the ledger it belongs to.
 ///
 /// The accounting and ordering invariants a reader must enforce rather than assume are stated once,
-/// where they are checked — see [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign).
+/// where they are checked — see `ReconciledCampaign::reconciled`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum CampaignRecord {
     /// The frozen inventory in execution order and the campaign-constant provenance every later line

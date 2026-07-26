@@ -1,118 +1,140 @@
 //! One fresh server's complete evidence at the single scale point it measured.
+//!
+//! The type lives in the private, *childless* inline module [`sealed`] because everything sealing
+//! proves — four channels in the frozen execution order, and a composition finding from *this* scale
+//! point — is carried by the constructor rather than by the field types. A private field is visible
+//! to its declaring module **and every descendant**, so a `#[cfg(test)] mod tests` child, or any
+//! child added later, could write the struct literal and attach another rung's composition finding to
+//! this evidence. `sealed` has no children, so [`ScalePointEvidence::sealed`] really is the only
+//! door.
+//!
+//! [`CHANNEL_COUNT`] stays outside `sealed`: it is a derived `usize` constant read by
+//! [`partial_evidence`](crate::view_read_set_campaign::partial_evidence), and a constant carries no
+//! invariant that sole minting could protect.
 
-use anyhow::{anyhow, ensure, Result};
-use serde::Serialize;
-
-use crate::view_read_set_campaign::cell_statistic::CellStatistic;
-use crate::view_read_set_campaign::channel_evidence::ChannelEvidence;
-use crate::view_read_set_campaign::composition_validation::validated_composition::ValidatedComposition;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
-use crate::view_read_set_campaign::scale_point::ScalePoint;
 
 /// How many channels a complete attempt measures — the length of the frozen execution order, read
 /// from it rather than written as a literal four, so the two cannot disagree.
 pub(crate) const CHANNEL_COUNT: usize = MeasurementChannel::EXECUTION_ORDER.len();
 
-/// All four channels measured at one scale point, plus the composition check that scale point
-/// passed.
-///
-/// This is what one fresh server yields. Every scale point is separately provisioned, so an
-/// attempt's evidence is exactly this — never a ladder. Whole-ladder completeness is a *separate*
-/// claim: it is a fact about six *selected* attempts of one `(candidate, block, role, axis,
-/// version)`, so it can only be established downstream of
-/// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign), where
-/// [`UnrelatedGlobalRowsLadderEvidence`](super::unrelated_global_rows_ladder_evidence::UnrelatedGlobalRowsLadderEvidence)
-/// makes it.
-///
-/// **Who can construct it.** Any code in the crate, through [`Self::sealed`] — but only by supplying
-/// four well-formed, channel-specific [`ChannelEvidence`] values and a [`ValidatedComposition`]. The
-/// channel values assert only that each reduction is paired with its own sample shape; the latter is
-/// unforgeable
-/// (private fields, sole constructor colocated with its comparison), so a sealed
-/// `ScalePointEvidence` cannot exist without a composition check having actually run against
-/// retained rows.
-///
-/// **What sealing proves.** That all four channels of
-/// [`MeasurementChannel::EXECUTION_ORDER`] are present, exactly once each, in that frozen order —
-/// structurally, by conversion into a fixed-size array after a positional check, mirroring
-/// [`EvidenceArtifact::sealed`](crate::entity_owner_pilot::evidence_artifact::EvidenceArtifact).
-/// And that the composition was checked at *this* scale point, not another: a finding from a
-/// different rung cannot be attached to this evidence.
-///
-/// **What it does not prove.** That the measurements are genuine. Each [`ChannelEvidence`] binds a
-/// reduction to its own sample shape and nothing more; genuineness is a property of the driver's
-/// measurement path. Sealing adds channel completeness and scale agreement to that, and no more.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ScalePointEvidence {
-    scale: ScalePoint,
-    channels: [ChannelEvidence; CHANNEL_COUNT],
-    composition: ValidatedComposition,
-}
+mod sealed {
+    use anyhow::{anyhow, ensure, Result};
+    use serde::Serialize;
 
-impl ScalePointEvidence {
-    /// Seal one attempt's evidence, failing loud unless its channels are exactly the frozen
-    /// execution order and its composition finding belongs to the same scale point.
-    pub(crate) fn sealed(
-        scale: ScalePoint,
-        channels: Vec<ChannelEvidence>,
-        composition: ValidatedComposition,
-    ) -> Result<Self> {
-        ensure!(
-            composition.scale() == scale,
-            "the composition finding was checked at {:?}, not the {:?} this evidence claims; a \
-             finding from another scale point can never stand in for this one",
-            composition.scale(),
-            scale,
-        );
-        let collected = channels.len();
-        for (position, evidence) in channels.iter().enumerate() {
-            let expected = MeasurementChannel::EXECUTION_ORDER.get(position).copied();
-            ensure!(
-                expected == Some(evidence.channel()),
-                "a complete attempt's channels must be the frozen execution order \
-                 {:?}; position {position} holds {:?}",
-                MeasurementChannel::EXECUTION_ORDER,
-                evidence.channel(),
-            );
-        }
-        let channels: [ChannelEvidence; CHANNEL_COUNT] = channels.try_into().map_err(|_| {
-            anyhow!(
-                "a complete attempt must measure exactly {CHANNEL_COUNT} channels, got {collected}"
-            )
-        })?;
-        Ok(Self {
-            scale,
-            channels,
-            composition,
-        })
-    }
+    use crate::view_read_set_campaign::cell_statistic::CellStatistic;
+    use crate::view_read_set_campaign::channel_evidence::ChannelEvidence;
+    use crate::view_read_set_campaign::composition_validation::validated_composition::ValidatedComposition;
+    use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
+    use crate::view_read_set_campaign::scale_point::ScalePoint;
+    use crate::view_read_set_campaign::scale_point_evidence::CHANNEL_COUNT;
 
-    /// The scale point this whole attempt held fixed while it measured.
-    pub(crate) fn scale(&self) -> ScalePoint {
-        self.scale
-    }
-
-    /// Every channel's evidence, in the frozen execution order.
-    pub(crate) fn channels(&self) -> &[ChannelEvidence; CHANNEL_COUNT] {
-        &self.channels
-    }
-
-    /// This scale point's `S` for `channel` — one of the two values an endpoint factor
-    /// `T = S_last / S_first` is built from.
+    /// All four channels measured at one scale point, plus the composition check that scale point
+    /// passed.
     ///
-    /// Total: sealing proved every channel of the frozen order is present, so there is no missing
-    /// case for a caller to handle wrongly.
-    pub(crate) fn statistic(&self, channel: MeasurementChannel) -> CellStatistic {
-        self.channels
-            .iter()
-            .find(|evidence| evidence.channel() == channel)
-            .expect("sealing proved every channel of the frozen execution order is present")
-            .statistic()
+    /// This is what one fresh server yields. Every scale point is separately provisioned, so an
+    /// attempt's evidence is exactly this — never a ladder. Whole-ladder completeness is a *separate*
+    /// claim: it is a fact about six *selected* attempts of one `(candidate, block, role, axis,
+    /// version)`, so it can only be established downstream of
+    /// `ReconciledCampaign`,
+    /// where
+    /// `UnrelatedGlobalRowsLadderEvidence`
+    /// makes it.
+    ///
+    /// **Who can construct it.** Any code in the crate, through [`Self::sealed`] — but only by
+    /// supplying four well-formed, channel-specific [`ChannelEvidence`] values and a
+    /// [`ValidatedComposition`]. Every field is private to this childless module, so no struct
+    /// literal anywhere in the crate can stand in for that call. The channel values assert only that
+    /// each reduction is paired with its own sample shape; the latter is unforgeable (private fields,
+    /// sole constructor confined the same way), so a sealed `ScalePointEvidence` cannot exist without
+    /// a composition check having actually run against retained rows.
+    ///
+    /// **What sealing proves.** That all four channels of
+    /// [`MeasurementChannel::EXECUTION_ORDER`] are present, exactly once each, in that frozen order —
+    /// structurally, by conversion into a fixed-size array after a positional check, mirroring
+    /// [`EvidenceArtifact::sealed`](crate::entity_owner_pilot::evidence_artifact::EvidenceArtifact).
+    /// And that the composition was checked at *this* scale point, not another: a finding from a
+    /// different rung cannot be attached to this evidence.
+    ///
+    /// **What it does not prove.** That the measurements are genuine. Each [`ChannelEvidence`] binds
+    /// a reduction to its own sample shape and nothing more; genuineness is a property of the
+    /// driver's measurement path. Sealing adds channel completeness and scale agreement to that, and
+    /// no more.
+    #[derive(Debug, Clone, Serialize)]
+    pub(crate) struct ScalePointEvidence {
+        scale: ScalePoint,
+        channels: [ChannelEvidence; CHANNEL_COUNT],
+        composition: ValidatedComposition,
     }
 
-    /// The composition check this scale point passed — where a reader goes to re-run the comparison
-    /// against the retained rows.
-    pub(crate) fn composition(&self) -> &ValidatedComposition {
-        &self.composition
+    impl ScalePointEvidence {
+        /// Seal one attempt's evidence, failing loud unless its channels are exactly the frozen
+        /// execution order and its composition finding belongs to the same scale point.
+        pub(crate) fn sealed(
+            scale: ScalePoint,
+            channels: Vec<ChannelEvidence>,
+            composition: ValidatedComposition,
+        ) -> Result<Self> {
+            ensure!(
+                composition.scale() == scale,
+                "the composition finding was checked at {:?}, not the {:?} this evidence claims; a \
+                 finding from another scale point can never stand in for this one",
+                composition.scale(),
+                scale,
+            );
+            let collected = channels.len();
+            for (position, evidence) in channels.iter().enumerate() {
+                let expected = MeasurementChannel::EXECUTION_ORDER.get(position).copied();
+                ensure!(
+                    expected == Some(evidence.channel()),
+                    "a complete attempt's channels must be the frozen execution order \
+                     {:?}; position {position} holds {:?}",
+                    MeasurementChannel::EXECUTION_ORDER,
+                    evidence.channel(),
+                );
+            }
+            let channels: [ChannelEvidence; CHANNEL_COUNT] = channels.try_into().map_err(|_| {
+                anyhow!(
+                    "a complete attempt must measure exactly {CHANNEL_COUNT} channels, got \
+                     {collected}"
+                )
+            })?;
+            Ok(Self {
+                scale,
+                channels,
+                composition,
+            })
+        }
+
+        /// The scale point this whole attempt held fixed while it measured.
+        pub(crate) fn scale(&self) -> ScalePoint {
+            self.scale
+        }
+
+        /// Every channel's evidence, in the frozen execution order.
+        pub(crate) fn channels(&self) -> &[ChannelEvidence; CHANNEL_COUNT] {
+            &self.channels
+        }
+
+        /// This scale point's `S` for `channel` — one of the two values an endpoint factor
+        /// `T = S_last / S_first` is built from.
+        ///
+        /// Total: sealing proved every channel of the frozen order is present, so there is no
+        /// missing case for a caller to handle wrongly.
+        pub(crate) fn statistic(&self, channel: MeasurementChannel) -> CellStatistic {
+            self.channels
+                .iter()
+                .find(|evidence| evidence.channel() == channel)
+                .expect("sealing proved every channel of the frozen execution order is present")
+                .statistic()
+        }
+
+        /// The composition check this scale point passed — where a reader goes to re-run the
+        /// comparison against the retained rows.
+        pub(crate) fn composition(&self) -> &ValidatedComposition {
+            &self.composition
+        }
     }
 }
+
+pub(crate) use sealed::ScalePointEvidence;
