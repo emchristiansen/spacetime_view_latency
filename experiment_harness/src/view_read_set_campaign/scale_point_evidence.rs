@@ -18,10 +18,11 @@ pub(crate) const CHANNEL_COUNT: usize = MeasurementChannel::EXECUTION_ORDER.len(
 ///
 /// This is what one fresh server yields. Every scale point is separately provisioned, so an
 /// attempt's evidence is exactly this — never a ladder. Whole-ladder completeness is a *separate*
-/// claim: it is a fact about six selected attempts of one `(candidate, block, role, axis, version)`,
-/// so it can only be established downstream of
-/// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign), and no ladder aggregate
-/// exists yet.
+/// claim: it is a fact about six *selected* attempts of one `(candidate, block, role, axis,
+/// version)`, so it can only be established downstream of
+/// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign), where
+/// [`UnrelatedGlobalRowsLadderEvidence`](super::unrelated_global_rows_ladder_evidence::UnrelatedGlobalRowsLadderEvidence)
+/// makes it.
 ///
 /// **Who can construct it.** Any code in the crate, through [`Self::sealed`] — but only by supplying
 /// four well-formed, channel-specific [`ChannelEvidence`] values and a [`ValidatedComposition`]. The

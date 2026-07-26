@@ -13,8 +13,8 @@ use crate::view_read_set_campaign::scale_point_evidence::ScalePointEvidence;
 /// [`AttemptKey`], so this holds exactly that key's single scale
 /// point — never a six-rung ladder. Whole-ladder completeness is a separate claim about six
 /// *selected* attempts, so it can only be made downstream of
-/// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign); no ladder aggregate
-/// exists yet.
+/// [`ReconciledCampaign`](super::reconciled_campaign::ReconciledCampaign), by
+/// [`UnrelatedGlobalRowsLadderEvidence`](super::unrelated_global_rows_ladder_evidence::UnrelatedGlobalRowsLadderEvidence).
 ///
 /// **Why an enum over an axis field.** Each axis's evidence is interpreted against its own frozen
 /// ladder and endpoint factor `F`, so the axis is not a label on otherwise-uniform evidence — it
