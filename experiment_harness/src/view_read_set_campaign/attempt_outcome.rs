@@ -6,7 +6,7 @@ use crate::view_read_set_campaign::diagnostic_artifact::DiagnosticArtifact;
 use crate::view_read_set_campaign::evidence_artifact::EvidenceArtifact;
 use crate::view_read_set_campaign::failed_environment_gate::FailedEnvironmentGate;
 use crate::view_read_set_campaign::failure_kind::FailureKind;
-use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
+use crate::view_read_set_campaign::failure_stage::FailureStage;
 use crate::view_read_set_campaign::method_validity::MethodValidity;
 use crate::view_read_set_campaign::not_run_reason::NotRunReason;
 use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
@@ -26,9 +26,16 @@ use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
 ///
 /// **This is what the retry rule total-matches over.** [`Self::PreflightRejected`] is categorically
 /// eligible; [`Self::Failed`] is eligible only for
-/// [`FailureKind::Infrastructure`] together with the first-measured-sample boundary; everything else
-/// is ineligible. A variant added here without a retry disposition fails to compile in that
-/// function rather than silently defaulting.
+/// [`FailureKind::Infrastructure`] together with a stage whose
+/// [`MeasuredSampleBoundary`](super::measured_sample_boundary::MeasuredSampleBoundary) is
+/// `BeforeFirst`; everything else is ineligible. A variant added here without a retry disposition
+/// fails to compile in that function rather than silently defaulting.
+///
+/// **It is also what the ledger's per-attempt line rules total-match over**, since which auxiliary
+/// lines an attempt must have is fixed by its disposition: a launched attempt has exactly one
+/// preflight clearance, a published one has a provisioned provenance, and a measured one has exactly
+/// one post-attempt reading. Those rules are stated where they are checked, in
+/// [`ReconciledCampaign::reconciled`](super::reconciled_campaign::ReconciledCampaign::reconciled).
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum AttemptOutcome {
     /// Measured all four channels at its scale point and passed composition validation.
@@ -45,13 +52,16 @@ pub(crate) enum AttemptOutcome {
     /// Launched, then terminated before completing, retaining whatever channels and composition
     /// finding it had produced.
     ///
-    /// `boundary` is stated by the driver rather than inferred from `partial`, because an empty
-    /// channel prefix cannot distinguish a failure before any measurement from one during the very
-    /// first sample. It is serialized with the rest so the retry decision is auditable from the
-    /// ledger alone.
+    /// `stage` is stated by the driver rather than inferred from `partial`, because an empty channel
+    /// prefix cannot distinguish a failure before any measurement from one during the very first
+    /// sample, and no cause can say whether the module had been published. It is serialized with the
+    /// rest, and both the retry timing term
+    /// ([`MeasuredSampleBoundary`]) and the "must a `Provisioned` line exist for this attempt?" rule
+    /// are total matches over it — so neither decision is auditable only by trusting the driver's
+    /// classification of the cause.
     Failed {
         kind: FailureKind,
-        boundary: MeasuredSampleBoundary,
+        stage: FailureStage,
         partial: PartialEvidence,
         diagnostic: DiagnosticArtifact,
     },

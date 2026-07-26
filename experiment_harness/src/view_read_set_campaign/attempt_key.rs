@@ -56,9 +56,22 @@ impl AttemptKey {
         }
     }
 
+    /// Which candidate's measured path this attempt exercised.
+    pub(crate) fn candidate(self) -> CandidateId {
+        self.candidate
+    }
+
     /// The validated scale this attempt holds fixed for the whole of its measurement.
     pub(crate) fn scale(self) -> ScalePoint {
         self.scale
+    }
+
+    /// The implementation version of the candidate path this attempt measured. Read together with
+    /// [`Self::candidate`] by
+    /// [`SupersededScope`](super::superseded_scope::SupersededScope), whose version scope names
+    /// exactly the attempts these two components identify.
+    pub(crate) fn version(self) -> CandidateVersion {
+        self.version
     }
 
     /// Whether this attempt measures the module view under test or its matched direct-table

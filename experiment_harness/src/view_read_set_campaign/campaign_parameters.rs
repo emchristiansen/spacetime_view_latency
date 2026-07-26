@@ -25,10 +25,15 @@ use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
 /// `confirmed_reads` is recorded **explicitly**, which the completed seed-7 ledger did not do — that
 /// campaign's confirmed-read state is verifiable only through build provenance. The spec now
 /// requires every new inventory and provenance record to carry it so a ledger-only check can verify
-/// it without inference. Here it is the campaign's preregistered *intent*; the value actually in
-/// force for one attempt is recorded separately by
-/// [`AttemptProvenance`](super::attempt_provenance::AttemptProvenance), and a ledger-only check
-/// compares the two rather than assuming they agree.
+/// it without inference.
+///
+/// [`AttemptProvenance`](super::attempt_provenance::AttemptProvenance) records it per attempt as
+/// well, and the honest limit of that is worth stating: both copies read
+/// [`crate::params::CONFIRMED_READS`], the same constant
+/// [`ConnectedClient::connect`](crate::client::connected_client::ConnectedClient::connect) passes to
+/// `with_confirmed_reads`, so they cannot disagree and comparing them proves nothing. What the pair
+/// buys is that a reader holding either line alone knows the setting, instead of having to infer it
+/// from build provenance as the seed-7 ledger requires.
 ///
 /// The global identity is derived from the issuer *and* the subject together, so both are recorded:
 /// the issuer is a historical [`crate::params`] constant this campaign depends on but does not own,
@@ -88,5 +93,11 @@ impl CampaignParameters {
             environment_min_available_ram_bytes: ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES,
             environment_max_memory_psi_centi: ENVIRONMENT_MAX_MEMORY_PSI_CENTI,
         }
+    }
+
+    /// The confirmed-read setting this campaign preregistered, read by the ledger-only check that
+    /// compares it against each attempt's recorded value.
+    pub(crate) fn confirmed_reads(&self) -> bool {
+        self.confirmed_reads
     }
 }

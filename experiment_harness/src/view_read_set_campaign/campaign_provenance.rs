@@ -58,4 +58,25 @@ impl CampaignProvenance {
             parameters: CampaignParameters::preregistered(),
         })
     }
+
+    /// The pinned runtime version every attempt's CLI and standalone binary must report.
+    pub(crate) fn expected_version(&self) -> &Version {
+        &self.expected_version
+    }
+
+    /// The pinned upstream release commit every attempt's CLI must report.
+    pub(crate) fn expected_release_commit(&self) -> ReleaseCommit {
+        self.expected_release_commit
+    }
+
+    /// The pinned module artifact digest every attempt must have published.
+    pub(crate) fn expected_module_wasm_sha256(&self) -> WasmSha256 {
+        self.expected_module_wasm_sha256
+    }
+
+    /// This campaign's preregistered parameters, read by the reconciliation gate that checks each
+    /// attempt's recorded provenance against these pins.
+    pub(crate) fn parameters(&self) -> &CampaignParameters {
+        &self.parameters
+    }
 }

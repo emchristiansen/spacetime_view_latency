@@ -7,10 +7,11 @@ use serde::Serialize;
 /// **The environment gate is deliberately absent from this type.** The gate is *prospective*: its
 /// two-sample pair is a preflight ending immediately before launch, so an attempt that got as far as
 /// a completed outcome has already passed it. Gate invalidation is a condition before the first
-/// measured sample, not a verdict on a completed attempt, and it lives on the failure side as
-/// [`FailureKind::EnvironmentGate`](super::failure_kind::FailureKind::EnvironmentGate). Modelling it
-/// here would create a "complete but environmentally invalid" outcome, which the contract forbids
-/// twice over: gates are prospective only, and no criterion may reference a measured outcome.
+/// measured sample, not a verdict on a completed attempt, and it lives on the refusal side as
+/// [`AttemptOutcome::PreflightRejected`](super::attempt_outcome::AttemptOutcome::PreflightRejected),
+/// which carries no evidence at all. Modelling it here would create a "complete but environmentally
+/// invalid" outcome, which the contract forbids twice over: gates are prospective only, and no
+/// criterion may reference a measured outcome.
 ///
 /// The *post-attempt* host reading is likewise absent, and deliberately unreachable from here: it is
 /// supporting diagnostics that "never invalidates evidence", so it is recorded as its own ledger
@@ -22,7 +23,9 @@ use serde::Serialize;
 /// disk, which is exactly what the spec forbids when it requires historical material be imported
 /// "without rewriting it". A method found unsound afterwards must be recorded as its own appended
 /// supersession record, keyed to the attempt identity and candidate version — and the selection rule
-/// must *fold those records over* the terminal outcomes rather than reading this field alone.
+/// must *fold those records over* the terminal outcomes rather than reading this field alone. That
+/// record is [`MethodSupersession`](super::method_supersession::MethodSupersession), and the fold is
+/// [`ReconciledCampaign::selections`](super::reconciled_campaign::ReconciledCampaign::selections).
 ///
 /// So this field answers one narrow question — did the campaign already know, when it wrote this
 /// line, that the method was unsound? — and a reader who treats it as the final word will select
