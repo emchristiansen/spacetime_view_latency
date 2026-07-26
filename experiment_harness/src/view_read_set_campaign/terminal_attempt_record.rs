@@ -13,7 +13,10 @@ mod sealed {
 
     use crate::view_read_set_campaign::attempt_key::AttemptKey;
     use crate::view_read_set_campaign::attempt_outcome::AttemptOutcome;
+    use crate::view_read_set_campaign::failure_kind::FailureKind;
+    use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
     use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
+    use crate::view_read_set_campaign::retry_ordinal::RetryOrdinal;
 
     /// An attempt identity and its terminal outcome, proven to describe each other.
     ///
@@ -96,31 +99,70 @@ mod sealed {
         /// A method on the bound record rather than a free function, so the retry ordinal it reads
         /// is necessarily the ordinal of the attempt that produced the outcome it reads.
         ///
-        /// **Phase 1 boundary.** Every input the rule needs is now in scope — the outcome's variant,
-        /// the failure cause, the driver-stated
-        /// [`FailureStage`](crate::view_read_set_campaign::failure_stage::FailureStage) that
-        /// [`AttemptOutcome::Failed`] carries, and this record's own
-        /// [`RetryOrdinal`](crate::view_read_set_campaign::retry_ordinal::RetryOrdinal) — so the
-        /// decision is implementable here and is deferred to Phase 2 rather than to a missing type.
+        /// **Classify, then cap.** The first step asks what *this kind of termination* disposes of:
+        /// a retry the protocol offers, a retry it refuses, or no retry question at all. The second
+        /// applies the protocol's cap of one retry per logical slot, and it applies to every outcome
+        /// alike — so "categorically eligible" describes
+        /// [`AttemptOutcome::PreflightRejected`]'s *classification*, not an exception to the cap. A
+        /// preflight rejection or an early infrastructure failure at
+        /// [`RetryOrdinal::RETRY`] is [`RetryEligibility::Ineligible`], because the retry it would
+        /// authorize is the attempt being judged.
         ///
-        /// The timing term is *derived*, not stored: there is no
-        /// [`MeasuredSampleBoundary`](crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary)
-        /// field to read, only
+        /// The cap sits outside the classification rather than as a clause inside each arm, which is
+        /// what makes it global: an outcome variant added later is capped whether or not whoever
+        /// adds it thinks to apply it. It caps only [`RetryEligibility::Eligible`], since that is
+        /// the only state it has anything to say about — an already-refused slot and a slot with no
+        /// retry question pass through unchanged, and folding the three states into a boolean first
+        /// would discard exactly the distinction the cap is defined over.
+        ///
+        /// **The classification.** [`AttemptOutcome::PreflightRejected`] qualifies because the
+        /// prospective gate ends before the first measured sample — nothing was measured, so
+        /// retrying references no measured outcome. [`AttemptOutcome::Failed`] qualifies only for
+        /// [`FailureKind::Infrastructure`], and then only before the first sample:
+        /// [`FailureKind::Application`], [`FailureKind::Timeout`],
+        /// [`FailureKind::NonpositiveStatistic`] and [`FailureKind::SemanticsOrSecurity`] are each a
+        /// measured answer about the candidate, so they are ineligible at *every* stage rather than
+        /// merely at the late ones. [`AttemptOutcome::Complete`] and [`AttemptOutcome::NotRun`]
+        /// share one arm at [`RetryEligibility::None`]: a complete attempt's slot is already
+        /// satisfied, and one that never executed has no measured slot to reopen.
+        ///
+        /// The timing term is *derived*, not stored: there is no [`MeasuredSampleBoundary`] field to
+        /// read, only
         /// [`FailureStage::measured_sample_boundary`](crate::view_read_set_campaign::failure_stage::FailureStage::measured_sample_boundary),
-        /// so the boundary cannot disagree with the stage it came from.
+        /// so the boundary cannot disagree with the stage it came from. Every match here is over
+        /// named variants rather than a catch-all, so a failure class, a boundary, or an eligibility
+        /// state added later must state its own disposition instead of inheriting a default.
         pub(crate) fn retry_eligibility(&self) -> RetryEligibility {
-            todo!(
-                "Phase 2: total-match the outcome — PreflightRejected is categorically eligible \
-                 because the prospective gate ends before the first measured sample; Failed with \
-                 FailureKind::Infrastructure is eligible only when its stage's derived \
-                 FailureStage::measured_sample_boundary is MeasuredSampleBoundary::BeforeFirst; \
-                 Application, Timeout, NonpositiveStatistic and SemanticsOrSecurity are \
-                 categorically ineligible as measured outcomes; Complete and NotRun have nothing to \
-                 retry. Conjoin with this record's retry ordinal being RetryOrdinal::ORIGINAL, since \
-                 at most one retry is permitted per logical slot"
-            )
+            let classified = match &self.outcome {
+                AttemptOutcome::PreflightRejected { .. } => RetryEligibility::Eligible,
+                AttemptOutcome::Failed { kind, stage, .. } => match kind {
+                    FailureKind::Infrastructure(_) => match stage.measured_sample_boundary() {
+                        MeasuredSampleBoundary::BeforeFirst => RetryEligibility::Eligible,
+                        MeasuredSampleBoundary::AfterFirst => RetryEligibility::Ineligible,
+                    },
+                    FailureKind::Application
+                    | FailureKind::Timeout
+                    | FailureKind::NonpositiveStatistic
+                    | FailureKind::SemanticsOrSecurity => RetryEligibility::Ineligible,
+                },
+                AttemptOutcome::Complete { .. } | AttemptOutcome::NotRun { .. } => {
+                    RetryEligibility::None
+                }
+            };
+
+            match classified {
+                RetryEligibility::Eligible if self.key.retry() != RetryOrdinal::ORIGINAL => {
+                    RetryEligibility::Ineligible
+                }
+                uncapped @ (RetryEligibility::Eligible
+                | RetryEligibility::Ineligible
+                | RetryEligibility::None) => uncapped,
+            }
         }
     }
 }
 
 pub(crate) use sealed::TerminalAttemptRecord;
+
+#[cfg(test)]
+mod tests;
