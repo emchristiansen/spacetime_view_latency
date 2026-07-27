@@ -45,12 +45,15 @@
 //! between are named-field bundles rather than positional constructors, since both hold same-typed
 //! counts whose silent swap would misreport the ledger.
 //!
-//! **What does not live here yet.** Registering the row callbacks, retaining subscription handles,
-//! and opening and closing the meter around the four channels are the driver's measurement stage,
-//! which is still a `todo!()`. This module is the vocabulary that stage will use.
+//! **Where the live half now is.** The driver's measurement stage registers the row callbacks —
+//! through [`delivery_counters::DeliveryCounters`], whose handles it clones before any measured
+//! interval — opens the meter before the cold subscription, retains exactly the live connection's
+//! subscription handle, and closes the meter after the saturated batch has confirmed and the client
+//! cache has been read once.
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod delivery_counters;
 pub(crate) mod received_wire_delivery;
 pub(crate) mod subscriber_delivery_evidence;
 pub(crate) mod subscriber_delivery_meter;

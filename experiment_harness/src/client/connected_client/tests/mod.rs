@@ -12,12 +12,28 @@
 //! (That the *production* deadlines are one whole-batch budget each, and that phase A fully precedes
 //! phase B, are structural properties of [`ConnectedClient::measure_dose`] and its phase methods,
 //! inspected there, not asserted by these pure-barrier tests.)
+//!
+//! The fresh-server campaign's two write-issuing channels add barriers of the same shape, covered
+//! the same way: the saturated barrier seals scrambled confirmations in issue order, rejects a
+//! duplicate, and classifies a reducer error as an application failure; the paced barrier stops on
+//! its own target key and no other, reports that key's *own* observer instant as the sample's
+//! endpoint, and surfaces a failed write instead of letting it expire.
+//!
+//! Out of reach without a server, and covered by inspection instead: anything holding a
+//! `DbConnection` — observer registration and removal, delivery-callback registration, the cache
+//! read-back, and both apply channels, which are network events with no pure factor to extract.
 
 mod a_duplicate_measured_confirmation_is_rejected;
 mod a_duplicate_prerequisite_confirmation_is_rejected;
+mod a_duplicate_saturated_confirmation_is_rejected;
+mod a_failed_paced_write_is_rejected_as_an_application_failure;
+mod a_failed_saturated_write_is_rejected_as_an_application_failure;
 mod a_measured_failure_is_rejected;
 mod a_missing_measured_confirmation_times_out_at_the_supplied_deadline;
 mod a_missing_prerequisite_times_out_at_the_supplied_deadline;
+mod a_paced_sample_reports_its_own_observer_instant;
+mod a_paced_sample_stops_only_on_its_own_target_key;
 mod a_prerequisite_failure_is_rejected;
 mod measured_confirmations_seal_in_issue_order;
 mod prerequisites_confirm_regardless_of_order;
+mod saturated_confirmations_seal_in_issue_order;

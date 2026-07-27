@@ -79,8 +79,9 @@ mod sealed {
     /// exists as the module's `update_entity_owner`
     /// reducer, reached through
     /// [`ConnectedClient::update_entity_owner`](crate::client::connected_client::ConnectedClient::update_entity_owner).
-    /// Issuing the schedule against a live server is the driver's measurement stage, which is still
-    /// a `todo!()`.
+    /// The driver's measurement stage now issues the schedule against a live server, walking
+    /// [`Self::writes`] once per write-issuing channel — the paced channel one confirmed sample at a
+    /// time, the saturated channel back-to-back.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
     pub(crate) struct MutationSchedule {
         channel: MeasurementChannel,

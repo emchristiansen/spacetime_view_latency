@@ -161,10 +161,10 @@ mod sealed {
     }
 }
 
-// `SubscriberDeliveryMeter` is complete here; what it lacks is a caller. Its only consumer is the
-// driver's measurement stage, still a `todo!()`, and a re-export nothing names is an unused import
-// rather than a surface — so the `pub(crate) use` lands with that first consumer.
+// The meter's first and only consumer is the driver's measurement stage, which now exists — so the
+// re-export it deferred lands here with it.
 //
 // `ClosedWindow` is named by the evidence constructor, so it goes exactly that far and no further —
 // the treatment `AxisBoundEvidence` gets for the same reason.
 pub(in crate::view_read_set_campaign::subscriber_delivery) use sealed::ClosedWindow;
+pub(crate) use sealed::SubscriberDeliveryMeter;

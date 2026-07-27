@@ -15,9 +15,15 @@
 //! `run_campaign` and `run_attempt`, which are still `todo!()`. Reconciliation re-derives all three
 //! independently from the finished ledger.
 //!
+//! The measurement stage is live and mostly untestable from here: `measure_attempt` and
+//! `measure_channel` take a connected client, subscribe, reconnect, and issue writes against a real
+//! server. What can be proved without one was extracted rather than faked — `failure_stage` is
+//! covered here, the two batch barriers and the paced stop condition beside the client, and the
+//! role→target coupling beside that type. No seam was added to reach the rest.
+//!
 //! Every remaining stage is still an explicit `todo!()`: the gate stages read `/proc` and wait on a
-//! monotonic clock; provisioning and measurement need a live pinned server and a published module;
-//! and the three remaining orchestration stages compose all of those.
+//! monotonic clock; provisioning needs a live pinned server and a published module; and the three
+//! remaining orchestration stages compose all of those.
 
 mod capturing_writer;
 mod composition_fixture;
@@ -32,5 +38,6 @@ mod a_retry_is_scheduled_exactly_when_eligibility_grants_one;
 mod a_settled_attempt_records_its_terminal_line_then_its_post_attempt_line;
 mod a_terminal_ledger_refuses_every_recording_adapter;
 mod an_arm_attempt_validates_its_own_read_set_and_keeps_its_channels;
+mod an_observed_sample_makes_a_failure_measured_with_no_evidence_to_show_for_it;
 mod each_recording_adapter_appends_its_own_record;
 mod every_primary_failure_leads_while_release_still_runs;

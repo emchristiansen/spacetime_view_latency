@@ -49,8 +49,9 @@ fn apply_duration(applied: LatencySample) -> Rational {
 /// [`RawLatencies`](crate::observation::raw_latencies::RawLatencies).
 ///
 /// The variants, their payload shapes, the shape validation on the way in, and the four reductions
-/// are all complete. What produces the observations — the measured window against a live server —
-/// is the driver's measurement stage, which is still a `todo!()`.
+/// are all complete. What produces the observations — the measured window against a live server — is
+/// the driver's measurement stage, which now calls each of these four constructors from the arm of
+/// [`measure_channel`](crate::view_read_set_campaign::campaign_driver) that measured its channel.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum ChannelEvidence {
     /// Marginal per-write cost under a saturated pipeline. Retains both offsets per write rather

@@ -1,13 +1,17 @@
 //! The calibration-Pilot driver for the fresh-server campaign (spec c33f2e51).
 
 use std::path::Path;
+use std::sync::Arc;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, Context, Error, Result};
 use spacetimedb_sdk::Identity;
 
 use crate::client::connected_client::ConnectedClient;
+use crate::client::measured_step_failure::MeasuredStepFailure;
+use crate::client::reconnect_failure::ReconnectFailure;
 use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::verified_module_artifact::VerifiedModuleArtifact;
+use crate::module_artifact::bindings::SubscriptionHandle;
 use crate::observation::output_path::OutputPath;
 use crate::provision::run_resources::RunResources;
 use crate::provision::teardown::into_error;
@@ -18,17 +22,28 @@ use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 use crate::view_read_set_campaign::campaign_sink::CampaignSink;
 use crate::view_read_set_campaign::channel_evidence::ChannelEvidence;
+use crate::view_read_set_campaign::composition_validation::attempt_artifact_directory::AttemptArtifactDirectory;
 use crate::view_read_set_campaign::composition_validation::composition_transition_expectation::CompositionTransitionExpectation;
 use crate::view_read_set_campaign::composition_validation::observed_row_set::ObservedRowSet;
+use crate::view_read_set_campaign::composition_validation::observed_row_set_label::ObservedRowSetLabel;
 use crate::view_read_set_campaign::composition_validation::validated_composition::ValidatedComposition;
 use crate::view_read_set_campaign::diagnostic_artifact::DiagnosticArtifact;
 use crate::view_read_set_campaign::environment_gate_evidence::EnvironmentGateEvidence;
 use crate::view_read_set_campaign::environment_sample::EnvironmentSample;
 use crate::view_read_set_campaign::failure_kind::FailureKind;
 use crate::view_read_set_campaign::failure_stage::FailureStage;
+use crate::view_read_set_campaign::infrastructure_phase::InfrastructurePhase;
+use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
+use crate::view_read_set_campaign::measured_target::MeasuredTarget;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
+use crate::view_read_set_campaign::mutation_schedule::MutationSchedule;
 use crate::view_read_set_campaign::passed_environment_gate::PassedEnvironmentGate;
 use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
+use crate::view_read_set_campaign::scale_point_evidence::CHANNEL_COUNT;
+use crate::view_read_set_campaign::subscriber_delivery::delivery_counters::DeliveryCounters;
+use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_evidence::SubscriberDeliveryEvidence;
+use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_meter::SubscriberDeliveryMeter;
+use crate::view_read_set_campaign::subscriber_delivery::subscriber_row_counter::SubscriberRowCounter;
 use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecord;
 
 /// A classified failure inside one attempt's measured window, carrying everything the terminal
@@ -56,6 +71,90 @@ struct MeasuredAttempt {
     channels: Vec<ChannelEvidence>,
     before: ObservedRowSet,
     after: ObservedRowSet,
+}
+
+/// What one measured window left for its caller to release.
+///
+/// Returned outside the measurement's `Result` so the obligation arrives as a value to destructure
+/// rather than something to remember behind a `?`. That makes the ownership explicit; release-always
+/// itself belongs to [`run_attempt`], still a `todo!()`, where the contract is written.
+///
+/// All three states are reachable. The window normally ends connected; the reconnect is the
+/// exception, releasing the old connection before initiating the new one, so a failed reconnect can
+/// leave nothing — which is why no `Option` or dummy client is needed anywhere here.
+///
+/// [`Self::ReleasedWithError`] is not "something may still be running": every client release path
+/// joins the message-processing thread. It means the connection ended *abnormally*, and is still
+/// campaign-terminal through [`settle`]'s release aggregation, but is a cleanup fault kept distinct
+/// from the attempt's cause.
+enum MeasuredRelease {
+    /// Still connected, and now the caller's to disconnect exactly once.
+    Connected(ConnectedClient),
+    /// No client exists and none is outstanding.
+    Released,
+    /// No client exists, but the release ended abnormally. A resource-release failure, never the
+    /// attempt's measured cause.
+    ReleasedWithError(Error),
+}
+
+/// The measured subscriber, and its retained subscription once one exists.
+///
+/// A closed two-state machine rather than a client beside an `Option<SubscriptionHandle>`: exactly
+/// one channel creates the subscription (the cold subscription, which the frozen order runs first
+/// because nothing else may have subscribed yet) and exactly one replaces it (the reconnect).
+///
+/// **Exactly one handle, the live connection's.** Pinned SDK 2.7.0 does not mark an applied
+/// subscription inactive when its connection ends — `SubscriptionManager::on_disconnect` is a
+/// deliberate no-op — so a handle retained across the reconnect would report itself active forever.
+enum MeasuredSession {
+    /// Connected, with nothing subscribed on this connection yet.
+    Unsubscribed { client: ConnectedClient },
+    /// Connected, with exactly one retained subscription on *this* connection.
+    Subscribed {
+        client: ConnectedClient,
+        subscription: SubscriptionHandle,
+    },
+}
+
+impl MeasuredSession {
+    /// The measured client, for a step that only reads through it.
+    fn client(&self) -> &ConnectedClient {
+        match self {
+            Self::Unsubscribed { client } | Self::Subscribed { client, .. } => client,
+        }
+    }
+
+    /// The concrete handles the delivery evidence derives its active count from — never a count.
+    fn retained_subscriptions(&self) -> &[SubscriptionHandle] {
+        match self {
+            Self::Unsubscribed { .. } => &[],
+            Self::Subscribed { subscription, .. } => std::slice::from_ref(subscription),
+        }
+    }
+
+    /// Hand the client back to the caller for release. Total: every session holds one.
+    fn into_release(self) -> MeasuredRelease {
+        match self {
+            Self::Unsubscribed { client } | Self::Subscribed { client, .. } => {
+                MeasuredRelease::Connected(client)
+            }
+        }
+    }
+}
+
+/// One channel's failure together with what the caller cannot recover from the prefix alone.
+///
+/// The release, because the channels disagree: three fail with the client still connected, and only
+/// the reconnect can fail having released it. And [`Self::observed`], because a channel can observe
+/// its sample and *then* fail at its reduction. [`measure_attempt`] adds the completed prefix.
+struct ChannelFailure {
+    release: MeasuredRelease,
+    /// Whether this channel took an observation the completed prefix does not contain —
+    /// [`AfterFirst`](MeasuredSampleBoundary::AfterFirst) exactly when its reduction refused the
+    /// statistic, [`BeforeFirst`](MeasuredSampleBoundary::BeforeFirst) for an operational failure.
+    observed: MeasuredSampleBoundary,
+    kind: FailureKind,
+    error: Error,
 }
 
 /// The outcome of acquiring one attempt's fresh server.
@@ -93,9 +192,12 @@ enum Provisioning {
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
 /// **Phase boundary.** The pure [`schedule_retry`] and [`validate_final_composition`], the four
-/// recording adapters, and [`settle`] are implemented; every other body in this file is still an
-/// explicit `todo!()`. What is fixed for the rest is the stage decomposition, the typed inputs and
-/// outputs of each stage, and the ordering discipline the stubs describe.
+/// recording adapters, [`settle`], and the measurement stage — [`measure_attempt`] and
+/// [`measure_channel`] — are implemented; every other body in this file is still an explicit
+/// `todo!()`. What remains is orchestration and the two `/proc`-reading gate stages: this entrypoint,
+/// [`run_campaign`], [`run_inventory`], [`run_attempt`], [`preflight_gate`], [`observe_environment`],
+/// and [`provision_and_record`]. What is fixed for those is the stage decomposition, the typed inputs
+/// and outputs of each stage, and the ordering discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -190,8 +292,20 @@ fn run_inventory(
 ///
 /// `Err` is reserved for a ledger persist failure, following the Pilot's convention; the returned
 /// [`TerminalAttemptRecord`] is the disposition actually appended, and the
-/// [`DiagnosticArtifact`] is present only when the attempt's capabilities were not provably
-/// released.
+/// [`DiagnosticArtifact`] is present only when the attempt's capabilities were not released cleanly.
+///
+/// **The release contract this stage owes [`measure_attempt`].** That stage hands back a
+/// [`MeasuredRelease`] outside its `Result`. Bind the pair with a plain `let`, then honour all three
+/// states inside [`settle`]'s closure, so every release happens after the terminal record is
+/// durable:
+///
+/// - [`Connected`](MeasuredRelease::Connected) — disconnect it. `disconnect` consumes, so once, not
+///   twice.
+/// - [`Released`](MeasuredRelease::Released) — nothing; the resources teardown still runs.
+/// - [`ReleasedWithError`](MeasuredRelease::ReleasedWithError) — push the carried error onto the
+///   release errors, reaching the usual `PriorAttemptReleaseFailed` path.
+///
+/// Until this body exists that is a contract for its implementor, not a compiler-enforced property.
 fn run_attempt(
     sink: &mut CampaignSink,
     listen: ListenAddress,
@@ -215,10 +329,13 @@ fn run_attempt(
          3. provision_and_record; on Provisioning::FailedBeforePublish settle with \
          AttemptOutcome::Failed at FailureStage::BeforePublish.
 
-         4. With the instance live, connect the measured subscriber, seed the owned and global \
-         slices, subscribe this role to its target, then measure_attempt and \
-         validate_final_composition; seal ScalePointEvidence and EvidenceArtifact::for_attempt on \
-         success.
+         4. With the instance live, connect the measured subscriber and seed the owned and global \
+         slices, then hand the client to measure_attempt, which owns it for the whole measured \
+         window. Do *not* subscribe here: measure_attempt registers the delivery callbacks and \
+         issues the cold subscription itself, because E3 must be the first subscription this \
+         connection ever makes and its meter must already be open. Bind its (release, result) pair \
+         with a plain `let`, then validate_final_composition; on success seal ScalePointEvidence \
+         with the returned delivery evidence and build EvidenceArtifact::for_attempt.
 
          5. The moment the measured window ends — success or failure — call observe_environment \
          immediately, before building the terminal record, before persisting anything, and before \
@@ -312,48 +429,472 @@ fn provision_and_record(
 }
 
 /// **Stage 4 — measurement.** Run all four channels in the frozen execution order, capturing the
-/// composition observations the transition will be judged against.
+/// composition observations the transition will be judged against and the delivery facts of the
+/// window they ran in.
 ///
-/// The before-observation is taken after E4 and before E2's first measured write, which is where the
-/// spec's "before E2, every seeded row has the seeded payload" holds; the after-observation is taken
-/// once E1's batch has confirmed, which is the final state because E1 runs last.
+/// **Consumes the client and returns its release state outside the `Result`**, because which client
+/// — if any — survives is measured here, not knowable by the caller. See [`MeasuredRelease`].
+///
+/// **Delivery evidence comes back beside the measurement, not inside it**, so
+/// [`validate_final_composition`] stays pure and provable from retained artifacts. [`run_attempt`]
+/// seals the two together.
+///
+/// **The order is the contract.** Callbacks registered and meter opened *before* the cold
+/// subscription, so its initial snapshot counts as delivered rows. The before-observation after the
+/// apply channels and before the first measured write, where "every seeded row has the seeded
+/// payload" holds. After the saturated batch confirms, the cache is read **once**, and that one
+/// snapshot both closes the window and becomes the after-phase artifact, so cardinality and retained
+/// rows cannot describe different states.
+///
+/// Every failure's stage is stated in [`failure_stage`].
 fn measure_attempt(
-    client: &ConnectedClient,
+    client: ConnectedClient,
     attempt: AttemptKey,
     artifacts: &Path,
-) -> std::result::Result<MeasuredAttempt, MeasuredFailure> {
-    let _ = (client, attempt, artifacts);
-    todo!(
-        "Phase 2: walk MeasurementChannel::EXECUTION_ORDER — E3, E4, E2, E1 — through \
-         measure_channel, pushing each ChannelEvidence onto the prefix so a failure can return \
-         whatever had completed. Retain the before-observation with ObservedRowSet::persisted after \
-         E4 and before E2, and the after-observation once E1 confirms. Every failure carries the \
-         FailureStage the driver knows: AfterPublishBeforeFirstSample until the first measured \
-         sample confirms, AfterFirstSample from then on"
+) -> (
+    MeasuredRelease,
+    std::result::Result<(MeasuredAttempt, SubscriberDeliveryEvidence), MeasuredFailure>,
+) {
+    let target = MeasuredTarget::of(attempt.role());
+    let rows = Arc::new(SubscriberRowCounter::new());
+    let mut channels: Vec<ChannelEvidence> = Vec::with_capacity(CHANNEL_COUNT);
+
+    let directory = match AttemptArtifactDirectory::create(artifacts, attempt) {
+        Ok(directory) => directory,
+        Err(error) => {
+            return measured_failure(
+                MeasuredRelease::Connected(client),
+                channels,
+                MeasuredSampleBoundary::BeforeFirst,
+                FailureKind::Infrastructure(InfrastructurePhase::ObservationRetention),
+                error,
+            )
+        }
+    };
+
+    // Before the cold subscription, so its initial snapshot is counted as the delivery it is.
+    client.register_delivery_callbacks(target, DeliveryCounters::of(&rows));
+
+    let meter = match SubscriberDeliveryMeter::open(&client, rows.clone()) {
+        Ok(meter) => meter,
+        Err(error) => {
+            return measured_failure(
+                MeasuredRelease::Connected(client),
+                channels,
+                MeasuredSampleBoundary::BeforeFirst,
+                // The measured window's own apparatus, which is what `Sample` covers besides the
+                // writes themselves — "issuing a measured write, or sealing a channel's batch".
+                // Whichever phase this is read as, the retry rule reaches the same answer, because
+                // every infrastructure cause before the first sample classifies alike.
+                FailureKind::Infrastructure(InfrastructurePhase::Sample),
+                error,
+            );
+        }
+    };
+
+    // The frozen order's two halves, split by whether a channel issues measured writes rather than
+    // by position — so the seeded observation stays "before the first measured write" however the
+    // order is spelled. Their concatenation is `EXECUTION_ORDER` exactly when every apply channel
+    // precedes every write-issuing one, which `ScalePointEvidence::sealed` re-checks positionally
+    // and would reject outright if it ever stopped being true.
+    let (apply_channels, writing_channels): (Vec<MeasurementChannel>, Vec<MeasurementChannel>) =
+        MeasurementChannel::EXECUTION_ORDER
+            .into_iter()
+            .partition(|channel| MutationSchedule::of(*channel).is_none());
+
+    let session = MeasuredSession::Unsubscribed { client };
+    let session = match measure_channels(session, attempt, &apply_channels, &rows, &mut channels) {
+        Ok(session) => session,
+        Err(failure) => {
+            return measured_failure(
+                failure.release,
+                channels,
+                failure.observed,
+                failure.kind,
+                failure.error,
+            )
+        }
+    };
+
+    let seeded = session.client().read_measured_target(target);
+    let before = match ObservedRowSet::persisted(
+        &directory,
+        ObservedRowSetLabel::SeededBeforeMeasurement,
+        seeded,
+    ) {
+        Ok(before) => before,
+        Err(error) => {
+            return measured_failure(
+                session.into_release(),
+                channels,
+                MeasuredSampleBoundary::BeforeFirst,
+                FailureKind::Infrastructure(InfrastructurePhase::ObservationRetention),
+                error,
+            )
+        }
+    };
+
+    let session = match measure_channels(session, attempt, &writing_channels, &rows, &mut channels)
+    {
+        Ok(session) => session,
+        Err(failure) => {
+            return measured_failure(
+                failure.release,
+                channels,
+                failure.observed,
+                failure.kind,
+                failure.error,
+            )
+        }
+    };
+
+    // One read, used twice: the window closes over the state these rows describe, and the same rows
+    // become the retained artifact. A second read could disagree with the first.
+    let final_rows = session.client().read_measured_target(target);
+    let delivery = match meter.close(session.retained_subscriptions()) {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            return measured_failure(
+                session.into_release(),
+                channels,
+                MeasuredSampleBoundary::BeforeFirst,
+                FailureKind::Infrastructure(InfrastructurePhase::Sample),
+                error,
+            )
+        }
+    };
+    let after = match ObservedRowSet::persisted(
+        &directory,
+        ObservedRowSetLabel::AfterSaturatedBatch,
+        final_rows,
+    ) {
+        Ok(after) => after,
+        Err(error) => {
+            return measured_failure(
+                session.into_release(),
+                channels,
+                MeasuredSampleBoundary::BeforeFirst,
+                FailureKind::Infrastructure(InfrastructurePhase::ObservationRetention),
+                error,
+            )
+        }
+    };
+
+    (
+        session.into_release(),
+        Ok((
+            MeasuredAttempt {
+                channels,
+                before,
+                after,
+            },
+            delivery,
+        )),
     )
 }
 
+/// Walk `channels` through [`measure_channel`], pushing each evidence onto `measured` so a failure
+/// can return whatever had completed.
+///
+/// The session is threaded by value rather than borrowed, because the reconnect replaces both the
+/// client and its subscription: a borrow could not express that, and an in-place swap would need
+/// something to leave behind.
+fn measure_channels(
+    mut session: MeasuredSession,
+    attempt: AttemptKey,
+    channels: &[MeasurementChannel],
+    rows: &Arc<SubscriberRowCounter>,
+    measured: &mut Vec<ChannelEvidence>,
+) -> std::result::Result<MeasuredSession, ChannelFailure> {
+    for channel in channels {
+        let (advanced, evidence) = measure_channel(session, attempt, *channel, rows)?;
+        session = advanced;
+        measured.push(evidence);
+    }
+    Ok(session)
+}
+
+/// Build one measured window's return: the release state the caller must honour, and the classified
+/// failure carrying the channel prefix already completed.
+fn measured_failure(
+    release: MeasuredRelease,
+    measured: Vec<ChannelEvidence>,
+    observed: MeasuredSampleBoundary,
+    kind: FailureKind,
+    error: Error,
+) -> (
+    MeasuredRelease,
+    std::result::Result<(MeasuredAttempt, SubscriberDeliveryEvidence), MeasuredFailure>,
+) {
+    let stage = failure_stage(&measured, observed);
+    (
+        release,
+        Err(MeasuredFailure {
+            kind,
+            stage,
+            measured,
+            error,
+        }),
+    )
+}
+
+/// The stage a measured window's failure is at: before its first measured sample only when *neither*
+/// witness says otherwise.
+///
+/// Two witnesses, either sufficient. A non-empty prefix proves a sample was taken, since the cold
+/// subscription runs first and its apply observation *is* the attempt's first measured sample. The
+/// converse fails: that same channel can apply and then have its reduction refuse the duration,
+/// leaving an observation with an empty prefix. Reading the prefix alone would record that measured
+/// attempt as retry-eligible and omit the post-attempt reading it requires.
+///
+/// Split from [`measured_failure`], which needs a live client, so the rule is provable.
+fn failure_stage(measured: &[ChannelEvidence], observed: MeasuredSampleBoundary) -> FailureStage {
+    if measured.is_empty() && observed == MeasuredSampleBoundary::BeforeFirst {
+        FailureStage::AfterPublishBeforeFirstSample
+    } else {
+        FailureStage::AfterFirstSample
+    }
+}
+
 /// Measure one channel at this attempt's scale point, reducing its own samples to its own statistic.
+///
+/// A total match over the four channels, each advancing the session it needs. The estimands and
+/// intervals are the client's; this stage picks the primitive, threads ownership, and classifies.
+/// The two write-issuing channels drive [`MutationSchedule::of`] through the owner-preserving update
+/// path; each [`ChannelEvidence`] constructor performs its own reduction, so no statistic is computed
+/// here.
+///
+/// A session shape the frozen [`MeasurementChannel::EXECUTION_ORDER`] cannot produce is an internal
+/// contradiction, not a measured outcome, so it panics rather than being recorded as an attempt
+/// failure — the bridge [`schedule_retry`] makes for the same kind of unencoded invariant.
 fn measure_channel(
-    client: &ConnectedClient,
+    session: MeasuredSession,
     attempt: AttemptKey,
     channel: MeasurementChannel,
-) -> std::result::Result<ChannelEvidence, MeasuredFailure> {
-    let _ = (client, attempt, channel);
-    todo!(
-        "Phase 2: total-match the channel. ColdSubscriptionApplyTime times the initial snapshot of \
-         the fresh connection, measured exactly once because a second subscription is no longer \
-         cold; ReconnectApplyTime times a token-preserving reconnect and resubscribe; \
-         PacedVisibleApplyLatency takes CHANNEL_SAMPLE_COUNT samples with one outstanding write at \
-         a time, each stopped when the change is observable in the subscriber cache, with \
-         PACED_SAMPLE_DELAY_MS between completed samples; SaturatedQueueGrowthPerWrite issues the \
-         same count back-to-back without awaiting, recording issue and confirmation offsets from a \
-         common origin. The two write-issuing channels drive MutationSchedule::of(channel), whose \
-         target_key and payload derivations checkpoint 1ffbbe9a implemented, through \
-         ConnectedClient::update_entity_owner — the owner-preserving update path that checkpoint \
-         added together with the module's own reducer. Each ChannelEvidence constructor performs \
-         its own reduction, so no statistic is computed here"
-    )
+    rows: &Arc<SubscriberRowCounter>,
+) -> std::result::Result<(MeasuredSession, ChannelEvidence), ChannelFailure> {
+    let target = MeasuredTarget::of(attempt.role());
+
+    match channel {
+        MeasurementChannel::ColdSubscriptionApplyTime => {
+            let MeasuredSession::Unsubscribed { client } = session else {
+                panic!(
+                    "the frozen execution order runs the cold subscription first, so nothing has \
+                     subscribed on this connection yet"
+                )
+            };
+            match client.subscribe_measured_target(target) {
+                Ok((subscription, applied)) => reduced(
+                    MeasuredSession::Subscribed {
+                        client,
+                        subscription,
+                    },
+                    ChannelEvidence::cold_subscription(applied),
+                ),
+                Err(failure) => {
+                    let (kind, error) = classified(failure, InfrastructurePhase::Subscription);
+                    Err(ChannelFailure {
+                        release: MeasuredRelease::Connected(client),
+                        observed: MeasuredSampleBoundary::BeforeFirst,
+                        kind,
+                        error,
+                    })
+                }
+            }
+        }
+
+        MeasurementChannel::ReconnectApplyTime => {
+            let MeasuredSession::Subscribed {
+                client,
+                subscription,
+            } = session
+            else {
+                panic!(
+                    "the frozen execution order runs the reconnect after the cold subscription, so \
+                     this connection already has exactly one retained subscription"
+                )
+            };
+            // Dropped with the connection it belongs to. The pinned SDK does not mark an applied
+            // subscription inactive when its connection ends, so carrying this handle across the
+            // reconnect would report a subscription that no longer exists as still delivering.
+            drop(subscription);
+            let previous_identity = client.measured_identity();
+
+            match client.reconnect_preserving_token(target, rows) {
+                Ok((client, subscription, applied)) => {
+                    let reconnected_identity = client.measured_identity();
+                    if reconnected_identity == previous_identity {
+                        reduced(
+                            MeasuredSession::Subscribed {
+                                client,
+                                subscription,
+                            },
+                            ChannelEvidence::reconnect(applied),
+                        )
+                    } else {
+                        // Caught here rather than left to composition validation, which would
+                        // otherwise see the Arm's read set empty out and classify a token-handling
+                        // fault as the candidate's own security answer.
+                        Err(ChannelFailure {
+                            release: MeasuredRelease::Connected(client),
+                            // The apply duration was observed, but a reconnect of a *different*
+                            // identity is not an observation of this attempt's estimand, so it is
+                            // not this attempt's first measured sample.
+                            observed: MeasuredSampleBoundary::BeforeFirst,
+                            kind: FailureKind::Infrastructure(InfrastructurePhase::Connect),
+                            error: anyhow!(
+                                "the reconnect was issued identity {} rather than the measured \
+                                 identity {} its retained token names, so it did not measure this \
+                                 subscriber reconnecting",
+                                reconnected_identity.to_hex(),
+                                previous_identity.to_hex(),
+                            ),
+                        })
+                    }
+                }
+                // The teardown that precedes the reconnect failed, so the reconnect never began.
+                // The release error travels as the release state; the attempt's own cause is stated
+                // separately rather than duplicating one error into two roles.
+                Err(ReconnectFailure::ReleaseFailed(error)) => Err(ChannelFailure {
+                    release: MeasuredRelease::ReleasedWithError(error),
+                    observed: MeasuredSampleBoundary::BeforeFirst,
+                    kind: FailureKind::Infrastructure(InfrastructurePhase::Connect),
+                    error: anyhow!(
+                        "releasing the measured subscriber ahead of its token-preserving reconnect \
+                         ended abnormally, so the reconnect never began; that release failure is \
+                         reported separately as this attempt's resource-release diagnostic"
+                    ),
+                }),
+                Err(ReconnectFailure::NotConnected(failure)) => {
+                    let (kind, error) = classified(failure, InfrastructurePhase::Connect);
+                    Err(ChannelFailure {
+                        release: MeasuredRelease::Released,
+                        observed: MeasuredSampleBoundary::BeforeFirst,
+                        kind,
+                        error,
+                    })
+                }
+                Err(ReconnectFailure::NotResubscribed { client, failure }) => {
+                    let (kind, error) = classified(failure, InfrastructurePhase::Subscription);
+                    Err(ChannelFailure {
+                        release: MeasuredRelease::Connected(client),
+                        observed: MeasuredSampleBoundary::BeforeFirst,
+                        kind,
+                        error,
+                    })
+                }
+            }
+        }
+
+        MeasurementChannel::PacedVisibleApplyLatency => {
+            let MeasuredSession::Subscribed {
+                client,
+                subscription,
+            } = session
+            else {
+                panic!(
+                    "the frozen execution order runs the paced channel after the reconnect, so \
+                     this connection already has exactly one retained subscription"
+                )
+            };
+            match client.measure_paced_visible_batch(target, write_schedule(channel)) {
+                Ok(samples) => reduced(
+                    MeasuredSession::Subscribed {
+                        client,
+                        subscription,
+                    },
+                    ChannelEvidence::paced(samples),
+                ),
+                Err(failure) => {
+                    let (kind, error) = classified(failure, InfrastructurePhase::Sample);
+                    Err(ChannelFailure {
+                        release: MeasuredRelease::Connected(client),
+                        observed: MeasuredSampleBoundary::BeforeFirst,
+                        kind,
+                        error,
+                    })
+                }
+            }
+        }
+
+        MeasurementChannel::SaturatedQueueGrowthPerWrite => {
+            let MeasuredSession::Subscribed {
+                client,
+                subscription,
+            } = session
+            else {
+                panic!(
+                    "the frozen execution order runs the saturated channel last, so this \
+                     connection already has exactly one retained subscription"
+                )
+            };
+            match client.measure_saturated_batch(write_schedule(channel)) {
+                Ok(timings) => reduced(
+                    MeasuredSession::Subscribed {
+                        client,
+                        subscription,
+                    },
+                    ChannelEvidence::saturated(timings),
+                ),
+                Err(failure) => {
+                    let (kind, error) = classified(failure, InfrastructurePhase::Sample);
+                    Err(ChannelFailure {
+                        release: MeasuredRelease::Connected(client),
+                        observed: MeasuredSampleBoundary::BeforeFirst,
+                        kind,
+                        error,
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// This channel's measured-write schedule, for the two channels that have one.
+///
+/// Loud rather than fallible: [`MutationSchedule::of`] returns `None` for exactly the two apply
+/// channels, and neither reaches this — asking for it there is a contradiction in the caller, not a
+/// measured outcome.
+fn write_schedule(channel: MeasurementChannel) -> MutationSchedule {
+    MutationSchedule::of(channel)
+        .expect("only the two write-issuing channels ask for a measured-write schedule")
+}
+
+/// Pair a completed channel with the session that produced it, or classify its reduction's refusal.
+///
+/// A refused statistic is a measured outcome, never an operational fault, so it is
+/// [`NonpositiveStatistic`](FailureKind::NonpositiveStatistic) wherever it arises; the client is
+/// still connected, since the reduction runs after the channel has finished with it.
+///
+/// This is the one place a failure is [`AfterFirst`](MeasuredSampleBoundary::AfterFirst) with an
+/// empty prefix, and the whole reason the boundary is reported rather than inferred: reaching here
+/// means the observation was taken and the refusal came after it.
+fn reduced(
+    session: MeasuredSession,
+    evidence: Result<ChannelEvidence>,
+) -> std::result::Result<(MeasuredSession, ChannelEvidence), ChannelFailure> {
+    match evidence {
+        Ok(evidence) => Ok((session, evidence)),
+        Err(error) => Err(ChannelFailure {
+            release: session.into_release(),
+            observed: MeasuredSampleBoundary::AfterFirst,
+            kind: FailureKind::NonpositiveStatistic,
+            error,
+        }),
+    }
+}
+
+/// Translate one measured step's classified failure into this campaign's cause vocabulary.
+///
+/// The client knows *what* went wrong; the driver knows *where*, since one primitive serves more
+/// than one channel. `phase` is that half, and only the infrastructure class carries it. Total over
+/// the three causes, so a timeout cannot be re-labelled as infrastructure to make it retry-eligible.
+fn classified(failure: MeasuredStepFailure, phase: InfrastructurePhase) -> (FailureKind, Error) {
+    match failure {
+        MeasuredStepFailure::Infrastructure(error) => (FailureKind::Infrastructure(phase), error),
+        MeasuredStepFailure::Application(error) => (FailureKind::Application, error),
+        MeasuredStepFailure::Timeout(error) => (FailureKind::Timeout, error),
+    }
 }
 
 /// **Stage 5 — final composition transition.** Judge the two retained observations against the one

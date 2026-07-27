@@ -2,13 +2,15 @@
 
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread::JoinHandle;
+use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Error, Result};
 use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Identity, Table};
 
+use crate::client::measured_step_failure::MeasuredStepFailure;
+use crate::client::reconnect_failure::ReconnectFailure;
 use crate::dataset::seed_op::SeedOp;
 use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
@@ -17,7 +19,7 @@ use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
     update_entity_owner, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
-    EntityOwnerTableAccess, ReducerEventContext,
+    EntityOwnerTableAccess, ReducerEventContext, SubscriptionHandle,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -25,14 +27,30 @@ use crate::observation::dose_latency_accumulator::DoseLatencyAccumulator;
 use crate::observation::latency_sample::LatencySample;
 use crate::observation::raw_latencies::RawLatencies;
 use crate::params::{BATCH_SIZE, BATCH_SIZE_USIZE, CONFIRMED_READS, ROW_PAYLOAD};
+use crate::provision::teardown::into_error;
+use crate::view_read_set_campaign::campaign_params::{
+    CHANNEL_SAMPLE_COUNT_USIZE, PACED_SAMPLE_DELAY_MS,
+};
+use crate::view_read_set_campaign::measured_target::MeasuredTarget;
+use crate::view_read_set_campaign::mutation_schedule::MutationSchedule;
+use crate::view_read_set_campaign::saturated_timing_accumulator::SaturatedTimingAccumulator;
+use crate::view_read_set_campaign::saturated_timing_batch::SaturatedTimingBatch;
+use crate::view_read_set_campaign::saturated_write_timing::SaturatedWriteTiming;
+use crate::view_read_set_campaign::subscriber_delivery::delivery_counters::DeliveryCounters;
 
 /// The `entity_owner_sender_view` subscription query name — a cross-component contract with the
 /// module's `#[view(accessor = entity_owner_sender_view, …)]`, so it is a named constant rather
 /// than an inline literal.
-const TABLE_ENTITY_OWNER_SENDER_VIEW: &str = "entity_owner_sender_view";
+///
+/// Reached by
+/// [`MeasuredTarget::subscription_sql`](crate::view_read_set_campaign::measured_target::MeasuredTarget::subscription_sql)
+/// as well as by this module's own helpers, so the fresh-server campaign names the same table string
+/// this client does rather than declaring a second copy that could drift from it.
+pub(crate) const TABLE_ENTITY_OWNER_SENDER_VIEW: &str = "entity_owner_sender_view";
 /// The `entity_owner` base-table subscription query name — the same kind of cross-component
-/// contract, with the module's `#[table(accessor = entity_owner, public)]`.
-const TABLE_ENTITY_OWNER: &str = "entity_owner";
+/// contract, with the module's `#[table(accessor = entity_owner, public)]`, shared for the same
+/// reason.
+pub(crate) const TABLE_ENTITY_OWNER: &str = "entity_owner";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -53,6 +71,15 @@ const MEASURED_BATCH_TIMEOUT: Duration = Duration::from_secs(60);
 /// can never overlap the measured batch. Generous like [`REDUCER_TIMEOUT`]: the prerequisites are
 /// unmeasured seeding-shaped writes, and phase A must fully complete before any measured write issues.
 const PREREQUISITE_BATCH_TIMEOUT: Duration = Duration::from_secs(60);
+/// Wait budget for **one** paced visible-apply sample: from its measured write's issue until that
+/// row's update appears in the subscriber cache.
+///
+/// Deliberately per-sample rather than per-batch, unlike every other budget above. The paced channel
+/// holds one outstanding write at a time and waits [`PACED_SAMPLE_DELAY_MS`] between *completed*
+/// samples, so a whole-batch budget would have to carry a hundred seconds of preregistered pacing and
+/// would no longer bound anything about a sample. Matched to the other single-round-trip budgets: a
+/// visible apply is one confirmed round trip plus its delivery.
+const PACED_SAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The flattened outcome of an insertion reducer as delivered to its completion callback.
 type ReducerOutcome = std::result::Result<std::result::Result<(), String>, InternalError>;
@@ -84,6 +111,77 @@ enum MeasuredMessage {
     Failed { index: usize, error: String },
 }
 
+/// One event the campaign's **paced visible-apply** channel (E2) waits on, over one [`mpsc`] channel
+/// shared by the whole batch.
+///
+/// Two producers, only one of which speaks on the success path: the batch's retained observer sends
+/// [`Self::Visible`], and each write's reducer callback sends [`Self::Failed`] and nothing else. A
+/// sample stops on visibility, not confirmation, so a success message would be unread traffic on the
+/// measured path.
+enum PacedMessage {
+    /// A subscribed row was updated in the client cache, identified by its primary key and carrying
+    /// the instant the observer saw it.
+    ///
+    /// The instant travels in the message because it is the sample's *endpoint*: the observer runs
+    /// on the SDK's callback thread and one observer serves the whole batch, so it cannot subtract
+    /// the current sample's start itself, and reading a clock after the barrier wakes would put this
+    /// thread's scheduling inside every sample.
+    Visible {
+        entity_uuid: u64,
+        observed_at: Instant,
+    },
+    /// A paced write failed at the reducer, so its visibility will never arrive.
+    Failed { index: usize, error: String },
+}
+
+/// One callback outcome from the campaign's **saturated** batch (E1).
+///
+/// Carries both offsets rather than a latency, as [`SaturatedWriteTiming`] does: the estimand is a
+/// per-write service time only if the writes were issued back-to-back and confirmed in order, and a
+/// vector of differences cannot distinguish that from drifted issue spacing. The issue offset is
+/// captured on the issuing thread, the confirmation offset in the callback, both against one origin
+/// per batch.
+enum SaturatedMessage {
+    /// A saturated write's confirmation, with its issue and confirmation offsets from the batch's
+    /// common origin.
+    Confirmed {
+        index: usize,
+        issue_offset_nanos: u128,
+        confirmation_offset_nanos: u128,
+    },
+    /// A saturated callback reported a failure (a reducer-returned error or an SDK internal error).
+    Failed { index: usize, error: String },
+}
+
+/// What one connection attempt left behind when it did not yield a live client.
+///
+/// Every variant is clientless: [`release_connection`] always joins, and a join returns only once
+/// the thread has ended (`Err` meaning it ended by panicking). The variants distinguish *how*,
+/// because the campaign treats abnormal cleanup as terminal even though nothing leaked. `build`
+/// returns before `run_threaded`, so the first two are genuinely different post-conditions rather
+/// than one restated.
+enum ConnectFailure {
+    /// Never built: nothing was acquired and nothing needed releasing.
+    NotBuilt(MeasuredStepFailure),
+    /// Built and threaded, then failed; the thread was released cleanly.
+    ReleasedAfterStart(MeasuredStepFailure),
+    /// Built and threaded, then failed, and the thread ended abnormally — a disconnect the SDK
+    /// refused, or a panicking join. No client remains, but the cleanup is itself a terminal release
+    /// failure. Carries cause and release error aggregated, neither hiding the other.
+    ReleasedWithError(Error),
+}
+
+/// Whether a connection being released was believed live.
+///
+/// Decides how one SDK error is read, and the two readings are opposite. `DbConnectionImpl::disconnect`
+/// has exactly one failure in the pinned source — [`spacetimedb_sdk::Error::Disconnected`], returned
+/// when the connection is no longer active — which is a fault for a caller that believed it live and
+/// the expected state for one cleaning up after a handshake that never completed.
+enum ReleaseExpectation {
+    Live,
+    Unhandshaken,
+}
+
 /// A live measured-subscriber client bound to one provisioned database.
 ///
 /// Connecting captures the **server-issued** connection identity (the measured role's
@@ -91,47 +189,121 @@ enum MeasuredMessage {
 /// insertion reducers one confirmed round trip at a time. Subscription happens *after*
 /// seeding so the initial snapshot is the deterministic baseline, which is then read out of
 /// the client cache for correctness checks — no reliance on incremental-update ordering.
+///
+/// **The credential is retained in memory and nowhere else.** The campaign's reconnect channel
+/// authenticates as the *same* identity, so this holds the token the handshake issued and the URL to
+/// dial again. The type derives nothing, carries no `Serialize`, and exposes no accessor for either,
+/// so neither can reach a ledger line, a diagnostic, or a panic message.
 pub(crate) struct ConnectedClient {
     conn: DbConnection,
     handle: JoinHandle<()>,
     measured_identity: Identity,
     database_name: String,
+    /// The URL this connection was dialled at, retained so the reconnect dials the same server.
+    server_url: String,
+    /// The credential the handshake issued, retained solely so the reconnect can present it again.
+    token: String,
 }
 
 impl ConnectedClient {
     /// Connect to the database `database_identity` (canonical hex) at `server_url`, capturing
     /// the server-issued measured identity. Fails fast if the handshake errors or times out.
+    ///
+    /// Every failure is reported only after cleanup, so an `Err` from here never leaves a running
+    /// message-processing thread; where the release itself failed, its error is aggregated with the
+    /// cause.
     pub(crate) fn connect(server_url: &str, database_identity: &str) -> Result<Self> {
-        let (connect_tx, connect_rx) = mpsc::channel::<std::result::Result<Identity, String>>();
-        let conn = DbConnection::builder()
+        Self::establish(server_url, database_identity, None).map_err(|failure| match failure {
+            ConnectFailure::NotBuilt(cause) | ConnectFailure::ReleasedAfterStart(cause) => {
+                cause.into_error()
+            }
+            ConnectFailure::ReleasedWithError(error) => error,
+        })
+    }
+
+    /// Open one connection, optionally presenting a `token` a previous connection was issued.
+    ///
+    /// Shared by the first connect and the token-preserving reconnect, so the two cannot diverge in
+    /// how they build, run, or await a connection — the only difference is the token, which is what
+    /// the reconnect channel's estimand turns on.
+    ///
+    /// **No `?` may cross `run_threaded`.** Before it, nothing has been acquired; after it, a
+    /// message-processing thread exists and every exit either returns the live client or explicitly
+    /// releases that thread and reports how the release went. The three [`ConnectFailure`] variants
+    /// are those post-conditions.
+    fn establish(
+        server_url: &str,
+        database_identity: &str,
+        token: Option<String>,
+    ) -> std::result::Result<Self, ConnectFailure> {
+        let (connect_tx, connect_rx) =
+            mpsc::channel::<std::result::Result<(Identity, String), String>>();
+        let built = DbConnection::builder()
             .with_uri(server_url)
             .with_database_name(database_identity)
             .with_confirmed_reads(CONFIRMED_READS)
+            .with_token(token)
             .on_connect({
                 let connect_tx = connect_tx.clone();
-                move |_ctx, identity, _token| {
-                    deliver(&connect_tx, Ok(identity));
+                move |_ctx, identity, token| {
+                    deliver(&connect_tx, Ok((identity, token.to_string())));
                 }
             })
             .on_connect_error(move |_ctx, err| {
                 deliver(&connect_tx, Err(format!("{err:?}")));
             })
-            .build()
-            .map_err(|e| anyhow!("building connection to {server_url}: {e:?}"))?;
+            .build();
 
+        let conn = match built {
+            Ok(conn) => conn,
+            Err(e) => {
+                return Err(ConnectFailure::NotBuilt(
+                    MeasuredStepFailure::Infrastructure(anyhow!(
+                        "building connection to {server_url}: {e:?}"
+                    )),
+                ))
+            }
+        };
+
+        // A message-processing thread now exists. Nothing below may `?`.
         let handle = conn.run_threaded();
 
-        let measured_identity = connect_rx
-            .recv_timeout(CONNECT_TIMEOUT)
-            .context("waiting for the connection handshake")?
-            .map_err(|msg| anyhow!("connection handshake failed: {msg}"))?;
+        let cause = match connect_rx.recv_timeout(CONNECT_TIMEOUT) {
+            Ok(Ok((measured_identity, token))) => {
+                return Ok(Self {
+                    conn,
+                    handle,
+                    measured_identity,
+                    database_name: database_identity.to_string(),
+                    server_url: server_url.to_string(),
+                    token,
+                })
+            }
+            Ok(Err(msg)) => {
+                MeasuredStepFailure::Infrastructure(anyhow!("connection handshake failed: {msg}"))
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => MeasuredStepFailure::Timeout(anyhow!(
+                "the connection handshake with {server_url} did not answer within \
+                 {CONNECT_TIMEOUT:?}"
+            )),
+            // Not an elapsed bound: both senders live in callbacks the builder owns, so a
+            // disconnect means the SDK dropped them without invoking either.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                MeasuredStepFailure::Infrastructure(anyhow!(
+                    "the connection handshake channel with {server_url} disconnected without \
+                     reporting either an identity or an error"
+                ))
+            }
+        };
 
-        Ok(Self {
-            conn,
-            handle,
-            measured_identity,
-            database_name: database_identity.to_string(),
-        })
+        let release = release_connection(&conn, handle, ReleaseExpectation::Unhandshaken);
+        if release.is_empty() {
+            Err(ConnectFailure::ReleasedAfterStart(cause))
+        } else {
+            let mut errors = vec![cause.into_error()];
+            errors.extend(release);
+            Err(ConnectFailure::ReleasedWithError(into_error(errors)))
+        }
     }
 
     /// The server-issued measured identity captured at connect time.
@@ -317,6 +489,281 @@ impl ConnectedClient {
     /// issuing no new subscription.
     pub(crate) fn read_entity_owner(&self) -> Vec<EntityOwner> {
         self.conn.db.entity_owner().iter().collect()
+    }
+
+    /// Register the campaign's three delivery callbacks on this role's measured target — the
+    /// [`Self::register_dose_events`] seam for this campaign, supplying the private connection so the
+    /// counted table cannot drift from the subscribed one.
+    pub(crate) fn register_delivery_callbacks(
+        &self,
+        target: MeasuredTarget,
+        counters: DeliveryCounters,
+    ) {
+        target.register_delivery_callbacks(&self.conn, counters);
+    }
+
+    /// Read this role's measured target out of the live client cache, issuing no new subscription.
+    pub(crate) fn read_measured_target(&self, target: MeasuredTarget) -> Vec<EntityOwner> {
+        target.read_back(&self.conn)
+    }
+
+    /// The campaign's **cold subscription** channel (E3): subscribe, block until applied, retain the
+    /// handle, and time the interval from its own issue.
+    ///
+    /// Measured once per attempt — a second subscription on this connection is no longer cold, which
+    /// is why the frozen order runs it first.
+    pub(crate) fn subscribe_measured_target(
+        &self,
+        target: MeasuredTarget,
+    ) -> std::result::Result<(SubscriptionHandle, LatencySample), MeasuredStepFailure> {
+        let origin = Instant::now();
+        self.subscribe_retained_from(target, origin)
+    }
+
+    /// The campaign's **reconnect** channel (E4): release this connection, establish a new one
+    /// presenting the *same* token, re-register `target`'s delivery callbacks, and resubscribe.
+    ///
+    /// **The measured interval excludes the teardown and includes everything after it** — the
+    /// transport handshake, the identity and token round trip, the three callback registrations, and
+    /// the snapshot. A proactive teardown is the harness's doing, not part of the production
+    /// reconnect being estimated; excluding it is what makes E4 a distinct estimand from E3, which
+    /// times a subscription on a connection that already exists. The counter handles are cloned
+    /// before the clock, leaving only the SDK's own per-callback boxing inside.
+    ///
+    /// **Consumes `self`, and releases before it reconnects.** Moving `conn` and `handle` out of a
+    /// `&mut self` would need an `Option` or a dummy to leave behind, and connecting first would put
+    /// two live connections on one database — which the SDK's process-global registry labels only by
+    /// database name, so both would sum into the series the measured window reads. Every failure's
+    /// surviving state is named by [`ReconnectFailure`].
+    ///
+    /// The old subscription handle is not carried across: pinned SDK 2.7.0 does not mark an applied
+    /// subscription inactive when its connection ends, so retaining it would report two active
+    /// subscriptions where one exists.
+    pub(crate) fn reconnect_preserving_token(
+        self,
+        target: MeasuredTarget,
+        rows: &Arc<crate::view_read_set_campaign::subscriber_delivery::subscriber_row_counter::SubscriberRowCounter>,
+    ) -> std::result::Result<(Self, SubscriptionHandle, LatencySample), ReconnectFailure> {
+        let server_url = self.server_url.clone();
+        let database_name = self.database_name.clone();
+        let token = self.token.clone();
+        let counters = DeliveryCounters::of(rows);
+
+        self.disconnect().map_err(|error| {
+            ReconnectFailure::ReleaseFailed(
+                error.context("releasing the measured subscriber before its reconnect"),
+            )
+        })?;
+
+        let origin = Instant::now();
+        let client = match Self::establish(&server_url, &database_name, Some(token)) {
+            Ok(client) => client,
+            // Both clientless post-conditions land on the same variant, because the caller's
+            // obligation is identical: nothing was left running.
+            Err(ConnectFailure::NotBuilt(cause) | ConnectFailure::ReleasedAfterStart(cause)) => {
+                return Err(ReconnectFailure::NotConnected(cause))
+            }
+            Err(ConnectFailure::ReleasedWithError(error)) => {
+                return Err(ReconnectFailure::ReleaseFailed(error.context(
+                    "releasing the half-connected replacement subscriber after its handshake \
+                     failed",
+                )))
+            }
+        };
+        target.register_delivery_callbacks(&client.conn, counters);
+        match client.subscribe_retained_from(target, origin) {
+            Ok((subscription, applied)) => Ok((client, subscription, applied)),
+            Err(failure) => Err(ReconnectFailure::NotResubscribed { client, failure }),
+        }
+    }
+
+    /// The campaign's **paced visible-apply** channel (E2): one outstanding write at a time, each
+    /// sample stopped when its change is observable in the subscriber cache.
+    ///
+    /// One observer serves the whole batch and is **removed before returning on every path**, so the
+    /// saturated channel never pays a channel send per delivered row. The delivery counters stay
+    /// registered — they count the whole measured window.
+    pub(crate) fn measure_paced_visible_batch(
+        &self,
+        target: MeasuredTarget,
+        schedule: MutationSchedule,
+    ) -> std::result::Result<RawLatencies, MeasuredStepFailure> {
+        let (tx, rx) = mpsc::channel::<PacedMessage>();
+        let observer = target.observe_visible_updates(&self.conn, {
+            let visible_tx = tx.clone();
+            // The clock is read as this closure's first statement, on the SDK's callback thread.
+            // What precedes it inside the callback is the generated handle's own `u64` primary-key
+            // read; everything after it — the channel send, this thread's wake — is outside the
+            // sample.
+            move |entity_uuid| {
+                let observed_at = Instant::now();
+                deliver(
+                    &visible_tx,
+                    PacedMessage::Visible {
+                        entity_uuid,
+                        observed_at,
+                    },
+                );
+            }
+        });
+
+        let sampled = self.sample_paced_batch(&tx, &rx, schedule);
+
+        observer.remove(&self.conn);
+        sampled
+    }
+
+    /// The campaign's **saturated queue-growth** channel (E1): issue the whole batch back-to-back
+    /// without awaiting any of it, then barrier and seal an issue-ordered [`SaturatedTimingBatch`].
+    ///
+    /// Runs last in the frozen order, where its queue pressure cannot perturb an unmeasured channel.
+    ///
+    /// **One origin per batch**, so issue spacing and confirmation ordering are comparable across
+    /// writes and the FIFO reading stays falsifiable. Each offset is captured on the side it
+    /// describes. The key, payload, and `Sender` clone are built before the issue offset is captured,
+    /// as the historical measured batch builds them; whatever overhead remains is visible in the
+    /// recorded offsets rather than assumed away.
+    pub(crate) fn measure_saturated_batch(
+        &self,
+        schedule: MutationSchedule,
+    ) -> std::result::Result<SaturatedTimingBatch, MeasuredStepFailure> {
+        let (tx, rx) = mpsc::channel::<SaturatedMessage>();
+        let origin = Instant::now();
+
+        for (index, write) in schedule.writes().into_iter().enumerate() {
+            let entity_uuid = schedule.target_key(write);
+            let record = schedule.payload(write);
+            let saturated_tx = tx.clone();
+            let issue_offset_nanos = origin.elapsed().as_nanos();
+            self.conn
+                .reducers
+                .update_entity_owner_then(
+                    entity_uuid,
+                    record,
+                    saturated_callback(index, origin, issue_offset_nanos, saturated_tx),
+                )
+                .map_err(|e| {
+                    MeasuredStepFailure::Infrastructure(anyhow!(
+                        "issuing saturated entity_owner update index {index}: {e:?}"
+                    ))
+                })?;
+        }
+
+        // Anchor the one whole-batch deadline now that issuing is done, matching the historical
+        // measured batch. `tx` outlives the barrier, so the channel cannot disconnect mid-batch.
+        let deadline = Instant::now() + MEASURED_BATCH_TIMEOUT;
+        collect_saturated_batch(rx, deadline)
+    }
+
+    /// Subscribe to `target`, block until applied, retain the handle, and measure from `origin`.
+    ///
+    /// **The origin is the caller's**, because the two apply channels measure different intervals
+    /// ending at the same event: E3's begins at this subscription's own issue, E4's before its
+    /// connection existed. Anchoring here would collapse them into one estimand.
+    ///
+    /// Stopping at `on_applied` is exactly "the initial snapshot is in cache": the pinned SDK writes
+    /// the cache, then runs the applied callback, then the row callbacks.
+    ///
+    /// **The interval ends inside the applied callback**, not when this thread wakes from the
+    /// barrier. `origin.elapsed()` is read as that callback's first statement, on the SDK's own
+    /// thread, so the channel hand-off and this thread's scheduling are outside the sample — the
+    /// discipline the historical measured batch already follows by reading its elapsed inside the
+    /// confirmation callback. Waking first would add one channel wake to every apply sample, and an
+    /// additive residue biases the endpoint factor `T = S_last / S_first` toward one.
+    ///
+    /// For E3 the caller anchors immediately before this call, so one `mpsc` channel, two boxed
+    /// callbacks, and the query string fall inside the interval. That residue is fixed and identical
+    /// for both channels, against a snapshot of thousands of rows over a socket; it is disclosed
+    /// rather than contorted out of an API the two share.
+    fn subscribe_retained_from(
+        &self,
+        target: MeasuredTarget,
+        origin: Instant,
+    ) -> std::result::Result<(SubscriptionHandle, LatencySample), MeasuredStepFailure> {
+        let (applied_tx, applied_rx) =
+            mpsc::channel::<std::result::Result<LatencySample, String>>();
+        let subscription = self
+            .conn
+            .subscription_builder()
+            .on_applied({
+                let applied_tx = applied_tx.clone();
+                move |_ctx| {
+                    let applied = LatencySample::from_elapsed(origin.elapsed());
+                    deliver(&applied_tx, Ok(applied));
+                }
+            })
+            .on_error(move |_ctx, err| {
+                deliver(&applied_tx, Err(format!("{err:?}")));
+            })
+            .subscribe([target.subscription_sql()]);
+
+        let applied = match applied_rx.recv_timeout(SUBSCRIPTION_TIMEOUT) {
+            Ok(applied) => applied,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(MeasuredStepFailure::Timeout(anyhow!(
+                    "the subscription to {target:?} was not applied within {SUBSCRIPTION_TIMEOUT:?}"
+                )))
+            }
+            // Not an elapsed bound: both senders live in callbacks the subscription owns, so a
+            // disconnect means the SDK dropped them without applying or erroring.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MeasuredStepFailure::Infrastructure(anyhow!(
+                    "the applied channel for the subscription to {target:?} disconnected without \
+                     reporting either an applied snapshot or an error"
+                )))
+            }
+        };
+        let applied = applied.map_err(|msg| {
+            MeasuredStepFailure::Infrastructure(anyhow!("subscription failed: {msg}"))
+        })?;
+
+        Ok((subscription, applied))
+    }
+
+    /// Walk the paced batch with the observer already registered.
+    ///
+    /// Split from [`Self::measure_paced_visible_batch`] so the observer's removal covers every path
+    /// out of this walk, early returns included, without a `Drop` guard.
+    ///
+    /// Each sample's interval is issue-to-visible: the clock starts before the generated issue call
+    /// and stops **in the observer callback** that reported *this* write's key, never when this
+    /// thread wakes. Key, payload, and `Sender` clone are built before the clock.
+    fn sample_paced_batch(
+        &self,
+        tx: &mpsc::Sender<PacedMessage>,
+        rx: &mpsc::Receiver<PacedMessage>,
+        schedule: MutationSchedule,
+    ) -> std::result::Result<RawLatencies, MeasuredStepFailure> {
+        let mut samples = Vec::with_capacity(CHANNEL_SAMPLE_COUNT_USIZE);
+
+        for (index, write) in schedule.writes().into_iter().enumerate() {
+            // Preregistered experimental pacing: a fixed delay *between* completed samples, outside
+            // every measured interval. Applied before every sample except the first (nothing
+            // precedes it) and never after the last — the exact protocol the historical dose ladder
+            // applies between its batches.
+            if index != 0 {
+                sleep(Duration::from_millis(PACED_SAMPLE_DELAY_MS));
+            }
+
+            let entity_uuid = schedule.target_key(write);
+            let record = schedule.payload(write);
+            let paced_tx = tx.clone();
+            let start = Instant::now();
+            self.conn
+                .reducers
+                .update_entity_owner_then(entity_uuid, record, paced_callback(index, paced_tx))
+                .map_err(|e| {
+                    MeasuredStepFailure::Infrastructure(anyhow!(
+                        "issuing paced entity_owner update index {index}: {e:?}"
+                    ))
+                })?;
+
+            let sample =
+                await_visible_update(rx, entity_uuid, start, start + PACED_SAMPLE_TIMEOUT)?;
+            samples.push(sample);
+        }
+
+        RawLatencies::sealed(samples).map_err(MeasuredStepFailure::Infrastructure)
     }
 
     /// Measure one [`BATCH_SIZE`]-write `entity_owner` batch, returning the issue-ordered
@@ -544,15 +991,19 @@ impl ConnectedClient {
             .map_err(|msg| anyhow!("subscription failed: {msg}"))
     }
 
-    /// Disconnect and join the message-processing thread.
+    /// Disconnect and join the message-processing thread, reporting every failure the release
+    /// produced.
+    ///
+    /// Both steps always run and their errors aggregate, so an `Err` here means the connection ended
+    /// abnormally rather than that it may still be running. See [`release_connection`].
     pub(crate) fn disconnect(self) -> Result<()> {
-        self.conn
-            .disconnect()
-            .map_err(|e| anyhow!("disconnecting client: {e:?}"))?;
-        self.handle
-            .join()
-            .map_err(|_| anyhow!("client message-processing thread panicked"))?;
-        Ok(())
+        let Self { conn, handle, .. } = self;
+        let errors = release_connection(&conn, handle, ReleaseExpectation::Live);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(into_error(errors))
+        }
     }
 
     /// Issue one reducer via `issue` and block until its confirmed completion callback fires,
@@ -645,6 +1096,168 @@ fn collect_measured_batch(
     measured.seal()
 }
 
+/// Release one connection's transport and its message-processing thread, returning every failure the
+/// release produced.
+///
+/// **The join runs even when the disconnect reports an error**, and that is what makes every
+/// caller's "no client remains" claim true: a join returns only once the thread has ended, `Err`
+/// meaning it ended by panicking. Dropping the handle on the error path would return while the
+/// thread might still be running.
+///
+/// It terminates, from the pinned source: `DbConnectionImpl::disconnect` returns
+/// [`spacetimedb_sdk::Error::Disconnected`] when the connection is no longer active and otherwise
+/// queues its `Disconnect` mutation — those are its only outcomes. A failure therefore means the
+/// socket already ended, which is exactly the condition `run_threaded`'s loop returns on; a success
+/// means the loop has been asked to stop.
+///
+/// A panicked join is reported rather than swallowed: `run_threaded` panics only on an error its
+/// loop does not classify as a normal disconnect.
+fn release_connection(
+    conn: &DbConnection,
+    handle: JoinHandle<()>,
+    expectation: ReleaseExpectation,
+) -> Vec<Error> {
+    let mut errors = Vec::new();
+
+    match conn.disconnect() {
+        Ok(()) => {}
+        Err(spacetimedb_sdk::Error::Disconnected)
+            if matches!(expectation, ReleaseExpectation::Unhandshaken) => {}
+        Err(error) => errors.push(anyhow!("disconnecting client: {error:?}")),
+    }
+
+    if handle.join().is_err() {
+        errors.push(anyhow!("client message-processing thread panicked"));
+    }
+
+    errors
+}
+
+/// E2's per-sample barrier: block until the subscriber cache reports an update to `target_key`, and
+/// return that sample as the interval from `start` to **the instant its own observer callback ran**.
+///
+/// Factored out of the paced walk so it depends on nothing but the channel, the key, the sample's
+/// `start`, and one absolute `deadline` — no live server.
+///
+/// **Updates to other keys are skipped, not rejected**, because the frozen schedule cycles the ten
+/// owned keys: rejecting one would fail a healthy run, and stopping on one would time the wrong
+/// write. A skipped message's instant is discarded with it: the sample is the *target* key's
+/// endpoint, never the last instant seen.
+///
+/// The subtraction is checked. `start` is captured before the write is issued and `observed_at` in a
+/// callback that can only run after it, so an endpoint preceding its own start is a broken monotonic
+/// clock rather than a slow write, and is refused instead of saturating to a zero-length sample that
+/// the channel's reduction would accept as a real observation.
+///
+/// That no earlier sample leaves an unread message naming this key is a pinned-SDK property, not a
+/// property of this loop: the cache applies inserts and deletes by exact row bytes *before* pairing
+/// survivors by primary key, so a whole-view refresh in which one row changed yields exactly one
+/// update event. Paced samples are serial and each consumes its own.
+///
+/// A reducer failure arrives on the same channel, so a write whose visibility can never come is
+/// reported as the application error it is rather than as a timeout.
+fn await_visible_update(
+    rx: &mpsc::Receiver<PacedMessage>,
+    target_key: u64,
+    start: Instant,
+    deadline: Instant,
+) -> std::result::Result<LatencySample, MeasuredStepFailure> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = match rx.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(MeasuredStepFailure::Timeout(anyhow!(
+                    "the paced update to entity_uuid {target_key} did not become visible in the \
+                     subscriber cache within {PACED_SAMPLE_TIMEOUT:?}"
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MeasuredStepFailure::Infrastructure(anyhow!(
+                    "the paced sample channel disconnected while awaiting entity_uuid \
+                     {target_key}; the measuring thread holds a sender for the whole batch, so a \
+                     disconnect means the harness dropped one"
+                )))
+            }
+        };
+        match message {
+            PacedMessage::Visible {
+                entity_uuid,
+                observed_at,
+            } if entity_uuid == target_key => {
+                let elapsed = observed_at.checked_duration_since(start).ok_or_else(|| {
+                    MeasuredStepFailure::Infrastructure(anyhow!(
+                        "the observer saw entity_uuid {target_key} before its own write was \
+                         issued, so the monotonic clock did not advance across the sample"
+                    ))
+                })?;
+                return Ok(LatencySample::from_elapsed(elapsed));
+            }
+            PacedMessage::Visible { .. } => {}
+            PacedMessage::Failed { index, error } => {
+                return Err(MeasuredStepFailure::Application(anyhow!(
+                    "paced write index {index} failed: {error}"
+                )))
+            }
+        }
+    }
+}
+
+/// E1's barrier: receive the saturated batch's callbacks into a slot-indexed
+/// [`SaturatedTimingAccumulator`] and seal the timings in issue order once every write confirms.
+///
+/// Factored out of [`ConnectedClient::measure_saturated_batch`] so it depends on nothing but the
+/// channel and one absolute `deadline` — no live server. A duplicate or out-of-range fire, an
+/// inverted offset pair, or any [`SaturatedMessage::Failed`] fails loud; delivery order is never
+/// assumed, and every receive draws from the one `deadline`, as the historical measured batch does.
+fn collect_saturated_batch(
+    rx: mpsc::Receiver<SaturatedMessage>,
+    deadline: Instant,
+) -> std::result::Result<SaturatedTimingBatch, MeasuredStepFailure> {
+    let mut measured = SaturatedTimingAccumulator::new();
+
+    while !measured.is_complete() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = match rx.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(MeasuredStepFailure::Timeout(anyhow!(
+                    "the saturated batch did not fully confirm within {MEASURED_BATCH_TIMEOUT:?} \
+                     of its last issue"
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MeasuredStepFailure::Infrastructure(anyhow!(
+                    "the saturated batch channel disconnected mid-batch; the issuing thread holds \
+                     a sender for the whole batch, so a disconnect means the harness dropped one"
+                )))
+            }
+        };
+        match message {
+            SaturatedMessage::Confirmed {
+                index,
+                issue_offset_nanos,
+                confirmation_offset_nanos,
+            } => {
+                let timing =
+                    SaturatedWriteTiming::observed(issue_offset_nanos, confirmation_offset_nanos)
+                        .with_context(|| format!("recording saturated write index {index}"))
+                        .map_err(MeasuredStepFailure::Infrastructure)?;
+                measured
+                    .record(index, timing)
+                    .map_err(MeasuredStepFailure::Infrastructure)?;
+            }
+            SaturatedMessage::Failed { index, error } => {
+                return Err(MeasuredStepFailure::Application(anyhow!(
+                    "saturated write index {index} failed: {error}"
+                )))
+            }
+        }
+    }
+
+    measured.seal().map_err(MeasuredStepFailure::Infrastructure)
+}
+
 /// Deliver a one-shot `outcome` to the waiting harness thread over `sender`.
 ///
 /// Every one of these channels is awaited with `recv_timeout` on the harness thread while the
@@ -691,6 +1304,68 @@ fn measured_callback(
                 error: format!("reducer returned an error: {msg}"),
             },
             Err(internal) => MeasuredMessage::Failed {
+                index,
+                error: format!("internal error awaiting reducer: {internal:?}"),
+            },
+        };
+        deliver(&tx, message);
+    }
+}
+
+/// Build the completion callback for one **paced** write at issue `index`.
+///
+/// Silent on success: the sample stops on visibility, which the observer signals, so a confirmation
+/// message would be a second unread send per write on the path E2 measures. This exists for the case
+/// visibility can never come, so the failure surfaces as an application error rather than expiring
+/// against the deadline.
+///
+/// Unboxed, as [`measured_callback`] is.
+fn paced_callback(
+    index: usize,
+    tx: mpsc::Sender<PacedMessage>,
+) -> impl FnOnce(&ReducerEventContext, ReducerOutcome) + Send + 'static {
+    move |_ctx, outcome| match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(msg)) => deliver(
+            &tx,
+            PacedMessage::Failed {
+                index,
+                error: format!("reducer returned an error: {msg}"),
+            },
+        ),
+        Err(internal) => deliver(
+            &tx,
+            PacedMessage::Failed {
+                index,
+                error: format!("internal error awaiting reducer: {internal:?}"),
+            },
+        ),
+    }
+}
+
+/// Build the completion callback for one **saturated** write at issue `index`, carrying its already
+/// captured `issue_offset_nanos` so both halves of the pair travel together and no index lookup can
+/// cross them. The issue offset cannot be recomputed here: this callback runs arbitrarily later.
+///
+/// Unboxed, as [`measured_callback`] is.
+fn saturated_callback(
+    index: usize,
+    origin: Instant,
+    issue_offset_nanos: u128,
+    tx: mpsc::Sender<SaturatedMessage>,
+) -> impl FnOnce(&ReducerEventContext, ReducerOutcome) + Send + 'static {
+    move |_ctx, outcome| {
+        let message = match outcome {
+            Ok(Ok(())) => SaturatedMessage::Confirmed {
+                index,
+                issue_offset_nanos,
+                confirmation_offset_nanos: origin.elapsed().as_nanos(),
+            },
+            Ok(Err(msg)) => SaturatedMessage::Failed {
+                index,
+                error: format!("reducer returned an error: {msg}"),
+            },
+            Err(internal) => SaturatedMessage::Failed {
                 index,
                 error: format!("internal error awaiting reducer: {internal:?}"),
             },

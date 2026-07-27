@@ -3,3 +3,5 @@
 //! One public entity per file; this entry file is declarative re-exports only.
 
 pub mod connected_client;
+pub mod measured_step_failure;
+pub mod reconnect_failure;
