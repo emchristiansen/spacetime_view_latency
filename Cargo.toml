@@ -9,6 +9,10 @@ spacetimedb-sdk = "=2.7.0"
 # reason: `prometheus::core::Metric` is the only public door to `HistogramCore::proto`, whose
 # shard flip and drain is the sole coherent read of a histogram's sample count and byte sum.
 prometheus = "=0.14.0"
+# Pinned to the version already locked transitively under the SDK, so this direct dependency adds no
+# new source. Depended on for one call: `sysconf(_SC_PAGESIZE)`, since `/proc/vmstat` counts
+# `pswpout` in pages while the environment sample records bytes. Default features only.
+libc = "=0.2.180"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 semver = { version = "1", features = ["serde"] }

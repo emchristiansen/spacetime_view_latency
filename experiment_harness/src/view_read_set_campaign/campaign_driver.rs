@@ -1,9 +1,10 @@
 //! The calibration-Pilot driver for the fresh-server campaign (spec c33f2e51).
 
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Error, Result};
+use anyhow::{anyhow, ensure, Context, Error, Result};
 use spacetimedb_sdk::Identity;
 
 use crate::client::connected_client::ConnectedClient;
@@ -45,6 +46,47 @@ use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_evid
 use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_meter::SubscriberDeliveryMeter;
 use crate::view_read_set_campaign::subscriber_delivery::subscriber_row_counter::SubscriberRowCounter;
 use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecord;
+
+/// The kernel sources of the four gate quantities, and the exact keys and shapes read out of them.
+///
+/// `/proc/pressure/memory` exists only on a `CONFIG_PSI` kernel; its absence fails the read rather
+/// than substituting a value.
+const PROC_LOADAVG: &str = "/proc/loadavg";
+const PROC_MEMINFO: &str = "/proc/meminfo";
+const PROC_VMSTAT: &str = "/proc/vmstat";
+const PROC_PRESSURE_MEMORY: &str = "/proc/pressure/memory";
+
+/// Three load averages, `running/total`, and the last pid.
+const PROC_LOADAVG_FIELDS: usize = 5;
+const PROC_LOADAVG_TASKS_FIELD: usize = 3;
+const PROC_LOADAVG_LAST_PID_FIELD: usize = 4;
+const LOADAVG_TASK_SEPARATOR: char = '/';
+/// The whole first field, colon included — `meminfo` prints the key and its value whitespace-separated.
+const MEMINFO_AVAILABLE_KEY: &str = "MemAvailable:";
+/// Key, value, unit.
+const MEMINFO_FIELDS: usize = 3;
+/// Spelled `kB`, meaning kibibytes — see [`parse_available_ram_bytes`].
+const MEMINFO_KIBIBYTE_UNIT: &str = "kB";
+const BYTES_PER_KIBIBYTE: u64 = 1_024;
+const VMSTAT_SWAP_OUT_KEY: &str = "pswpout";
+/// Key and value.
+const VMSTAT_FIELDS: usize = 2;
+const PRESSURE_FULL_KEY: &str = "full";
+/// Kind, three averages, cumulative total.
+const PRESSURE_FIELDS: usize = 5;
+const PRESSURE_AVG10_FIELD: usize = 1;
+const PRESSURE_AVG60_FIELD: usize = 2;
+const PRESSURE_AVG300_FIELD: usize = 3;
+const PRESSURE_TOTAL_FIELD: usize = 4;
+const PRESSURE_AVG10_KEY: &str = "avg10=";
+const PRESSURE_AVG60_KEY: &str = "avg60=";
+const PRESSURE_AVG300_KEY: &str = "avg300=";
+const PRESSURE_TOTAL_KEY: &str = "total=";
+const DECIMAL_POINT: char = '.';
+/// Decimal places both `/proc/loadavg` and `/proc/pressure/memory` print — the exact resolution the
+/// samples are stored in.
+const CENTI_FRACTION_DIGITS: usize = 2;
+const CENTI_PER_UNIT: u64 = 100;
 
 /// A classified failure inside one attempt's measured window, carrying everything the terminal
 /// record needs.
@@ -374,15 +416,268 @@ fn preflight_gate() -> Result<EnvironmentGateEvidence> {
 ///
 /// [`EnvironmentSample::observed`] is infallible because none of its fields has a forbidden value;
 /// parsing `/proc`, which genuinely can fail, is this function's job and fails here.
+///
+/// **Four reads, not one snapshot**: the kernel offers no combined atomic view of these files, so a
+/// sample is four readings in quick succession.
+///
+/// Each parser below selects its line by exact whole-field key and validates that line whole — every
+/// field, including the ones it does not return — so a changed format is an error instead of a
+/// plausible wrong number.
 fn observe_environment(offset_nanos: u64) -> Result<EnvironmentSample> {
-    let _ = offset_nanos;
-    todo!(
-        "Phase 2: read /proc/loadavg, /proc/meminfo MemAvailable, /proc/vmstat pswpout, and \
-         /proc/pressure/memory full avg60; convert load and PSI to hundredths as integers rather \
-         than through a float, since hundredths are the exact reported resolution and the gate's \
-         comparisons must be exact; convert pswpout pages to bytes with the page size; then hand \
-         them to EnvironmentSample::observed at this offset"
-    )
+    let loadavg = read_proc(PROC_LOADAVG)?;
+    let meminfo = read_proc(PROC_MEMINFO)?;
+    let vmstat = read_proc(PROC_VMSTAT)?;
+    let pressure = read_proc(PROC_PRESSURE_MEMORY)?;
+
+    let one_minute_load_centi =
+        parse_one_minute_load_centi(&loadavg).with_context(|| format!("parsing {PROC_LOADAVG}"))?;
+    let available_ram_bytes =
+        parse_available_ram_bytes(&meminfo).with_context(|| format!("parsing {PROC_MEMINFO}"))?;
+    let swap_out_pages =
+        parse_swap_out_pages(&vmstat).with_context(|| format!("parsing {PROC_VMSTAT}"))?;
+    let memory_psi_full_avg60_centi = parse_memory_psi_full_avg60_centi(&pressure)
+        .with_context(|| format!("parsing {PROC_PRESSURE_MEMORY}"))?;
+
+    let cumulative_swap_out_bytes = swap_out_pages
+        .checked_mul(host_page_size_bytes()?)
+        .with_context(|| {
+            format!("converting {swap_out_pages} swapped-out pages to bytes overflowed u64")
+        })?;
+
+    Ok(EnvironmentSample::observed(
+        offset_nanos,
+        one_minute_load_centi,
+        available_ram_bytes,
+        cumulative_swap_out_bytes,
+        memory_psi_full_avg60_centi,
+    ))
+}
+
+/// Read one `/proc` file whole, naming it on failure.
+fn read_proc(path: &str) -> Result<String> {
+    fs::read_to_string(path).with_context(|| format!("reading {path}"))
+}
+
+/// The host's memory page size in bytes — `pswpout` counts pages, the sample records bytes.
+///
+/// Queried at runtime rather than frozen as a constant, which would bake an unverified premise into
+/// recorded evidence. `sysconf` reports an unsupported name as `-1`, and `0` is not a page size, so
+/// both are refused rather than becoming a factor that zeroes every swap reading.
+fn host_page_size_bytes() -> Result<u64> {
+    // SAFETY: `sysconf` reads a static system parameter. It takes one `c_int` by value, borrows no
+    // memory from this process, writes nothing, and has no precondition beyond a name the platform
+    // defines — which `libc::_SC_PAGESIZE` is. Its only failure is the in-band `-1`, checked below.
+    let raw = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    ensure!(raw > 0, "sysconf(_SC_PAGESIZE) reported {raw}");
+    u64::try_from(raw).with_context(|| format!("page size {raw} does not fit u64"))
+}
+
+/// The one-minute load average from `/proc/loadavg`, in hundredths of a runnable task.
+///
+/// The whole line is validated, not just the field returned: three two-decimal averages, a
+/// `running/total` pair of counts, and the last pid. A line that fails any of those is not
+/// `/proc/loadavg`, and nothing about it places the one-minute average.
+fn parse_one_minute_load_centi(loadavg: &str) -> Result<u64> {
+    let line = sole_line(loadavg)?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    ensure!(
+        fields.len() == PROC_LOADAVG_FIELDS,
+        "expected {PROC_LOADAVG_FIELDS} whitespace-separated fields, got {}: {line:?}",
+        fields.len()
+    );
+
+    let one_minute = parse_two_decimal_centi(fields[0])
+        .with_context(|| format!("reading the one-minute load average of {line:?}"))?;
+    parse_two_decimal_centi(fields[1])
+        .with_context(|| format!("reading the five-minute load average of {line:?}"))?;
+    parse_two_decimal_centi(fields[2])
+        .with_context(|| format!("reading the fifteen-minute load average of {line:?}"))?;
+
+    let (running, total) = fields[PROC_LOADAVG_TASKS_FIELD]
+        .split_once(LOADAVG_TASK_SEPARATOR)
+        .with_context(|| {
+            format!(
+                "expected a `running{LOADAVG_TASK_SEPARATOR}total` task pair, got {:?}: {line:?}",
+                fields[PROC_LOADAVG_TASKS_FIELD]
+            )
+        })?;
+    parse_count(running).with_context(|| format!("reading the runnable task count of {line:?}"))?;
+    parse_count(total).with_context(|| format!("reading the total task count of {line:?}"))?;
+    parse_count(fields[PROC_LOADAVG_LAST_PID_FIELD])
+        .with_context(|| format!("reading the last pid of {line:?}"))?;
+
+    Ok(one_minute)
+}
+
+/// `MemAvailable` from `/proc/meminfo`, in bytes.
+///
+/// **The kernel's `kB` suffix means kibibytes**, so the multiplier is 1024; reading it literally
+/// would understate available memory by 2.4%.
+///
+/// Selected by whole-field equality, not by prefix: a `MemAvailable:`-prefixed key like
+/// `MemAvailable:Extra` would otherwise satisfy every later check and be read as this quantity.
+fn parse_available_ram_bytes(meminfo: &str) -> Result<u64> {
+    let line = sole_line_with_first_field(meminfo, MEMINFO_AVAILABLE_KEY)?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    ensure!(
+        fields.len() == MEMINFO_FIELDS,
+        "expected `{MEMINFO_AVAILABLE_KEY} <value> {MEMINFO_KIBIBYTE_UNIT}`, got {line:?}"
+    );
+    ensure!(
+        fields[MEMINFO_FIELDS - 1] == MEMINFO_KIBIBYTE_UNIT,
+        "expected the unit {MEMINFO_KIBIBYTE_UNIT:?}, got {:?}: {line:?}",
+        fields[MEMINFO_FIELDS - 1]
+    );
+    let kibibytes: u64 = fields[1]
+        .parse()
+        .with_context(|| format!("reading {:?} as a count of kibibytes", fields[1]))?;
+    kibibytes
+        .checked_mul(BYTES_PER_KIBIBYTE)
+        .with_context(|| format!("converting {kibibytes} kibibytes to bytes overflowed u64"))
+}
+
+/// Cumulative pages swapped out since boot, from `/proc/vmstat`'s `pswpout` counter.
+///
+/// Matched on the whole first field, not a prefix: neighbouring `pswpin` shares five characters.
+fn parse_swap_out_pages(vmstat: &str) -> Result<u64> {
+    let line = sole_line_with_first_field(vmstat, VMSTAT_SWAP_OUT_KEY)?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    ensure!(
+        fields.len() == VMSTAT_FIELDS,
+        "expected `{VMSTAT_SWAP_OUT_KEY} <pages>`, got {line:?}"
+    );
+    fields[1]
+        .parse()
+        .with_context(|| format!("reading {:?} as a count of swapped-out pages", fields[1]))
+}
+
+/// Memory pressure `full avg60` from `/proc/pressure/memory`, in hundredths of a percent.
+///
+/// The `full` line, which the frozen gate names, never `some`; both carry an identically spelled
+/// `avg60`, so the line is selected before the field.
+///
+/// The whole line is validated, not just the field returned: each of the three averages carries its
+/// own key and a two-decimal value, and the cumulative total carries its key and a count. So `avg60`
+/// is placed by the line's proven shape rather than by trusting one position.
+fn parse_memory_psi_full_avg60_centi(pressure: &str) -> Result<u64> {
+    let line = sole_line_with_first_field(pressure, PRESSURE_FULL_KEY)?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    ensure!(
+        fields.len() == PRESSURE_FIELDS,
+        "expected `{PRESSURE_FULL_KEY} {PRESSURE_AVG10_KEY}… {PRESSURE_AVG60_KEY}… \
+         {PRESSURE_AVG300_KEY}… {PRESSURE_TOTAL_KEY}…`, got {line:?}"
+    );
+
+    parse_two_decimal_centi(keyed_field(
+        &fields,
+        PRESSURE_AVG10_FIELD,
+        PRESSURE_AVG10_KEY,
+        line,
+    )?)
+    .with_context(|| format!("reading the ten-second average of {line:?}"))?;
+    let avg60 = parse_two_decimal_centi(keyed_field(
+        &fields,
+        PRESSURE_AVG60_FIELD,
+        PRESSURE_AVG60_KEY,
+        line,
+    )?)
+    .with_context(|| format!("reading the sixty-second average of {line:?}"))?;
+    parse_two_decimal_centi(keyed_field(
+        &fields,
+        PRESSURE_AVG300_FIELD,
+        PRESSURE_AVG300_KEY,
+        line,
+    )?)
+    .with_context(|| format!("reading the three-hundred-second average of {line:?}"))?;
+    parse_count(keyed_field(
+        &fields,
+        PRESSURE_TOTAL_FIELD,
+        PRESSURE_TOTAL_KEY,
+        line,
+    )?)
+    .with_context(|| format!("reading the cumulative stall total of {line:?}"))?;
+
+    Ok(avg60)
+}
+
+/// The value of a `key=value` field at its fixed position, failing loud if it carries another key.
+fn keyed_field<'a>(fields: &[&'a str], index: usize, key: &str, line: &str) -> Result<&'a str> {
+    fields[index].strip_prefix(key).with_context(|| {
+        format!(
+            "expected field {index} to carry {key:?}, got {:?}: {line:?}",
+            fields[index]
+        )
+    })
+}
+
+/// An unsigned count as the kernel prints it.
+fn parse_count(field: &str) -> Result<u64> {
+    field
+        .parse()
+        .with_context(|| format!("reading {field:?} as a count"))
+}
+
+/// Parse a fixed two-decimal-place kernel figure into exact hundredths, through integers rather
+/// than a float — `"1.23"` via `f64` can land on `122.99999…`, and the gate compares exactly.
+///
+/// Exactly two fraction digits, not at most two: reading `"1.2"` as 12 hundredths rather than 120
+/// would scale a gate term by ten.
+fn parse_two_decimal_centi(field: &str) -> Result<u64> {
+    let (whole, fraction) = field
+        .split_once(DECIMAL_POINT)
+        .with_context(|| format!("expected a decimal figure, got {field:?}"))?;
+    ensure!(
+        fraction.len() == CENTI_FRACTION_DIGITS,
+        "expected exactly {CENTI_FRACTION_DIGITS} decimal places, got {:?}",
+        field
+    );
+    let whole: u64 = whole
+        .parse()
+        .with_context(|| format!("reading {whole:?} as the whole part of {field:?}"))?;
+    let fraction: u64 = fraction
+        .parse()
+        .with_context(|| format!("reading {fraction:?} as the fractional part of {field:?}"))?;
+    whole
+        .checked_mul(CENTI_PER_UNIT)
+        .and_then(|centi| centi.checked_add(fraction))
+        .with_context(|| format!("converting {field:?} to hundredths overflowed u64"))
+}
+
+/// The single line of a one-line `/proc` file, rejecting an empty or multi-line reading.
+fn sole_line(contents: &str) -> Result<&str> {
+    let mut lines = contents.lines();
+    let line = lines.next().context("the file was empty")?;
+    ensure!(
+        lines.next().is_none(),
+        "expected exactly one line, got {}",
+        contents.lines().count()
+    );
+    Ok(line)
+}
+
+/// The one line whose first whitespace-separated field is exactly `key`.
+fn sole_line_with_first_field<'a>(contents: &'a str, key: &str) -> Result<&'a str> {
+    sole_line_matching(contents, key, |line| {
+        line.split_whitespace().next() == Some(key)
+    })
+}
+
+/// The one line satisfying `is_match`. Uniqueness is required rather than taking the first match, so
+/// a file that grew a second line with the same key fails instead of silently choosing.
+fn sole_line_matching<'a>(
+    contents: &'a str,
+    key: &str,
+    is_match: impl Fn(&str) -> bool,
+) -> Result<&'a str> {
+    let mut matched = contents.lines().filter(|line| is_match(line));
+    let line = matched
+        .next()
+        .with_context(|| format!("no line for {key:?}"))?;
+    ensure!(
+        matched.next().is_none(),
+        "expected exactly one line for {key:?}, found more"
+    );
+    Ok(line)
 }
 
 /// **Stage 2b — preflight clearance append.** Record the readings that cleared this attempt to

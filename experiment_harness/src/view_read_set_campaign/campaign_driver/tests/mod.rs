@@ -21,9 +21,12 @@
 //! covered here, the two batch barriers and the paced stop condition beside the client, and the
 //! role→target coupling beside that type. No seam was added to reach the rest.
 //!
-//! Every remaining stage is still an explicit `todo!()`: the gate stages read `/proc` and wait on a
-//! monotonic clock; provisioning needs a live pinned server and a published module; and the three
-//! remaining orchestration stages compose all of those.
+//! `observe_environment`'s four `/proc` parsers are covered here over verbatim kernel content; the
+//! reads themselves and the page-size query are host facts, covered by inspection.
+//!
+//! Every remaining stage is still an explicit `todo!()`: `preflight_gate` waits on a monotonic
+//! clock; provisioning needs a live pinned server and a published module; and the three remaining
+//! orchestration stages compose all of those.
 
 mod capturing_writer;
 mod composition_fixture;
@@ -33,11 +36,15 @@ mod scripted_writer;
 
 mod a_control_attempt_validates_the_whole_swept_slice;
 mod a_leaked_foreign_row_fails_as_semantics_or_security;
+mod a_load_average_reads_its_first_field_in_hundredths;
 mod a_measureless_attempt_records_no_post_line_and_reports_its_release_failures;
 mod a_retry_is_scheduled_exactly_when_eligibility_grants_one;
 mod a_settled_attempt_records_its_terminal_line_then_its_post_attempt_line;
 mod a_terminal_ledger_refuses_every_recording_adapter;
 mod an_arm_attempt_validates_its_own_read_set_and_keeps_its_channels;
 mod an_observed_sample_makes_a_failure_measured_with_no_evidence_to_show_for_it;
+mod available_memory_is_the_kernels_kibibyte_line_in_bytes;
 mod each_recording_adapter_appends_its_own_record;
 mod every_primary_failure_leads_while_release_still_runs;
+mod memory_pressure_reads_full_avg60_and_not_some;
+mod swap_out_reads_the_cumulative_pswpout_counter;
