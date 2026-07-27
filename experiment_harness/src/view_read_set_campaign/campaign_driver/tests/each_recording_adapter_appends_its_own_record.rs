@@ -22,8 +22,8 @@ use super::fixture;
 /// the positional rules reconciliation enforces are decided by *call order* alone.
 ///
 /// What this cannot prove is that call order. Inventory-first, clearance-before-provisioning, and
-/// post-attempt-immediately-after-terminal belong to `run_campaign` — still a `todo!()` —
-/// `run_attempt`, and `settle` respectively; the order used here is only a convenient one.
+/// post-attempt-immediately-after-terminal belong to `run_campaign`, `run_attempt`, and `settle`
+/// respectively; the order used here is only a convenient one.
 #[test]
 fn each_recording_adapter_appends_its_own_record() {
     let attempt = fixture::key(RetryOrdinal::ORIGINAL);

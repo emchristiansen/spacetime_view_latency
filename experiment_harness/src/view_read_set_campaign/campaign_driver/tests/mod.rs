@@ -12,9 +12,9 @@
 //!
 //! Order is covered exactly where it is owned. Terminal-immediately-followed-by-post-attempt is
 //! `settle`'s, and is proved here; clearance-before-provisioning is `run_attempt`'s, whose stages
-//! hold live capabilities and are covered by inspection; Inventory-first belongs to `run_campaign`,
-//! which is still `todo!()`. Reconciliation re-derives all three independently from the finished
-//! ledger.
+//! hold live capabilities and are covered by inspection; Inventory-first is `run_campaign`'s, and
+//! what is proved here is its load-bearing half — that a failed inventory line runs nothing.
+//! Reconciliation re-derives all three independently from the finished ledger.
 //!
 //! `run_attempt`'s one pure factor is extracted and proved here: the seed plan, which decides the two
 //! key ranges and their owners from the frozen constants alone. The rest of that stage is ownership
@@ -42,7 +42,7 @@
 //! standalone and a real publish, and its provenance is mintable only from those live capabilities.
 //! Its acquisition order and four release edges are covered by inspection instead.
 //!
-//! Two executable bodies remain `todo!()`: the pilot entrypoint and `run_campaign`.
+//! One executable body remains `todo!()`: the pilot entrypoint.
 
 mod capturing_writer;
 mod composition_fixture;
@@ -64,6 +64,7 @@ mod each_recording_adapter_appends_its_own_record;
 mod every_primary_failure_leads_while_release_still_runs;
 mod memory_pressure_reads_full_avg60_and_not_some;
 mod swap_out_reads_the_cumulative_pswpout_counter;
+mod the_campaign_executes_nothing_until_its_inventory_line_is_durable;
 mod the_release_cause_survives_whether_or_not_the_fan_out_persists;
 mod the_seed_plan_fills_both_slices_at_both_ladder_extremes;
 mod the_skipped_slots_are_every_later_original_and_no_other;

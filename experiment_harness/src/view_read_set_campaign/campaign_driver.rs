@@ -271,12 +271,12 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** Every stage of one attempt is implemented, and so is the walk over the frozen
-/// inventory that runs them. What remains is the campaign's opening and closing: this entrypoint,
-/// which creates and finalizes the ledger, and [`run_campaign`], which writes the inventory line
-/// inside the region this one finalizes. Both are still an explicit `todo!()`, and what is fixed for
-/// them is the stage decomposition, the typed inputs and outputs, and the ordering discipline the
-/// stubs describe.
+/// **Phase boundary.** Everything the campaign body does is implemented, down to the inventory line
+/// [`run_campaign`] opens with. What remains is this entrypoint alone: freezing the inventory and
+/// pins, creating the ledger, and finalizing it on every path — including a failure of that very
+/// first write, which is why the body is a separate function. It is still an explicit `todo!()`, and
+/// what is fixed for it is the stage decomposition, the typed inputs and outputs, and the ordering
+/// discipline the stub describes.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -298,6 +298,9 @@ pub(crate) fn view_read_set_campaign_pilot(
 ///
 /// Split from the entrypoint so the opening `Inventory` write is inside the region its caller
 /// finalizes: a persist failure on the very first line must still reach [`CampaignSink::finalize`].
+///
+/// The `?` is the rule: attempts run only once the preregistration they will be accounted against is
+/// on disk. [`run_inventory`]'s error returns unchanged, already naming its attempt and position.
 fn run_campaign(
     sink: &mut CampaignSink,
     inventory: &AttemptInventory,
@@ -306,8 +309,8 @@ fn run_campaign(
     module_wasm: &Path,
     artifacts: &Path,
 ) -> Result<()> {
-    let _ = (sink, inventory, provenance, listen, module_wasm, artifacts);
-    todo!("Phase 2: record_inventory, then run_inventory over the frozen order")
+    record_inventory(sink, inventory, provenance)?;
+    run_inventory(sink, inventory, listen, module_wasm, artifacts)
 }
 
 /// **Stage 1 — inventory write.** Append the frozen inventory and campaign provenance as the
