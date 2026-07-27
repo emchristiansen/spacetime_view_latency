@@ -22,11 +22,12 @@
 //! role→target coupling beside that type. No seam was added to reach the rest.
 //!
 //! `observe_environment`'s four `/proc` parsers are covered here over verbatim kernel content; the
-//! reads themselves and the page-size query are host facts, covered by inspection.
+//! reads themselves and the page-size and CPU-count queries are host facts, covered by inspection.
+//! `preflight_gate` composes those with a sixty-second wait, so it has no pure factor of its own; the
+//! decision it produces is proved beside `EnvironmentGateEvidence`.
 //!
-//! Every remaining stage is still an explicit `todo!()`: `preflight_gate` waits on a monotonic
-//! clock; provisioning needs a live pinned server and a published module; and the three remaining
-//! orchestration stages compose all of those.
+//! Every remaining stage is still an explicit `todo!()`: provisioning needs a live pinned server and
+//! a published module, and the four remaining orchestration stages compose all of those.
 
 mod capturing_writer;
 mod composition_fixture;

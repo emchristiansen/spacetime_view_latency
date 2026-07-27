@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use spacetimedb_sdk::Identity;
@@ -19,6 +21,7 @@ use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
+use crate::view_read_set_campaign::campaign_params::ENVIRONMENT_SAMPLE_SEPARATION_NANOS;
 use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 use crate::view_read_set_campaign::campaign_sink::CampaignSink;
@@ -234,12 +237,13 @@ enum Provisioning {
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
 /// **Phase boundary.** The pure [`schedule_retry`] and [`validate_final_composition`], the four
-/// recording adapters, [`settle`], and the measurement stage — [`measure_attempt`] and
-/// [`measure_channel`] — are implemented; every other body in this file is still an explicit
-/// `todo!()`. What remains is orchestration and the two `/proc`-reading gate stages: this entrypoint,
-/// [`run_campaign`], [`run_inventory`], [`run_attempt`], [`preflight_gate`], [`observe_environment`],
-/// and [`provision_and_record`]. What is fixed for those is the stage decomposition, the typed inputs
-/// and outputs of each stage, and the ordering discipline the stubs describe.
+/// recording adapters, [`settle`], the measurement stage — [`measure_attempt`] and
+/// [`measure_channel`] — and both environment stages, [`preflight_gate`] and
+/// [`observe_environment`], are implemented; every other body in this file is still an explicit
+/// `todo!()`. What remains is orchestration and provisioning: this entrypoint, [`run_campaign`],
+/// [`run_inventory`], [`run_attempt`], and [`provision_and_record`]. What is fixed for those is the
+/// stage decomposition, the typed inputs and outputs of each stage, and the ordering discipline the
+/// stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -402,14 +406,31 @@ fn run_attempt(
 ///
 /// Prospective by construction: this runs immediately before launch and decides whether an attempt
 /// happens at all, so it can never invalidate a measurement.
+///
+/// **A refused gate is `Ok`, not an error.** `Err` means the readings could not be taken at all; a
+/// well-formed pair that fails a clause is evidence, and the caller derives the refusal from it.
+///
+/// The wait and the separation [`EnvironmentGateEvidence::paired`] proves read the one constant, so
+/// the sampler cannot drift from its own precondition. Both offsets come from one origin, and each
+/// is stamped before its sample's reads, so the recorded interval is the sleep plus the first
+/// sample's reads — at or above the frozen separation, never below it.
 fn preflight_gate() -> Result<EnvironmentGateEvidence> {
-    todo!(
-        "Phase 2: take the first sample, initiate a monotonic wait of \
-         ENVIRONMENT_SAMPLE_SEPARATION_NANOS, take the second, and pair them with \
-         EnvironmentGateEvidence::paired against the host's logical CPU count. Both offsets come \
-         from one monotonic origin, so scheduler delay can only make the recorded interval longer \
-         than sixty seconds, never shorter — which is why `paired` checks `>=`"
-    )
+    let origin = Instant::now();
+    let first =
+        observe_environment(offset_nanos(origin)?).context("taking the first preflight sample")?;
+    sleep(Duration::from_nanos(ENVIRONMENT_SAMPLE_SEPARATION_NANOS));
+    let second =
+        observe_environment(offset_nanos(origin)?).context("taking the second preflight sample")?;
+
+    EnvironmentGateEvidence::paired(first, second, host_logical_cpus()?)
+}
+
+/// A sample's offset from the gate's origin, in the `u64` nanoseconds the sample records.
+fn offset_nanos(origin: Instant) -> Result<u64> {
+    let elapsed = origin.elapsed();
+    u64::try_from(elapsed.as_nanos()).with_context(|| {
+        format!("{elapsed:?} since the gate's origin does not fit u64 nanoseconds")
+    })
 }
 
 /// Read the four host quantities the gate and the post-attempt diagnostic are both made of.
@@ -470,6 +491,20 @@ fn host_page_size_bytes() -> Result<u64> {
     let raw = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     ensure!(raw > 0, "sysconf(_SC_PAGESIZE) reported {raw}");
     u64::try_from(raw).with_context(|| format!("page size {raw} does not fit u64"))
+}
+
+/// The host's logical CPU count — the denominator the gate compares its one-minute load against.
+///
+/// Host-wide, matching that numerator: `/proc/loadavg` counts every runnable task on the machine, so
+/// a process-scoped figure — [`std::thread::available_parallelism`], which honours this process's
+/// affinity mask and cgroup quota — would judge a whole-host load against a share of the host.
+/// Online rather than configured, because an offline CPU runs nothing.
+fn host_logical_cpus() -> Result<u64> {
+    // SAFETY: as in `host_page_size_bytes` — one `c_int` by value, no borrowed memory, no writes,
+    // and a name the platform defines. Its only failure is the in-band `-1`, checked below.
+    let raw = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    ensure!(raw > 0, "sysconf(_SC_NPROCESSORS_ONLN) reported {raw}");
+    u64::try_from(raw).with_context(|| format!("logical CPU count {raw} does not fit u64"))
 }
 
 /// The one-minute load average from `/proc/loadavg`, in hundredths of a runnable task.

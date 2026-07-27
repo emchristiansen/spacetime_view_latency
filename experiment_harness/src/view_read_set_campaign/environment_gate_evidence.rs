@@ -133,3 +133,8 @@ mod sealed {
 }
 
 pub(crate) use sealed::EnvironmentGateEvidence;
+
+// A sibling of `sealed`, not a child: the tests reach the type only through `paired`, exactly as
+// production does, so no fixture can assert a pair the constructor would refuse.
+#[cfg(test)]
+mod tests;
