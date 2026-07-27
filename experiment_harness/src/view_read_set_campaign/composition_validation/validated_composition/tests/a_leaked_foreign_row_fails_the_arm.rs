@@ -44,9 +44,8 @@ fn a_leaked_foreign_row_fails_the_arm() {
         fixture::final_rows(RunRole::Arm),
     );
 
-    let error =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 11, 11, 1)
-            .expect_err("one foreign row in the Arm's view is a read-set leak, not a discrepancy");
+    let error = ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
+        .expect_err("one foreign row in the Arm's view is a read-set leak, not a discrepancy");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains("read-set leak"),

@@ -29,7 +29,7 @@ fn the_arm_census_accepts_the_required_composition() {
     );
 
     let validated =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 10, 10, 1)
+        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
             .expect("the Arm's required composition must validate");
 
     assert_eq!(
@@ -41,6 +41,12 @@ fn the_arm_census_accepts_the_required_composition() {
         validated.observed_foreign_rows(),
         0,
         "the sender-scoped view must leak none of the foreign slice; zero is the gate passing"
+    );
+    assert_eq!(
+        validated.client_cache_rows(),
+        10,
+        "the cache count is derived as the two validated slice counts, so the Arm's whole cache is \
+         its own ten rows"
     );
     assert_eq!(
         validated.scale(),

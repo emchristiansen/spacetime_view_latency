@@ -86,6 +86,15 @@ mod sealed {
     /// counts, and the witness row's key and both payloads are recorded so the check can be
     /// reproduced without reading this module.
     ///
+    /// **Everything here is replayable, and that is why the live subscriber facts are not here.**
+    /// Delivered rows, client-cache rows, and subscription handles were once inputs. Two of them
+    /// cannot bear on whether these rows satisfy this transition, and all three were free
+    /// parameters, so a caller could state any value and no comparison could contradict it — the
+    /// same forgeability the caller-selected witness had. They also made a finding unmintable
+    /// without a live server, which would have put this whole check beyond the reach of a test.
+    /// Delivery and handle facts are supporting evidence about the subscriber's connection and are
+    /// recorded *beside* the composition finding, on the attempt's evidence, not inside it.
+    ///
     /// **What it does not claim.** It does not establish that the observations came from a real
     /// server; that is a property of the driver's measurement path. It claims only that these
     /// specific retained rows satisfy this specific recorded transition.
@@ -97,9 +106,6 @@ mod sealed {
         observed_owned_rows: u64,
         observed_foreign_rows: u64,
         mutation: MutationWitness,
-        delivered_rows: u64,
-        client_cache_rows: u64,
-        subscription_handles: u32,
     }
 
     /// The concrete witness to the **final saturated write** — the last measured mutation of the
@@ -156,9 +162,6 @@ mod sealed {
             expected: CompositionTransitionExpectation,
             before: ObservedRowSet,
             after: ObservedRowSet,
-            delivered_rows: u64,
-            client_cache_rows: u64,
-            subscription_handles: u32,
         ) -> Result<Self> {
             let before_census = census(&before, expected.before())
                 .context("censusing the observation retained before the first measured write")?;
@@ -211,9 +214,6 @@ mod sealed {
                 observed_owned_rows: after_census.owned,
                 observed_foreign_rows: after_census.foreign,
                 mutation,
-                delivered_rows,
-                client_cache_rows,
-                subscription_handles,
             })
         }
 
@@ -266,20 +266,26 @@ mod sealed {
             &self.mutation.payload_validated_after_e1
         }
 
-        /// Rows delivered to this subscriber, recorded as supporting evidence rather than a trend
-        /// estimand.
-        pub(crate) fn delivered_rows(&self) -> u64 {
-            self.delivered_rows
-        }
-
-        /// Rows resident in the client cache, recorded as supporting evidence.
+        /// How many rows the measured subscriber's client cache held once the saturated batch
+        /// confirmed — **derived**, never stored.
+        ///
+        /// The after-census admits a row only by counting it into exactly one of the two
+        /// preregistered ranges and rejects anything outside both, so these two counts partition the
+        /// observation completely and their sum is its cardinality. Both the Arm's sender-scoped
+        /// view and the Control's direct table are subscribed whole, so that cardinality *is* the
+        /// cache's row count for the subscribed target.
+        ///
+        /// Deriving it is what keeps it honest. A second reading taken from the live cache could
+        /// disagree with the retained artifact — a subscription update landing between the read that
+        /// built the rows and the read that counted them is enough — and the disagreeing number
+        /// would be the one recorded. Here there is only ever one observation to report.
         pub(crate) fn client_cache_rows(&self) -> u64 {
-            self.client_cache_rows
-        }
-
-        /// Live subscription handles, recorded as supporting evidence.
-        pub(crate) fn subscription_handles(&self) -> u32 {
-            self.subscription_handles
+            self.observed_owned_rows
+                .checked_add(self.observed_foreign_rows)
+                .expect(
+                    "both counts are cardinalities of one observation the census already accepted, \
+                     so their sum is that observation's own row count and cannot overflow u64",
+                )
         }
     }
 

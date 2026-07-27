@@ -35,9 +35,8 @@ fn a_wrong_payload_fails_the_census() {
     );
     let after = fixture::persist(&directory, ObservedRowSetLabel::AfterSaturatedBatch, rows);
 
-    let error =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 10, 10, 1)
-            .expect_err("a stale payload on an owned key must fail the after-phase census");
+    let error = ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
+        .expect_err("a stale payload on an owned key must fail the after-phase census");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains(&format!("entity_uuid={stale_key}")),

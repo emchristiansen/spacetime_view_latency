@@ -14,22 +14,24 @@ use crate::view_read_set_campaign::composition_validation::validated_composition
 
 use super::fixture;
 
-/// The signature of the composition check, restated so that regaining a caller-selected witness
-/// breaks the build.
+/// The signature of the composition check, restated so that regaining any free input breaks the
+/// build.
 ///
 /// The spec removed the free `witness: OwnedSliceOffset` parameter precisely because a caller could
 /// point it at any of the ten owned keys — nine of which were last written earlier in the batch — and
-/// so claim a finding about the final mutation while evidencing a different one. That absence is a
-/// property of the *signature*, which no runtime assertion can observe: a test can only ever call the
-/// function that exists. Binding it to an explicit function type is the check that can fail, and it
-/// fails at compile time, which is where the guarantee lives.
-const NO_CALLER_SELECTED_WITNESS: fn(
+/// so claim a finding about the final mutation while evidencing a different one. It later removed the
+/// free `delivered_rows`, `client_cache_rows` and `subscription_handles` inputs for the same reason:
+/// nothing in the comparison could contradict them, and two of them cannot bear on composition at
+/// all. What remains is a transition and two retained artifacts — the finding is exactly a function
+/// of what a reader can replay.
+///
+/// Those absences are properties of the *signature*, which no runtime assertion can observe: a test
+/// can only ever call the function that exists. Binding it to an explicit function type is the check
+/// that can fail, and it fails at compile time, which is where the guarantee lives.
+const NO_FREE_CALLER_INPUTS: fn(
     CompositionTransitionExpectation,
     ObservedRowSet,
     ObservedRowSet,
-    u64,
-    u64,
-    u32,
 ) -> Result<ValidatedComposition> = ValidatedComposition::validate;
 
 /// Coverage: the recorded witness is what a reader consults to see that the attempt's *final*
@@ -61,9 +63,8 @@ fn the_witness_names_the_final_saturated_write() {
         fixture::final_rows(RunRole::Arm),
     );
 
-    let validated =
-        NO_CALLER_SELECTED_WITNESS(fixture::transition(RunRole::Arm), before, after, 10, 10, 1)
-            .expect("the Arm's required composition must validate");
+    let validated = NO_FREE_CALLER_INPUTS(fixture::transition(RunRole::Arm), before, after)
+        .expect("the Arm's required composition must validate");
 
     assert_eq!(
         validated.witness_entity_key(),

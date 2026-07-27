@@ -36,9 +36,8 @@ fn a_wrong_owner_fails_the_census() {
         fixture::final_rows(RunRole::Arm),
     );
 
-    let error =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 10, 10, 1)
-            .expect_err("an owned row held by another identity must fail the census");
+    let error = ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
+        .expect_err("an owned row held by another identity must fail the census");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains(&format!("entity_uuid={misowned_key}")),

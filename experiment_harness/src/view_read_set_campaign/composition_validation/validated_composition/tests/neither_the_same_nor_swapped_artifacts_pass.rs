@@ -40,9 +40,6 @@ fn neither_the_same_nor_swapped_artifacts_pass() {
         fixture::transition(RunRole::Arm),
         before.clone(),
         before.clone(),
-        10,
-        10,
-        1,
     )
     .expect_err("one observation cannot be both phases of a transition");
     assert!(
@@ -52,9 +49,8 @@ fn neither_the_same_nor_swapped_artifacts_pass() {
 
     // The two artifacts in the wrong order: each fails the phase it was not taken at, and the
     // before-census is reached first.
-    let swapped =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), after, before, 10, 10, 1)
-            .expect_err("the two observations are not interchangeable");
+    let swapped = ValidatedComposition::validate(fixture::transition(RunRole::Arm), after, before)
+        .expect_err("the two observations are not interchangeable");
     assert!(
         format!("{swapped:#}").contains("before the first measured write"),
         "the swapped pair must fail at the before-phase census, got {swapped:#}"

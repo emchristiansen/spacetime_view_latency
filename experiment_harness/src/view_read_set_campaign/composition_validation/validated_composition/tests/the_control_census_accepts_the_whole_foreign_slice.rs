@@ -28,15 +28,9 @@ fn the_control_census_accepts_the_whole_foreign_slice() {
         fixture::final_rows(RunRole::Control),
     );
 
-    let validated = ValidatedComposition::validate(
-        fixture::transition(RunRole::Control),
-        before,
-        after,
-        1_010,
-        1_010,
-        1,
-    )
-    .expect("the Control's required composition must validate");
+    let validated =
+        ValidatedComposition::validate(fixture::transition(RunRole::Control), before, after)
+            .expect("the Control's required composition must validate");
 
     assert_eq!(
         validated.observed_owned_rows(),
@@ -47,5 +41,11 @@ fn the_control_census_accepts_the_whole_foreign_slice() {
         validated.observed_foreign_rows(),
         fixture::scale().scale(),
         "the direct-table Control must observe the entire seeded foreign slice at this rung"
+    );
+    assert_eq!(
+        validated.client_cache_rows(),
+        validated.observed_owned_rows() + validated.observed_foreign_rows(),
+        "the cache count is the two validated slice counts and nothing else, which at this rung is \
+         the Control's thousand-and-ten-row cache"
     );
 }

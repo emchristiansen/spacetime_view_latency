@@ -32,9 +32,8 @@ fn a_missing_owned_row_fails_the_census() {
     );
     let after = fixture::persist(&directory, ObservedRowSetLabel::AfterSaturatedBatch, rows);
 
-    let error =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 9, 9, 1)
-            .expect_err("an owned slice short of a row must fail the census");
+    let error = ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
+        .expect_err("an owned slice short of a row must fail the census");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains("holds 9 of the measured identity's 10 own rows"),

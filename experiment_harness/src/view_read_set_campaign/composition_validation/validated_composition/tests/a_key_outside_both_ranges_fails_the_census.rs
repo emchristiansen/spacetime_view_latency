@@ -41,9 +41,8 @@ fn a_key_outside_both_ranges_fails_the_census() {
         fixture::final_rows(RunRole::Arm),
     );
 
-    let error =
-        ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after, 11, 11, 1)
-            .expect_err("a row outside both preregistered ranges must fail the census outright");
+    let error = ValidatedComposition::validate(fixture::transition(RunRole::Arm), before, after)
+        .expect_err("a row outside both preregistered ranges must fail the census outright");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains("entity_uuid=500000"),

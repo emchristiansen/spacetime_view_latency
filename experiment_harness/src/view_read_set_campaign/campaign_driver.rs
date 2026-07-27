@@ -18,6 +18,7 @@ use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 use crate::view_read_set_campaign::campaign_sink::CampaignSink;
 use crate::view_read_set_campaign::channel_evidence::ChannelEvidence;
+use crate::view_read_set_campaign::composition_validation::composition_transition_expectation::CompositionTransitionExpectation;
 use crate::view_read_set_campaign::composition_validation::observed_row_set::ObservedRowSet;
 use crate::view_read_set_campaign::composition_validation::validated_composition::ValidatedComposition;
 use crate::view_read_set_campaign::diagnostic_artifact::DiagnosticArtifact;
@@ -91,10 +92,10 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** The pure [`schedule_retry`], the four recording adapters, and [`settle`] are
-/// implemented; every other body in this file is still an explicit `todo!()`. What is fixed for the
-/// rest is the stage decomposition, the typed inputs and outputs of each stage, and the ordering
-/// discipline the stubs describe.
+/// **Phase boundary.** The pure [`schedule_retry`] and [`validate_final_composition`], the four
+/// recording adapters, and [`settle`] are implemented; every other body in this file is still an
+/// explicit `todo!()`. What is fixed for the rest is the stage decomposition, the typed inputs and
+/// outputs of each stage, and the ordering discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -357,22 +358,51 @@ fn measure_channel(
 
 /// **Stage 5 — final composition transition.** Judge the two retained observations against the one
 /// phase-matched expectation derived from this attempt's identity.
+///
+/// A two-call join with no rule of its own. The expectation is minted *here* rather than passed in,
+/// from this attempt's own scale, role, and the two identities, so the transition a finding is
+/// checked against is necessarily the transition this attempt's identity requires. Which mutation
+/// witnesses the batch is not a parameter either: [`ValidatedComposition::validate`] derives it from
+/// the bound after-phase schedule, so a caller cannot claim a finding about the final write while
+/// evidencing an earlier one.
+///
+/// **Why every refusal is one kind and one stage.** A composition refusal means the retained rows do
+/// not hold what this role must observe — the Arm carrying any foreign row is the candidate's answer
+/// about its read set, not an accident of the run — so it is
+/// [`SemanticsOrSecurity`](FailureKind::SemanticsOrSecurity) rather than an operational fault. It is
+/// [`AfterFirstSample`](FailureStage::AfterFirstSample) because the check runs only once the
+/// saturated batch has confirmed, which is necessarily after the first measured sample.
+///
+/// The measured channel prefix is returned on both paths — moved through on success, retained in the
+/// failure on refusal — because a composition refusal does not unmeasure the channels that ran, and
+/// their evidence is what a partial record is made of.
 fn validate_final_composition(
     attempt: AttemptKey,
     measured: MeasuredAttempt,
     owned_owner: Identity,
     foreign_owner: Identity,
 ) -> std::result::Result<(Vec<ChannelEvidence>, ValidatedComposition), MeasuredFailure> {
-    let _ = (attempt, measured, owned_owner, foreign_owner);
-    todo!(
-        "Phase 2: mint CompositionTransitionExpectation::required_final from this attempt's scale, \
-         role, and the two identities, then hand it with both observations to \
-         ValidatedComposition::validate, naming the witness by an OwnedSliceOffset from the \
-         saturated schedule's own walk. A mismatch is FailureKind::SemanticsOrSecurity at \
-         FailureStage::AfterFirstSample — the Arm returning any foreign row is the candidate's \
-         answer, not an accident of the run — and returns the measured channels as the retained \
-         prefix"
-    )
+    let expected = CompositionTransitionExpectation::required_final(
+        attempt.scale(),
+        attempt.role(),
+        owned_owner,
+        foreign_owner,
+    );
+    let MeasuredAttempt {
+        channels,
+        before,
+        after,
+    } = measured;
+
+    match ValidatedComposition::validate(expected, before, after) {
+        Ok(composition) => Ok((channels, composition)),
+        Err(error) => Err(MeasuredFailure {
+            kind: FailureKind::SemanticsOrSecurity,
+            stage: FailureStage::AfterFirstSample,
+            measured: channels,
+            error,
+        }),
+    }
 }
 
 /// **Stage 6a — terminal append.** Append one attempt's single terminal record.
