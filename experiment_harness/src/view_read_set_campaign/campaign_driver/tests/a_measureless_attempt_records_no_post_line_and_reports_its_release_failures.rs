@@ -1,5 +1,5 @@
 //! An attempt that measured nothing writes only its terminal line, and its release failures come
-//! back as the returned diagnostic rather than as an error.
+//! back as the returned unreleased-capabilities value rather than as an error.
 
 use anyhow::anyhow;
 
@@ -16,8 +16,10 @@ use super::fixture;
 /// exists and reconciliation requires none.
 ///
 /// With the ledger healthy, release failures are a *disposition*, not the campaign's error: the
-/// caller records them against every remaining slot. Both are asserted present, because aggregating
-/// is what stops a teardown failure hiding behind a disconnect failure.
+/// caller records them against every remaining slot. Both failures are asserted present, because
+/// aggregating is what stops a teardown failure hiding behind a disconnect failure — and present in
+/// *both* forms the returned value carries, since the retained text and the live error are minted
+/// together precisely so neither can be the one that lost something.
 #[test]
 fn a_measureless_attempt_records_no_post_line_and_reports_its_release_failures() {
     let releasing_the_server = "releasing the server";
@@ -33,7 +35,7 @@ fn a_measureless_attempt_records_no_post_line_and_reports_its_release_failures()
     let (writer, lines) = CapturingWriter::new();
     let mut sink = CampaignSink::from_writer(Box::new(writer));
 
-    let (settled, diagnostic) = settle(&mut sink, Ok(record), None, || {
+    let (settled, unreleased) = settle(&mut sink, Ok(record), None, || {
         vec![
             anyhow!("{releasing_the_server}"),
             anyhow!("{removing_the_data_directory}"),
@@ -47,14 +49,21 @@ fn a_measureless_attempt_records_no_post_line_and_reports_its_release_failures()
         "the record is returned unchanged even when release failed"
     );
 
-    let rendered = format!(
-        "{:?}",
-        diagnostic.expect("release failures become the returned diagnostic")
-    );
-    assert!(
-        rendered.contains(releasing_the_server) && rendered.contains(removing_the_data_directory),
-        "every release failure must survive into the diagnostic: {rendered}"
-    );
+    let unreleased = match unreleased {
+        Some(unreleased) => unreleased,
+        None => panic!("release failures become the returned unreleased-capabilities value"),
+    };
+    for rendered in [
+        format!("{:?}", unreleased.diagnostic),
+        format!("{:#}", unreleased.error),
+    ] {
+        assert!(
+            rendered.contains(releasing_the_server)
+                && rendered.contains(removing_the_data_directory),
+            "every release failure must survive into both the retained text and the live error: \
+             {rendered}"
+        );
+    }
 
     let lines = lines.borrow();
     assert_eq!(

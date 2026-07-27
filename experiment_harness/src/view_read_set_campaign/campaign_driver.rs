@@ -55,6 +55,7 @@ use crate::view_read_set_campaign::measured_target::MeasuredTarget;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
 use crate::view_read_set_campaign::method_validity::MethodValidity;
 use crate::view_read_set_campaign::mutation_schedule::MutationSchedule;
+use crate::view_read_set_campaign::not_run_reason::NotRunReason;
 use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
 use crate::view_read_set_campaign::passed_environment_gate::PassedEnvironmentGate;
 use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
@@ -270,11 +271,12 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** Every stage of one attempt is implemented, up to and including
-/// [`run_attempt`], which composes them into a total ownership state machine. What remains is the
-/// orchestration *above* an attempt: this entrypoint, [`run_campaign`], and [`run_inventory`], each
-/// still an explicit `todo!()`. What is fixed for those is the stage decomposition, the typed inputs
-/// and outputs of each stage, and the ordering discipline the stubs describe.
+/// **Phase boundary.** Every stage of one attempt is implemented, and so is the walk over the frozen
+/// inventory that runs them. What remains is the campaign's opening and closing: this entrypoint,
+/// which creates and finalizes the ledger, and [`run_campaign`], which writes the inventory line
+/// inside the region this one finalizes. Both are still an explicit `todo!()`, and what is fixed for
+/// them is the stage decomposition, the typed inputs and outputs, and the ordering discipline the
+/// stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -339,10 +341,16 @@ fn record_inventory(
 /// happened yet. So this walks originals, and a retry is an extra attempt run alongside the slot
 /// that earned it — never a slot this loop was going to reach anyway.
 ///
-/// Copies the Pilot's two stop conditions, which differ because the ledger's own health differs: a
-/// **persist failure** poisons the sink so no truthful record about it could be appended, and
-/// propagates; a **release failure** leaves the ledger healthy, so every untouched remaining slot is
-/// recorded [`NotRun`](super::attempt_outcome::AttemptOutcome::NotRun) before stopping.
+/// **Two stop conditions, and they differ by what the ledger can still truthfully say.** A
+/// **release failure** leaves the ledger healthy and the failing attempt's own record durable, so
+/// every strictly later original is recorded
+/// [`NotRun`](super::attempt_outcome::AttemptOutcome::NotRun) before stopping. **Everything else
+/// [`run_attempt`] reports as `Err`** propagates immediately, carrying only this attempt's position
+/// and tag and writing no `NotRun` line: a poisoned sink would refuse those lines anyway, and where
+/// it would not — a failed post-attempt observation, a structural seal refusal —
+/// [`NotRunReason`] has exactly one variant and it names a release failure that did not happen.
+/// Writing it would be a lie, and the frozen inventory already on disk is what makes the missing
+/// tail detectable without one.
 fn run_inventory(
     sink: &mut CampaignSink,
     inventory: &AttemptInventory,
@@ -350,18 +358,112 @@ fn run_inventory(
     module_wasm: &Path,
     artifacts: &Path,
 ) -> Result<()> {
-    let _ = (sink, inventory, listen, module_wasm, artifacts);
-    todo!(
-        "Phase 2: walk AttemptInventory::attempts in the frozen order, running each through \
-         run_attempt; ask schedule_retry for each returned terminal record and, when it yields a \
-         retry identity, run that attempt immediately after its original so a slot's two attempts \
-         stay adjacent. On an unreleased-capability diagnostic, record NotRun with \
-         NotRunReason::PriorAttemptReleaseFailed for every strictly later *frozen* identity and \
-         stop loudly. A retry that was scheduled but never launched receives nothing: it is not a \
-         predeclared slot, so it simply never becomes an identity, and reconciliation permits at \
-         most one retry per slot without ever requiring one merely because the original was \
-         eligible"
-    )
+    let attempts = inventory.attempts();
+    for (position, original) in attempts.iter().enumerate() {
+        // Both executions below belong to *this* position, so either one stopping leaves the same
+        // slots unexecuted: the original already holds its terminal record, and a retry is never a
+        // frozen inventory position of its own.
+        let untouched = &attempts[position + 1..];
+
+        let (record, unreleased) =
+            attempted(sink, listen, module_wasm, artifacts, *original, position)?;
+        if let Some(unreleased) = unreleased {
+            return stop_unreleased(sink, untouched, unreleased, *original);
+        }
+
+        // Only a cleanly released attempt earns its retry, and only an original is ever asked:
+        // [`AttemptKey::next_retry`] is one-way, so a retry of a retry is unrepresentable rather
+        // than merely refused.
+        let Some(retry) = schedule_retry(&record) else {
+            continue;
+        };
+        let (_, unreleased) = attempted(sink, listen, module_wasm, artifacts, retry, position)?;
+        if let Some(unreleased) = unreleased {
+            return stop_unreleased(sink, untouched, unreleased, retry);
+        }
+    }
+    Ok(())
+}
+
+/// Run one attempt, naming which predeclared position it belongs to on the way out.
+///
+/// A retry has no position of its own, so it is filed under the original's — the slot it reopened.
+fn attempted(
+    sink: &mut CampaignSink,
+    listen: ListenAddress,
+    module_wasm: &Path,
+    artifacts: &Path,
+    attempt: AttemptKey,
+    position: usize,
+) -> Result<(TerminalAttemptRecord, Option<UnreleasedCapabilities>)> {
+    run_attempt(sink, listen, module_wasm, artifacts, attempt).with_context(|| {
+        format!(
+            "running attempt {} at inventory position {position}",
+            attempt.canonical_tag()
+        )
+    })
+}
+
+/// Record every slot this campaign will now not reach, then stop.
+///
+/// **Every path returns `Err`**, and on every path the release cause survives: it is the only
+/// account of why this campaign stopped.
+///
+/// The paths differ in which failure leads and in what may be claimed. Fan-out persisted: the
+/// release cause is the failure and the stop is its context. Fan-out failed: the ledger's refusal
+/// leads, being the fact that makes the rest of this accounting untrue, and the message drops the
+/// claim that the remaining slots were recorded, because they were not.
+fn stop_unreleased(
+    sink: &mut CampaignSink,
+    untouched: &[AttemptKey],
+    unreleased: UnreleasedCapabilities,
+    attempt: AttemptKey,
+) -> Result<()> {
+    let UnreleasedCapabilities { diagnostic, error } = unreleased;
+    match record_not_run(sink, untouched, &diagnostic) {
+        Ok(()) => Err(error.context(format!(
+            "attempt {} could not establish that every capability it acquired was released; the \
+             remaining {} predeclared attempts were recorded NotRun rather than measured in an \
+             environment whose isolation is no longer proven",
+            attempt.canonical_tag(),
+            untouched.len(),
+        ))),
+        Err(persist) => Err(into_error(vec![
+            persist.context(format!(
+                "recording the {} predeclared attempts skipped after {} could not prove its \
+                 release",
+                untouched.len(),
+                attempt.canonical_tag()
+            )),
+            error,
+        ])),
+    }
+}
+
+/// Append one terminal [`NotRun`](AttemptOutcome::NotRun) record for each of `skipped`, in order.
+///
+/// The diagnostic is cloned into every outcome rather than referenced by the failing attempt's
+/// identity, so each skipped slot reads on its own.
+///
+/// `skipped` is the caller's slice of strictly later originals and nothing here re-derives it: the
+/// attempt that failed already has its own terminal record, and one identity may never have two.
+fn record_not_run(
+    sink: &mut CampaignSink,
+    skipped: &[AttemptKey],
+    diagnostic: &DiagnosticArtifact,
+) -> Result<()> {
+    for attempt in skipped {
+        let record = TerminalAttemptRecord::sealed(
+            *attempt,
+            AttemptOutcome::NotRun {
+                reason: NotRunReason::PriorAttemptReleaseFailed {
+                    diagnostic: diagnostic.clone(),
+                },
+            },
+        )?;
+        record_terminal(sink, &record)?;
+    }
+    Ok(())
 }
 
 /// Execute one attempt — a frozen logical slot's original, or a retry identity derived from one:
@@ -370,8 +472,8 @@ fn run_inventory(
 /// **`Ok` is every disposition an attempt can honestly reach**, however badly it went: a refused or
 /// unreadable preflight, a provisioning, connection, seeding, measurement, or composition failure,
 /// and completion. Those are durable outcomes, and the returned [`TerminalAttemptRecord`] is the one
-/// actually appended; the [`DiagnosticArtifact`] is present only when the attempt's capabilities were
-/// not released cleanly.
+/// actually appended; the [`UnreleasedCapabilities`] is present only when the attempt's capabilities
+/// were not released cleanly.
 ///
 /// **`Err` means the attempt could not be truthfully settled or durably recorded** — never that it
 /// went badly. A ledger persist failure is the common case; so are a post-attempt observation that
@@ -391,7 +493,7 @@ fn run_attempt(
     module_wasm: &Path,
     artifacts: &Path,
     attempt: AttemptKey,
-) -> Result<(TerminalAttemptRecord, Option<DiagnosticArtifact>)> {
+) -> Result<(TerminalAttemptRecord, Option<UnreleasedCapabilities>)> {
     // The prospective gate, and the clearance it earns, acquire nothing. A gate that could not be
     // read has no verdict to derive: it is durably `PreflightUnreadable`, retryable, and never the
     // campaign's error.
@@ -685,6 +787,20 @@ fn failed_record(
             diagnostic,
         },
     )
+}
+
+/// What one attempt failed to release, in the two forms its two readers need: retained text for a
+/// skipped slot's
+/// [`PriorAttemptReleaseFailed`](super::not_run_reason::NotRunReason::PriorAttemptReleaseFailed),
+/// since a ledger holds renderings, and the live [`Error`] for the campaign's own failure, since
+/// [`into_error`] is how a primary failure keeps a cause behind it and a rendering cannot be
+/// aggregated behind anything.
+///
+/// Both minted from one aggregated error, so neither can be the one that lost something.
+#[derive(Debug)]
+struct UnreleasedCapabilities {
+    diagnostic: DiagnosticArtifact,
+    error: Error,
 }
 
 /// One row of an attempt's deterministic seeding: its primary key, and which identity owns it.
@@ -1799,7 +1915,7 @@ fn settle(
     record: Result<TerminalAttemptRecord>,
     post_attempt: Option<Result<EnvironmentSample>>,
     release: impl FnOnce() -> Vec<Error>,
-) -> Result<(TerminalAttemptRecord, Option<DiagnosticArtifact>)> {
+) -> Result<(TerminalAttemptRecord, Option<UnreleasedCapabilities>)> {
     let settled = match record {
         Err(primary) => Err(primary),
         Ok(record) => match record_terminal(sink, &record) {
@@ -1826,18 +1942,21 @@ fn settle(
     }
 }
 
-/// The diagnostic for a set of release failures, or `None` when every capability was provably
-/// released.
+/// Aggregate a set of release failures into an [`UnreleasedCapabilities`], or `None` when every
+/// capability was provably released.
 ///
 /// The Pilot's helper, copied rather than shared: it belongs to that campaign's driver, and the two
 /// drivers are deliberately separate modules. Aggregating rather than reporting only the first keeps
 /// a teardown failure from hiding behind a disconnect failure.
-fn release_failure(release: Vec<Error>) -> Option<DiagnosticArtifact> {
+fn release_failure(release: Vec<Error>) -> Option<UnreleasedCapabilities> {
     if release.is_empty() {
-        None
-    } else {
-        Some(DiagnosticArtifact::of_error(&into_error(release)))
+        return None;
     }
+    let error = into_error(release);
+    Some(UnreleasedCapabilities {
+        diagnostic: DiagnosticArtifact::of_error(&error),
+        error,
+    })
 }
 
 // A child of this module, which is what lets it reach the private `schedule_retry`. Unlike the

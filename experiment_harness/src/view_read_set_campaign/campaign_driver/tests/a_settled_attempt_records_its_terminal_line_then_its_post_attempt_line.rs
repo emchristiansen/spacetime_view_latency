@@ -45,7 +45,7 @@ fn a_settled_attempt_records_its_terminal_line_then_its_post_attempt_line() {
     let mut sink = CampaignSink::from_writer(Box::new(writer));
 
     let at_release = Rc::clone(&lines);
-    let (settled, diagnostic) = settle(&mut sink, Ok(record), Some(Ok(sample)), || {
+    let (settled, unreleased) = settle(&mut sink, Ok(record), Some(Ok(sample)), || {
         assert_eq!(
             at_release.borrow().len(),
             expected_lines.len(),
@@ -56,8 +56,8 @@ fn a_settled_attempt_records_its_terminal_line_then_its_post_attempt_line() {
     .expect("a written ledger and a clean release settle successfully");
 
     assert!(
-        diagnostic.is_none(),
-        "a release that failed at nothing yields no diagnostic"
+        unreleased.is_none(),
+        "a release that failed at nothing leaves nothing unreleased to report"
     );
     assert_eq!(
         serde_json::to_value(&settled).expect("a terminal record serializes"),

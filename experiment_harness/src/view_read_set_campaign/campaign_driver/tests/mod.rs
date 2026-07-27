@@ -21,6 +21,12 @@
 //! routing over live capabilities — gate, provisioning, connection, measurement, release — with no
 //! seam that would not weaken the sealed types it composes.
 //!
+//! `run_inventory` is the same shape and its two factors are extracted the same way: the `NotRun`
+//! fan-out, which decides which slots a stopped campaign accounts for, and the stop itself, which
+//! decides which failure leads. Both need only the injected writer. What is left — that the walk
+//! follows the frozen order, and that a scheduled retry runs immediately after its original — needs
+//! a live `run_attempt` and is covered by inspection.
+//!
 //! The measurement stage is live and mostly untestable from here: `measure_attempt` and
 //! `measure_channel` take a connected client, subscribe, reconnect, and issue writes against a real
 //! server. What can be proved without one was extracted rather than faked — `failure_stage` is
@@ -36,8 +42,7 @@
 //! standalone and a real publish, and its provenance is mintable only from those live capabilities.
 //! Its acquisition order and four release edges are covered by inspection instead.
 //!
-//! Four executable bodies remain `todo!()`: the pilot entrypoint, `run_campaign`, `run_inventory`
-//! and `run_attempt`.
+//! Two executable bodies remain `todo!()`: the pilot entrypoint and `run_campaign`.
 
 mod capturing_writer;
 mod composition_fixture;
@@ -59,4 +64,6 @@ mod each_recording_adapter_appends_its_own_record;
 mod every_primary_failure_leads_while_release_still_runs;
 mod memory_pressure_reads_full_avg60_and_not_some;
 mod swap_out_reads_the_cumulative_pswpout_counter;
+mod the_release_cause_survives_whether_or_not_the_fan_out_persists;
 mod the_seed_plan_fills_both_slices_at_both_ladder_extremes;
+mod the_skipped_slots_are_every_later_original_and_no_other;
