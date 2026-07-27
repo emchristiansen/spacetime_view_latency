@@ -1,5 +1,5 @@
-//! Shared fixture: one attempt identity at either ordinal, and the terminal outcomes retry
-//! scheduling reads.
+//! Shared fixture: one attempt identity at either ordinal, the terminal outcomes retry scheduling
+//! reads, and one payload of each kind the recording adapters append.
 //!
 //! Every value comes from a real constructor. Nothing fabricates evidence: the failed outcome
 //! carries genuinely empty [`PartialEvidence`], and the preflight rejection carries a gate that
@@ -14,11 +14,13 @@
 //! one tree's convenience change would silently move the other's inputs.
 
 use crate::plan::run_role::RunRole;
+use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
 use crate::view_read_set_campaign::attempt_outcome::AttemptOutcome;
 use crate::view_read_set_campaign::campaign_params::{
     ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES, ENVIRONMENT_SAMPLE_SEPARATION_NANOS,
 };
+use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::candidate_id::CandidateId;
 use crate::view_read_set_campaign::candidate_version::ENTITY_OWNER_SENDER_VIEW_VERSION;
 use crate::view_read_set_campaign::diagnostic_artifact::DiagnosticArtifact;
@@ -30,6 +32,7 @@ use crate::view_read_set_campaign::failure_kind::FailureKind;
 use crate::view_read_set_campaign::failure_stage::FailureStage;
 use crate::view_read_set_campaign::not_run_reason::NotRunReason;
 use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
+use crate::view_read_set_campaign::passed_environment_gate::PassedEnvironmentGate;
 use crate::view_read_set_campaign::pilot_block_index::PilotBlockIndex;
 use crate::view_read_set_campaign::retry_ordinal::RetryOrdinal;
 use crate::view_read_set_campaign::scale_point::ScalePoint;
@@ -109,6 +112,45 @@ pub(super) fn application_failure() -> AttemptOutcome {
             .expect("an empty channel prefix with no composition finding is partial evidence"),
         diagnostic: diagnostic(),
     }
+}
+
+/// The frozen sixty-slot order the campaign's opening line records.
+pub(super) fn inventory() -> AttemptInventory {
+    AttemptInventory::frozen().expect("the frozen campaign inventory has sixty distinct slots")
+}
+
+/// The campaign-constant pins the opening line records alongside the inventory.
+pub(super) fn campaign_provenance() -> CampaignProvenance {
+    CampaignProvenance::resolved().expect("the frozen version and release-commit pins parse")
+}
+
+/// A clearance that really passes: the same readings as [`preflight_rejected`]'s except that the
+/// second sample's load falls, which is the one clause that refusal turns on.
+pub(super) fn passed_gate() -> PassedEnvironmentGate {
+    let first = EnvironmentSample::observed(0, 100, ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES, 0, 0);
+    let second = EnvironmentSample::observed(
+        ENVIRONMENT_SAMPLE_SEPARATION_NANOS,
+        50,
+        ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES,
+        0,
+        0,
+    );
+    let evidence = EnvironmentGateEvidence::paired(first, second, 4)
+        .expect("the two readings are the frozen separation apart on a host reporting four CPUs");
+
+    PassedEnvironmentGate::cleared(evidence)
+        .expect("a load that falls well under four CPUs passes every clause of the gate")
+}
+
+/// The host reading taken immediately after a measured attempt.
+pub(super) fn post_attempt_sample() -> EnvironmentSample {
+    EnvironmentSample::observed(
+        ENVIRONMENT_SAMPLE_SEPARATION_NANOS,
+        50,
+        ENVIRONMENT_MIN_AVAILABLE_RAM_BYTES,
+        0,
+        0,
+    )
 }
 
 /// A predeclared attempt that never executed, because a preceding attempt's release failed.

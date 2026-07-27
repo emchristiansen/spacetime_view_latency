@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use spacetimedb_sdk::Identity;
 
 use crate::client::connected_client::ConnectedClient;
@@ -14,6 +14,7 @@ use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
 use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
+use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 use crate::view_read_set_campaign::campaign_sink::CampaignSink;
 use crate::view_read_set_campaign::channel_evidence::ChannelEvidence;
 use crate::view_read_set_campaign::composition_validation::observed_row_set::ObservedRowSet;
@@ -89,10 +90,10 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** Every body in this file is still an explicit `todo!()` except
-/// [`schedule_retry`], which is pure and depends on nothing this file has yet to build. What is
-/// fixed for the rest is the stage decomposition, the typed inputs and outputs of each stage, and
-/// the ordering discipline the stubs describe.
+/// **Phase boundary.** The pure [`schedule_retry`] and the four recording adapters are implemented;
+/// every other body in this file is still an explicit `todo!()`. What is fixed for the rest is the
+/// stage decomposition, the typed inputs and outputs of each stage, and the ordering discipline the
+/// stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -132,17 +133,21 @@ fn run_campaign(
 /// This is what makes "report generation fails on missing or duplicate planned identities"
 /// checkable: the order the evidence will be interpreted against is on disk before any evidence
 /// exists, so a reader can name every predeclared slot even if the run dies before reaching it.
+///
+/// Both payloads are cloned into the owned record — the cost of a record vocabulary that is also
+/// reconciliation's input — so the caller keeps the inventory it is about to walk. That this line
+/// comes first is [`run_campaign`]'s doing, not this adapter's.
 fn record_inventory(
     sink: &mut CampaignSink,
     inventory: &AttemptInventory,
     provenance: &CampaignProvenance,
 ) -> Result<()> {
-    let _ = (sink, inventory, provenance);
-    todo!(
-        "Phase 2: append CampaignRecord::Inventory. The record is owned, so the inventory and \
-         provenance are cloned into it rather than borrowed — the cost of a record vocabulary that \
-         is also reconciliation's input"
-    )
+    sink.append(CampaignRecord::Inventory {
+        inventory: inventory.clone(),
+        provenance: provenance.clone(),
+    })
+    .context("recording the campaign inventory")
+    .map(|_seq| ())
 }
 
 /// Execute every frozen logical slot in order, appending exactly one terminal record per attempt
@@ -274,8 +279,9 @@ fn record_preflight_cleared(
     attempt: AttemptKey,
     gate: PassedEnvironmentGate,
 ) -> Result<()> {
-    let _ = (sink, attempt, gate);
-    todo!("Phase 2: append CampaignRecord::PreflightCleared for this attempt")
+    sink.append(CampaignRecord::PreflightCleared { attempt, gate })
+        .context("recording the preflight clearance")
+        .map(|_seq| ())
 }
 
 /// **Stage 3 — provision, publish, and append provenance.** Acquire one attempt's fresh isolated
@@ -373,13 +379,15 @@ fn validate_final_composition(
 /// Borrows rather than consumes: [`settle`] returns the same record to its caller, which needs it
 /// for [`schedule_retry`], so consuming here would force that caller to rebuild an identical record
 /// — a second construction that could differ from the one actually on disk.
+///
+/// The assigned sequence is not read back, here or in any of the other three appends: the ledger is
+/// append-only and nothing in this driver addresses a record by position.
 fn record_terminal(sink: &mut CampaignSink, record: &TerminalAttemptRecord) -> Result<()> {
-    let _ = (sink, record);
-    todo!(
-        "Phase 2: clone this record into an owned CampaignRecord::Terminal and append it. The \
-         assigned sequence is not read back: the ledger is append-only and nothing in this driver \
-         addresses a record by position"
-    )
+    sink.append(CampaignRecord::Terminal {
+        record: record.clone(),
+    })
+    .context("recording the attempt terminal outcome")
+    .map(|_seq| ())
 }
 
 /// **Stage 6b — post-attempt append.** Append the host reading taken immediately after a measured
@@ -388,13 +396,19 @@ fn record_terminal(sink: &mut CampaignSink, record: &TerminalAttemptRecord) -> R
 /// Supporting diagnostics only. It never invalidates evidence, no retry criterion may reference it,
 /// and reconciliation requires exactly one for every measured attempt and none for any other — so
 /// omitting it for a Complete or `AfterFirst` outcome is a rejection, not a tidy ledger.
+///
+/// Reconciliation requires this line at exactly the terminal line's next sequence. That adjacency is
+/// [`settle`]'s doing — it calls [`record_terminal`] and then this with nothing between, on a sink
+/// whose counter advances exactly once per successful append — and cannot be checked from inside a
+/// single append.
 fn record_post_attempt(
     sink: &mut CampaignSink,
     attempt: AttemptKey,
     sample: EnvironmentSample,
 ) -> Result<()> {
-    let _ = (sink, attempt, sample);
-    todo!("Phase 2: append CampaignRecord::PostAttemptEnvironment for this attempt")
+    sink.append(CampaignRecord::PostAttemptEnvironment { attempt, sample })
+        .context("recording the post-attempt environment")
+        .map(|_seq| ())
 }
 
 /// **Stage 7 — retry scheduling.** The identity of the one permitted retry of this record's logical
