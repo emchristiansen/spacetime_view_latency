@@ -10,10 +10,10 @@ use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Identity, Table};
 
 use crate::dataset::seed_op::SeedOp;
-use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
+use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
     update_entity_owner, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
@@ -95,6 +95,7 @@ pub(crate) struct ConnectedClient {
     conn: DbConnection,
     handle: JoinHandle<()>,
     measured_identity: Identity,
+    database_name: String,
 }
 
 impl ConnectedClient {
@@ -129,12 +130,25 @@ impl ConnectedClient {
             conn,
             handle,
             measured_identity,
+            database_name: database_identity.to_string(),
         })
     }
 
     /// The server-issued measured identity captured at connect time.
     pub(crate) fn measured_identity(&self) -> Identity {
         self.measured_identity
+    }
+
+    /// The database name this connection was opened with — the exact string handed to
+    /// `with_database_name` above.
+    ///
+    /// Retained because the SDK uses that string verbatim as the `db` label on the per-database
+    /// metrics its websocket loop maintains, so this is the only value that names *this*
+    /// connection's series. Anything that meters the connection takes the label from here rather
+    /// than accepting one: a wrong label does not fail, it silently selects an untouched series that
+    /// reads zero at both ends of any window.
+    pub(crate) fn database_name(&self) -> &str {
+        &self.database_name
     }
 
     /// Apply every seeding write in order, blocking on each reducer's confirmed completion
@@ -342,9 +356,7 @@ impl ConnectedClient {
                     record,
                     measured_callback(index, start, measured_tx),
                 )
-                .map_err(|e| {
-                    anyhow!("issuing measured entity_owner write index {index}: {e:?}")
-                })?;
+                .map_err(|e| anyhow!("issuing measured entity_owner write index {index}: {e:?}"))?;
         }
 
         // Anchor the one whole-batch deadline now that issuing is done, matching the historical

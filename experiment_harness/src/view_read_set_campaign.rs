@@ -69,6 +69,7 @@ pub(crate) mod saturated_write_timing;
 pub(crate) mod scale_point;
 pub(crate) mod scale_point_evidence;
 pub(crate) mod stage_repetition;
+pub(crate) mod subscriber_delivery;
 pub(crate) mod superseded_scope;
 pub(crate) mod supersession_justification;
 pub(crate) mod terminal_attempt_record;

@@ -603,6 +603,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "prometheus",
  "semver",
  "serde",
  "serde_json",

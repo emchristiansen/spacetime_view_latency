@@ -5,6 +5,10 @@ members = ["module", "roundtrip_latency_test", "experiment_module", "experiment_
 [workspace.dependencies]
 spacetimedb = "=2.7.0"
 spacetimedb-sdk = "=2.7.0"
+# Pinned to the exact version the SDK already resolves transitively, and depended on for one
+# reason: `prometheus::core::Metric` is the only public door to `HistogramCore::proto`, whose
+# shard flip and drain is the sole coherent read of a histogram's sample count and byte sum.
+prometheus = "=0.14.0"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 semver = { version = "1", features = ["serde"] }
