@@ -26,8 +26,12 @@
 //! `preflight_gate` composes those with a sixty-second wait, so it has no pure factor of its own; the
 //! decision it produces is proved beside `EnvironmentGateEvidence`.
 //!
-//! Every remaining stage is still an explicit `todo!()`: provisioning needs a live pinned server and
-//! a published module, and the four remaining orchestration stages compose all of those.
+//! `provision_and_record` has no test here: every edge needs a real distribution, a spawned
+//! standalone and a real publish, and its provenance is mintable only from those live capabilities.
+//! Its acquisition order and four release edges are covered by inspection instead.
+//!
+//! Four executable bodies remain `todo!()`: the pilot entrypoint, `run_campaign`, `run_inventory`
+//! and `run_attempt`.
 
 mod capturing_writer;
 mod composition_fixture;

@@ -14,13 +14,18 @@ use crate::client::measured_step_failure::MeasuredStepFailure;
 use crate::client::reconnect_failure::ReconnectFailure;
 use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::verified_module_artifact::VerifiedModuleArtifact;
+use crate::manifest::wasm_sha256::WasmSha256;
 use crate::module_artifact::bindings::SubscriptionHandle;
+use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
 use crate::observation::output_path::OutputPath;
 use crate::provision::run_resources::RunResources;
+use crate::provision::running_pinned_server::RunningPinnedServer;
+use crate::provision::staged_module_wasm::StagedModuleWasm;
 use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
+use crate::view_read_set_campaign::attempt_provenance::AttemptProvenance;
 use crate::view_read_set_campaign::campaign_params::ENVIRONMENT_SAMPLE_SEPARATION_NANOS;
 use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::campaign_record::CampaignRecord;
@@ -221,6 +226,11 @@ enum Provisioning {
     FailedBeforePublish {
         kind: FailureKind,
         diagnostic: DiagnosticArtifact,
+        /// Any failure of that release, kept beside the attempt's own cause because the two travel
+        /// elsewhere: the cause becomes this attempt's terminal record, while a release failure is
+        /// campaign-terminal and reaches every later slot as
+        /// [`NotRunReason::PriorAttemptReleaseFailed`](super::not_run_reason::NotRunReason).
+        release: Option<DiagnosticArtifact>,
     },
 }
 
@@ -238,12 +248,11 @@ enum Provisioning {
 ///
 /// **Phase boundary.** The pure [`schedule_retry`] and [`validate_final_composition`], the four
 /// recording adapters, [`settle`], the measurement stage — [`measure_attempt`] and
-/// [`measure_channel`] — and both environment stages, [`preflight_gate`] and
-/// [`observe_environment`], are implemented; every other body in this file is still an explicit
-/// `todo!()`. What remains is orchestration and provisioning: this entrypoint, [`run_campaign`],
-/// [`run_inventory`], [`run_attempt`], and [`provision_and_record`]. What is fixed for those is the
-/// stage decomposition, the typed inputs and outputs of each stage, and the ordering discipline the
-/// stubs describe.
+/// [`measure_channel`] — both environment stages, [`preflight_gate`] and [`observe_environment`],
+/// and [`provision_and_record`] are implemented; every other body in this file is still an explicit
+/// `todo!()`. What remains is orchestration alone: this entrypoint, [`run_campaign`],
+/// [`run_inventory`], and [`run_attempt`]. What is fixed for those is the stage decomposition, the
+/// typed inputs and outputs of each stage, and the ordering discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -739,6 +748,14 @@ fn record_preflight_cleared(
 /// The provenance line is appended *after* publish succeeds and *before* any connection, so no
 /// evidence can exist that is not already joinable to its runtime and its freshly published
 /// database.
+///
+/// **Every failure edge releases here**, so the caller holds nothing it did not receive. Releasing
+/// before the terminal record strands no evidence on those edges, since none published or measured;
+/// the append failure releases too, because a poisoned sink can record nothing and `Err` has no field
+/// to carry the resources back.
+///
+/// No `?` appears once anything is acquired: each capability asserts in `Drop` that it was handed to
+/// its consuming release, so an early return past a live one panics.
 fn provision_and_record(
     sink: &mut CampaignSink,
     distribution: &VerifiedDistribution,
@@ -746,16 +763,77 @@ fn provision_and_record(
     module_wasm: &Path,
     attempt: AttemptKey,
 ) -> Result<Provisioning> {
-    let _ = (sink, distribution, listen, module_wasm, attempt);
-    todo!(
-        "Phase 2: stage the module with StagedModuleWasm::load against MODULE_WASM_SHA256, start \
-         the pinned standalone with RunningPinnedServer::start, and publish. Release whatever was \
-         acquired before returning Provisioning::FailedBeforePublish, since the caller holds \
-         nothing on that path. On success bundle RunResources::new, snapshot \
-         AttemptProvenance::observed, and append CampaignRecord::Provisioned; a persist failure \
-         there is the ledger poison this function's Err is reserved for, and the caller must \
-         release the live resources"
-    )
+    // Depth 0 — nothing acquired, and a failed load acquires nothing.
+    let staged = match StagedModuleWasm::load(module_wasm, WasmSha256::new(MODULE_WASM_SHA256)) {
+        Ok(staged) => staged,
+        Err(error) => return Ok(failed_before_publish(&error, Vec::new())),
+    };
+
+    // Depth 1 — `staged` is live; `start` reaps its own child and data directory on failure.
+    let server = match RunningPinnedServer::start(distribution, listen) {
+        Ok(server) => server,
+        Err(error) => {
+            let mut release = Vec::new();
+            if let Err(e) = staged.cleanup() {
+                release.push(e);
+            }
+            return Ok(failed_before_publish(&error, release));
+        }
+    };
+
+    // Depth 2 — both live, since `publish` borrows. Released in `RunResources::teardown`'s order,
+    // each attempted even if the other fails.
+    let artifact = match server.publish(distribution, &staged) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            let mut release = Vec::new();
+            if let Err(e) = server.shutdown() {
+                release.push(e);
+            }
+            if let Err(e) = staged.cleanup() {
+                release.push(e);
+            }
+            return Ok(failed_before_publish(&error, release));
+        }
+    };
+
+    // Depth 3 — bundled. The snapshot goes through the bundle because `RunResources` consumes the
+    // server `AttemptProvenance::observed` borrows.
+    let resources = RunResources::new(server, staged);
+    let provenance = AttemptProvenance::observed(distribution, resources.server(), &artifact);
+
+    match sink
+        .append(CampaignRecord::Provisioned {
+            attempt,
+            provenance,
+        })
+        .context("recording the attempt's provisioned instance")
+        .map(|_seq| ())
+    {
+        Ok(()) => Ok(Provisioning::Provisioned {
+            resources,
+            artifact,
+        }),
+        Err(persist) => {
+            let mut errors = vec![persist];
+            if let Err(e) = resources.teardown() {
+                errors.push(e);
+            }
+            Err(into_error(errors))
+        }
+    }
+}
+
+/// Classify one pre-publish failure and the release that followed it.
+///
+/// Every edge above is the same kind, since [`InfrastructurePhase::Provision`] covers staging,
+/// starting and publishing. The caller supplies the matching [`FailureStage::BeforePublish`].
+fn failed_before_publish(error: &Error, release: Vec<Error>) -> Provisioning {
+    Provisioning::FailedBeforePublish {
+        kind: FailureKind::Infrastructure(InfrastructurePhase::Provision),
+        diagnostic: DiagnosticArtifact::of_error(error),
+        release: (!release.is_empty()).then(|| DiagnosticArtifact::of_error(&into_error(release))),
+    }
 }
 
 /// **Stage 4 — measurement.** Run all four channels in the frozen execution order, capturing the
