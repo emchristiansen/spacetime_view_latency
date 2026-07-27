@@ -37,7 +37,9 @@ use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecor
 /// A refusal is *not* a line here: it is already the terminal record's
 /// [`PreflightRejected`](super::attempt_outcome::AttemptOutcome::PreflightRejected) outcome, and
 /// recording the same derived verdict twice would allow two copies to disagree. So the gate reaches
-/// the ledger as a clearance on this line or as a refusal in the terminal record, never both.
+/// the ledger as a clearance on this line or as a refusal in the terminal record, never both — and
+/// as neither when its readings could not be taken at all, which is
+/// [`PreflightUnreadable`](super::attempt_outcome::AttemptOutcome::PreflightUnreadable).
 ///
 /// Every attempt-bearing variant carries the full [`AttemptKey`], so lines join to each other by
 /// identity rather than by position — except [`Self::Terminal`], which carries a

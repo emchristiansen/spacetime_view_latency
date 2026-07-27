@@ -30,4 +30,18 @@ impl MeasuredStepFailure {
             Self::Infrastructure(error) | Self::Application(error) | Self::Timeout(error) => error,
         }
     }
+
+    /// Add `context` to the cause, keeping the classification.
+    ///
+    /// The reason this exists rather than callers using [`anyhow::Context`]: that trait's methods
+    /// are reached through `Result` and yield an `Error`, so adding the entity a write names would
+    /// discard exactly the distinction this type carries. Every variant is mapped in turn, so a new
+    /// one cannot be silently reclassified here.
+    pub(crate) fn context<C: std::fmt::Display + Send + Sync + 'static>(self, context: C) -> Self {
+        match self {
+            Self::Infrastructure(error) => Self::Infrastructure(error.context(context)),
+            Self::Application(error) => Self::Application(error.context(context)),
+            Self::Timeout(error) => Self::Timeout(error.context(context)),
+        }
+    }
 }

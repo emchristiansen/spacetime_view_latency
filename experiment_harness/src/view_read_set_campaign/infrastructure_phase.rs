@@ -21,6 +21,10 @@ pub(crate) enum InfrastructurePhase {
     Provision,
     /// Connecting the measured subscriber.
     Connect,
+    /// Applying the attempt's deterministic seeding writes, before any measured channel opens. Its
+    /// own phase because a seeding write is neither provisioning — the server is already published
+    /// and connected — nor a measured sample.
+    Seeding,
     /// Subscribing, or awaiting the applied snapshot.
     Subscription,
     /// Issuing a measured write, or sealing a channel's batch.

@@ -127,6 +127,23 @@ pub(super) fn eligible_retry() -> AttemptKey {
     key(RunRole::Control, RetryOrdinal::RETRY)
 }
 
+/// A predeclared slot distinct from [`failed_slot`] and [`eligible_slot`], for the outcome classes
+/// neither of those two carries.
+///
+/// Found in the frozen inventory rather than minted from fresh coordinates, so it is predeclared by
+/// construction and cannot drift out of the ladder as the other two could.
+pub(super) fn spare_slot() -> AttemptKey {
+    let spare = inventory()
+        .attempts()
+        .iter()
+        .copied()
+        .find(|attempt| *attempt != failed_slot() && *attempt != eligible_slot());
+    match spare {
+        Some(spare) => spare,
+        None => panic!("a sixty-slot inventory has slots beyond the fixture's two named ones"),
+    }
+}
+
 /// The retry identity of [`failed_slot`], whose original the retry rule refuses to reopen.
 pub(super) fn ineligible_retry() -> AttemptKey {
     key(RunRole::Arm, RetryOrdinal::RETRY)
@@ -232,6 +249,18 @@ pub(super) fn campaign_omitting(omitted: Option<AttemptKey>) -> Ledger {
     ledger
 }
 
+/// The same campaign with [`spare_slot`]'s original terminating on a preflight that could not be
+/// read.
+///
+/// That slot's lines move to the end of the ledger, which reconciliation permits: cross-identity
+/// execution order is the driver's schedule, not something the accounting re-derives.
+pub(super) fn campaign_with_unreadable_preflight() -> Ledger {
+    let unreadable = spare_slot();
+    let mut ledger = campaign_omitting(Some(unreadable));
+    ledger.append_attempt(unreadable, preflight_unreadable());
+    ledger
+}
+
 /// Rebuild `lines` with sequences reassigned contiguously from zero, preserving stream order.
 ///
 /// For the tests that add or remove a line and want the *removal* to be what reconciliation
@@ -256,7 +285,9 @@ pub(super) fn terminal(attempt: AttemptKey, outcome: AttemptOutcome) -> Terminal
 fn launched(outcome: &AttemptOutcome) -> bool {
     match outcome {
         AttemptOutcome::Complete { .. } | AttemptOutcome::Failed { .. } => true,
-        AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => false,
+        AttemptOutcome::PreflightRejected { .. }
+        | AttemptOutcome::PreflightUnreadable { .. }
+        | AttemptOutcome::NotRun { .. } => false,
     }
 }
 
@@ -309,6 +340,16 @@ pub(super) fn preflight_rejected() -> AttemptOutcome {
     AttemptOutcome::PreflightRejected {
         gate: FailedEnvironmentGate::refused(gate_evidence(100))
             .expect("a load that does not fall between the two samples fails the gate"),
+        diagnostic: diagnostic(),
+    }
+}
+
+/// An attempt whose prospective preflight could not be read, so no gate verdict exists.
+///
+/// Requires no auxiliary line of any kind: a clearance is minted only from a passing gate, and this
+/// attempt neither launched, published, nor measured.
+pub(super) fn preflight_unreadable() -> AttemptOutcome {
+    AttemptOutcome::PreflightUnreadable {
         diagnostic: diagnostic(),
     }
 }

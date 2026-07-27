@@ -10,10 +10,10 @@ use crate::view_read_set_campaign::retry_ordinal::RetryOrdinal;
 use super::fixture;
 
 /// Coverage: the protocol permits at most one retry per logical slot, so an attempt that is *itself*
-/// the retry has no successor however it terminated. Both eligible classifications are checked at
-/// [`RetryOrdinal::RETRY`] — the preflight rejection and the early infrastructure failure — because
-/// the cap is global, and a cap written as a clause inside one arm would pass a test that only
-/// exercised that arm.
+/// the retry has no successor however it terminated. Every eligible classification is checked at
+/// [`RetryOrdinal::RETRY`] — both preflight dispositions and the early infrastructure failure —
+/// because the cap is global, and a cap written as a clause inside one arm would pass a test that
+/// only exercised that arm.
 ///
 /// Each outcome is judged at both ordinals in turn, from the same value, so the ordinal is provably
 /// the only difference between the two verdicts. That is what distinguishes the cap from the
@@ -26,8 +26,9 @@ use super::fixture;
 /// host, which is the unbounded rescheduling the single-retry cap exists to prevent.
 #[test]
 fn a_slot_that_already_had_its_retry_is_never_retried_again() {
-    let eligible_outcomes: [(&str, fn() -> AttemptOutcome); 2] = [
+    let eligible_outcomes: [(&str, fn() -> AttemptOutcome); 3] = [
         ("a refused preflight gate", fixture::preflight_rejected),
+        ("an unreadable preflight", fixture::preflight_unreadable),
         ("an infrastructure failure before the first sample", || {
             fixture::failed(
                 FailureKind::Infrastructure(InfrastructurePhase::Connect),

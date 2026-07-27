@@ -57,6 +57,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Wait budget for one confirmed seeding reducer round trip. Generous relative to a single
 /// fsync-confirmed insert; seeding is not the measured operation.
 const REDUCER_TIMEOUT: Duration = Duration::from_secs(60);
+/// Context for a wait on a reducer completion that produced no callback at all, added to whichever
+/// [`mpsc::RecvTimeoutError`] ended it. Named once because the two ends classify differently and
+/// must still read as the same wait.
+const AWAITING_REDUCER: &str = "waiting for confirmed reducer completion";
 /// Wait budget for the initial subscription snapshot to be applied.
 const SUBSCRIPTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Total wait budget for one measured dose batch (phase B) to be fully confirmed, mirroring Anton's
@@ -87,6 +91,24 @@ type ReducerOutcome = std::result::Result<std::result::Result<(), String>, Inter
 /// the generated `_then` methods' `impl FnOnce(…) + Send + 'static` bound, so the
 /// channel-signalling callback can be built once and passed uniformly for every reducer.
 type BoxedReducerCallback = Box<dyn FnOnce(&ReducerEventContext, ReducerOutcome) + Send + 'static>;
+
+/// One awaited reducer's completion, delivered from the SDK callback thread to the awaiting harness
+/// thread over an [`mpsc`] channel.
+///
+/// The two failures travel apart rather than pre-flattened to one string, because the callback is
+/// the only place they can be told apart at all, and the campaign's seeding step must record which
+/// happened. Neither is a transport fault: the module refused the write, or the SDK failed to run it
+/// on this connection's behalf. Each carries the cause's own text unprefixed, so the wording a
+/// caller reads is composed in one place.
+enum ReducerCompletion {
+    /// The reducer ran and returned successfully.
+    Confirmed,
+    /// The reducer returned an error — the module's own message.
+    ReducerFailed(String),
+    /// The SDK reported an internal error for this call — its `Debug` rendering, captured in the
+    /// callback because [`InternalError`] cannot be carried further.
+    Internal(String),
+}
 
 /// One callback outcome from the Chronicle **prerequisite** batch (phase A), delivered from the SDK
 /// callback thread to the prerequisite barrier over an [`mpsc`] channel. It carries no timing — a
@@ -410,20 +432,44 @@ impl ConnectedClient {
     }
 
     /// Seed one `entity_owner` row via its confirmed insertion reducer — the `EntityOwnerSenderView`
-    /// candidate's seeding primitive. Built directly on [`Self::await_reducer`], the same generic
-    /// primitive [`Self::seed`] uses, so no new [`SeedOp`] variant is needed for this candidate.
+    /// candidate's seeding primitive. No new [`SeedOp`] variant is needed for this candidate.
+    ///
+    /// The unclassified wrapper over [`Self::insert_entity_owner_classified`], for the Pilot and the
+    /// smoke test, whose seeding is not part of a campaign attempt. It returns that method's own
+    /// cause, context included, so its `Err` is unchanged.
     pub(crate) fn insert_entity_owner(
         &self,
         entity_uuid: u64,
         owner: Identity,
         record: String,
     ) -> Result<()> {
-        self.await_reducer(|cb| {
+        self.insert_entity_owner_classified(entity_uuid, owner, record)
+            .map_err(MeasuredStepFailure::into_error)
+    }
+
+    /// Seed one `entity_owner` row, keeping the classified cause — the campaign's seeding primitive.
+    ///
+    /// Identical write and identical context to [`Self::insert_entity_owner`]; the difference is
+    /// only that the cause survives. The campaign seeds inside an attempt it must classify, and a
+    /// module refusal recorded as an infrastructure failure would be retried against a server that
+    /// answered correctly.
+    ///
+    /// The context is built in the `map_err` closure, so a successful seed — every seed on the
+    /// healthy path, thousands per attempt — formats nothing.
+    pub(crate) fn insert_entity_owner_classified(
+        &self,
+        entity_uuid: u64,
+        owner: Identity,
+        record: String,
+    ) -> std::result::Result<(), MeasuredStepFailure> {
+        self.await_reducer_classified(|cb| {
             self.conn
                 .reducers
                 .insert_entity_owner_then(entity_uuid, owner, record, cb)
         })
-        .with_context(|| format!("seeding entity_owner entity_uuid={entity_uuid}"))
+        .map_err(|failure| {
+            failure.context(format!("seeding entity_owner entity_uuid={entity_uuid}"))
+        })
     }
 
     /// Apply one confirmed fixed-cardinality `entity_owner` update — the fresh-server campaign's
@@ -1008,24 +1054,81 @@ impl ConnectedClient {
 
     /// Issue one reducer via `issue` and block until its confirmed completion callback fires,
     /// translating a reducer-returned error or an internal error into a failure.
+    ///
+    /// The unclassified wrapper over [`Self::await_reducer_classified`], for callers outside any
+    /// measured window — the historical Pilot and Smoke seeding paths, which have no channel to
+    /// classify for. The error it returns is the classified one's cause, so their text is the same.
     fn await_reducer(
         &self,
         issue: impl FnOnce(BoxedReducerCallback) -> spacetimedb_sdk::Result<()>,
     ) -> Result<()> {
-        let (done_tx, done_rx) = mpsc::channel::<std::result::Result<(), String>>();
+        self.await_reducer_classified(issue)
+            .map_err(MeasuredStepFailure::into_error)
+    }
+
+    /// Issue one reducer via `issue` and block until its completion callback fires, keeping the
+    /// classified cause.
+    ///
+    /// Only the code that issued the reducer and owned the deadline can tell these apart, which is
+    /// why the classification is made here rather than recovered from message text downstream:
+    /// issuing failed on the transport, so [`MeasuredStepFailure::Infrastructure`]; the callback
+    /// reported either failure, so [`MeasuredStepFailure::Application`]; the wait elapsed, so
+    /// [`MeasuredStepFailure::Timeout`]; the sender was dropped without a callback, so
+    /// `Infrastructure` again.
+    fn await_reducer_classified(
+        &self,
+        issue: impl FnOnce(BoxedReducerCallback) -> spacetimedb_sdk::Result<()>,
+    ) -> std::result::Result<(), MeasuredStepFailure> {
+        let (done_tx, done_rx) = mpsc::channel::<ReducerCompletion>();
         let callback: BoxedReducerCallback = Box::new(move |_ctx, outcome| {
-            let flattened = match outcome {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(msg)) => Err(format!("reducer returned an error: {msg}")),
-                Err(internal) => Err(format!("internal error awaiting reducer: {internal:?}")),
+            let completion = match outcome {
+                Ok(Ok(())) => ReducerCompletion::Confirmed,
+                Ok(Err(msg)) => ReducerCompletion::ReducerFailed(msg),
+                Err(internal) => ReducerCompletion::Internal(format!("{internal:?}")),
             };
-            deliver(&done_tx, flattened);
+            deliver(&done_tx, completion);
         });
-        issue(callback).map_err(|e| anyhow!("issuing reducer: {e:?}"))?;
-        done_rx
-            .recv_timeout(REDUCER_TIMEOUT)
-            .context("waiting for confirmed reducer completion")?
-            .map_err(|msg| anyhow!("{msg}"))
+        issue(callback)
+            .map_err(|e| MeasuredStepFailure::Infrastructure(anyhow!("issuing reducer: {e:?}")))?;
+        await_reducer_completion(done_rx)
+    }
+}
+
+/// The awaited-reducer barrier: block for one completion and classify what arrived.
+///
+/// Factored out of [`ConnectedClient::await_reducer_classified`] so it depends on nothing but the
+/// channel — no live server, which is what makes both application classifications provable.
+///
+/// Both callback failures are the application's answer, matching every other channel in this file:
+/// [`collect_saturated_batch`] and [`await_visible_update`] classify a `Failed` message the same way
+/// whichever of the two produced it. Only the wait itself is an elapsed bound, and only a sender
+/// dropped without ever running the callback is infrastructure — the two `recv_timeout` errors that
+/// a single classification would conflate.
+fn await_reducer_completion(
+    rx: mpsc::Receiver<ReducerCompletion>,
+) -> std::result::Result<(), MeasuredStepFailure> {
+    let completion = match rx.recv_timeout(REDUCER_TIMEOUT) {
+        Ok(completion) => completion,
+        Err(waiting @ mpsc::RecvTimeoutError::Timeout) => {
+            return Err(MeasuredStepFailure::Timeout(
+                Error::new(waiting).context(AWAITING_REDUCER),
+            ))
+        }
+        Err(waiting @ mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(MeasuredStepFailure::Infrastructure(
+                Error::new(waiting).context(AWAITING_REDUCER),
+            ))
+        }
+    };
+
+    match completion {
+        ReducerCompletion::Confirmed => Ok(()),
+        ReducerCompletion::ReducerFailed(msg) => Err(MeasuredStepFailure::Application(anyhow!(
+            "reducer returned an error: {msg}"
+        ))),
+        ReducerCompletion::Internal(msg) => Err(MeasuredStepFailure::Application(anyhow!(
+            "internal error awaiting reducer: {msg}"
+        ))),
     }
 }
 

@@ -5,5 +5,6 @@ mod a_slot_that_already_had_its_retry_is_never_retried_again;
 mod an_attempt_that_never_ran_has_nothing_to_retry;
 mod an_infrastructure_failure_after_the_first_sample_is_ineligible;
 mod an_infrastructure_failure_before_the_first_sample_is_eligible;
+mod an_unreadable_preflight_is_eligible;
 mod fixture;
 mod the_preflight_rejection_is_eligible;

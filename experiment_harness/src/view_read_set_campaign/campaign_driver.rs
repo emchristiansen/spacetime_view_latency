@@ -18,6 +18,7 @@ use crate::manifest::wasm_sha256::WasmSha256;
 use crate::module_artifact::bindings::SubscriptionHandle;
 use crate::module_artifact::module_wasm_sha256::MODULE_WASM_SHA256;
 use crate::observation::output_path::OutputPath;
+use crate::params::EXPERIMENT_ISSUER;
 use crate::provision::run_resources::RunResources;
 use crate::provision::running_pinned_server::RunningPinnedServer;
 use crate::provision::staged_module_wasm::StagedModuleWasm;
@@ -25,8 +26,12 @@ use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
+use crate::view_read_set_campaign::attempt_outcome::AttemptOutcome;
 use crate::view_read_set_campaign::attempt_provenance::AttemptProvenance;
-use crate::view_read_set_campaign::campaign_params::ENVIRONMENT_SAMPLE_SEPARATION_NANOS;
+use crate::view_read_set_campaign::campaign_params::{
+    ENVIRONMENT_SAMPLE_SEPARATION_NANOS, GLOBAL_IDENTITY_SUBJECT, GLOBAL_KEY_BASE, OWNED_KEY_BASE,
+    SEEDED_ROW_PAYLOAD, SUBSCRIBER_VISIBLE_ROWS_BASELINE,
+};
 use crate::view_read_set_campaign::campaign_provenance::CampaignProvenance;
 use crate::view_read_set_campaign::campaign_record::CampaignRecord;
 use crate::view_read_set_campaign::campaign_sink::CampaignSink;
@@ -39,16 +44,22 @@ use crate::view_read_set_campaign::composition_validation::validated_composition
 use crate::view_read_set_campaign::diagnostic_artifact::DiagnosticArtifact;
 use crate::view_read_set_campaign::environment_gate_evidence::EnvironmentGateEvidence;
 use crate::view_read_set_campaign::environment_sample::EnvironmentSample;
+use crate::view_read_set_campaign::evidence_artifact::EvidenceArtifact;
+use crate::view_read_set_campaign::experiment_axis::ExperimentAxis;
+use crate::view_read_set_campaign::failed_environment_gate::FailedEnvironmentGate;
 use crate::view_read_set_campaign::failure_kind::FailureKind;
 use crate::view_read_set_campaign::failure_stage::FailureStage;
 use crate::view_read_set_campaign::infrastructure_phase::InfrastructurePhase;
 use crate::view_read_set_campaign::measured_sample_boundary::MeasuredSampleBoundary;
 use crate::view_read_set_campaign::measured_target::MeasuredTarget;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
+use crate::view_read_set_campaign::method_validity::MethodValidity;
 use crate::view_read_set_campaign::mutation_schedule::MutationSchedule;
+use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
 use crate::view_read_set_campaign::passed_environment_gate::PassedEnvironmentGate;
 use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
-use crate::view_read_set_campaign::scale_point_evidence::CHANNEL_COUNT;
+use crate::view_read_set_campaign::scale_point::ScalePoint;
+use crate::view_read_set_campaign::scale_point_evidence::{ScalePointEvidence, CHANNEL_COUNT};
 use crate::view_read_set_campaign::subscriber_delivery::delivery_counters::DeliveryCounters;
 use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_evidence::SubscriberDeliveryEvidence;
 use crate::view_read_set_campaign::subscriber_delivery::subscriber_delivery_meter::SubscriberDeliveryMeter;
@@ -96,6 +107,13 @@ const DECIMAL_POINT: char = '.';
 const CENTI_FRACTION_DIGITS: usize = 2;
 const CENTI_PER_UNIT: u64 = 100;
 
+/// The monotonic offset recorded on the post-attempt reading.
+///
+/// Zero because that sample is its own origin: unlike the gate's pair, it stands alone, so there is
+/// no earlier reading for an offset to be measured from. Reusing the gate's origin would relate a
+/// diagnostic sample to a prospective decision it has nothing to do with.
+const POST_ATTEMPT_SAMPLE_OFFSET_NANOS: u64 = 0;
+
 /// A classified failure inside one attempt's measured window, carrying everything the terminal
 /// record needs.
 ///
@@ -127,7 +145,7 @@ struct MeasuredAttempt {
 ///
 /// Returned outside the measurement's `Result` so the obligation arrives as a value to destructure
 /// rather than something to remember behind a `?`. That makes the ownership explicit; release-always
-/// itself belongs to [`run_attempt`], still a `todo!()`, where the contract is written.
+/// itself belongs to [`run_attempt`], which honours all three states in [`released`].
 ///
 /// All three states are reachable. The window normally ends connected; the reconnect is the
 /// exception, releasing the old connection before initiating the new one, so a failed reconnect can
@@ -226,11 +244,17 @@ enum Provisioning {
     FailedBeforePublish {
         kind: FailureKind,
         diagnostic: DiagnosticArtifact,
-        /// Any failure of that release, kept beside the attempt's own cause because the two travel
+        /// Every failure of that release, kept beside the attempt's own cause because the two travel
         /// elsewhere: the cause becomes this attempt's terminal record, while a release failure is
         /// campaign-terminal and reaches every later slot as
         /// [`NotRunReason::PriorAttemptReleaseFailed`](super::not_run_reason::NotRunReason).
-        release: Option<DiagnosticArtifact>,
+        ///
+        /// Errors rather than a [`DiagnosticArtifact`], and empty rather than optional, because the
+        /// caller hands them straight to [`settle`] as that path's release. Rendering them here
+        /// would force the caller to re-attach them *after* `settle` returns — which is unreachable
+        /// on the path that needs them most, a failed terminal append, whose own error must lead
+        /// with these aggregated behind it.
+        release_errors: Vec<Error>,
     },
 }
 
@@ -246,13 +270,11 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** The pure [`schedule_retry`] and [`validate_final_composition`], the four
-/// recording adapters, [`settle`], the measurement stage — [`measure_attempt`] and
-/// [`measure_channel`] — both environment stages, [`preflight_gate`] and [`observe_environment`],
-/// and [`provision_and_record`] are implemented; every other body in this file is still an explicit
-/// `todo!()`. What remains is orchestration alone: this entrypoint, [`run_campaign`],
-/// [`run_inventory`], and [`run_attempt`]. What is fixed for those is the stage decomposition, the
-/// typed inputs and outputs of each stage, and the ordering discipline the stubs describe.
+/// **Phase boundary.** Every stage of one attempt is implemented, up to and including
+/// [`run_attempt`], which composes them into a total ownership state machine. What remains is the
+/// orchestration *above* an attempt: this entrypoint, [`run_campaign`], and [`run_inventory`], each
+/// still an explicit `todo!()`. What is fixed for those is the stage decomposition, the typed inputs
+/// and outputs of each stage, and the ordering discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -345,22 +367,24 @@ fn run_inventory(
 /// Execute one attempt — a frozen logical slot's original, or a retry identity derived from one:
 /// gate it, provision it, measure it, and settle it.
 ///
-/// `Err` is reserved for a ledger persist failure, following the Pilot's convention; the returned
-/// [`TerminalAttemptRecord`] is the disposition actually appended, and the
-/// [`DiagnosticArtifact`] is present only when the attempt's capabilities were not released cleanly.
+/// **`Ok` is every disposition an attempt can honestly reach**, however badly it went: a refused or
+/// unreadable preflight, a provisioning, connection, seeding, measurement, or composition failure,
+/// and completion. Those are durable outcomes, and the returned [`TerminalAttemptRecord`] is the one
+/// actually appended; the [`DiagnosticArtifact`] is present only when the attempt's capabilities were
+/// not released cleanly.
 ///
-/// **The release contract this stage owes [`measure_attempt`].** That stage hands back a
-/// [`MeasuredRelease`] outside its `Result`. Bind the pair with a plain `let`, then honour all three
-/// states inside [`settle`]'s closure, so every release happens after the terminal record is
-/// durable:
+/// **`Err` means the attempt could not be truthfully settled or durably recorded** — never that it
+/// went badly. A ledger persist failure is the common case; so are a post-attempt observation that
+/// failed, leaving the ledger permanently short of a line reconciliation requires, and a structural
+/// refusal from inside the harness itself: gate verdicts that disagree, or an evidence or terminal
+/// seal that refuses the record built for it. Each stops the campaign with that error leading and
+/// every release failure aggregated behind it.
 ///
-/// - [`Connected`](MeasuredRelease::Connected) — disconnect it. `disconnect` consumes, so once, not
-///   twice.
-/// - [`Released`](MeasuredRelease::Released) — nothing; the resources teardown still runs.
-/// - [`ReleasedWithError`](MeasuredRelease::ReleasedWithError) — push the carried error onto the
-///   release errors, reaching the usual `PriorAttemptReleaseFailed` path.
-///
-/// Until this body exists that is a contract for its implementor, not a compiler-enforced property.
+/// **No `?` once anything is acquired.** Every exit below routes through [`settle`], which writes the
+/// terminal record before running that path's release, so the disposition is durable while the
+/// capabilities that produced it are still owned. The [`MeasuredRelease`] the measured window hands
+/// back outside its `Result` is bound with a plain `let` and honoured in that closure, by
+/// [`released`].
 fn run_attempt(
     sink: &mut CampaignSink,
     listen: ListenAddress,
@@ -368,46 +392,366 @@ fn run_attempt(
     artifacts: &Path,
     attempt: AttemptKey,
 ) -> Result<(TerminalAttemptRecord, Option<DiagnosticArtifact>)> {
-    let _ = (sink, listen, module_wasm, artifacts, attempt);
-    todo!(
-        "Phase 2, in this order, which is itself the contract:
+    // The prospective gate, and the clearance it earns, acquire nothing. A gate that could not be
+    // read has no verdict to derive: it is durably `PreflightUnreadable`, retryable, and never the
+    // campaign's error.
+    let evidence = match preflight_gate() {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            let outcome = AttemptOutcome::PreflightUnreadable {
+                diagnostic: DiagnosticArtifact::of_error(&error),
+            };
+            return settle(
+                sink,
+                TerminalAttemptRecord::sealed(attempt, outcome),
+                None,
+                Vec::new,
+            );
+        }
+    };
 
-         1. preflight_gate, since it is prospective and ends before launch. On \
-         FailedEnvironmentGate::refused, settle immediately with AttemptOutcome::PreflightRejected \
-         — nothing acquired, no clearance appended, and no post-attempt reading, because nothing \
-         was measured.
+    // Both verdicts are derived from one `passes` call, so exactly one is `Some`. Asking for both
+    // and matching the pair keeps that a case the compiler makes us state rather than an assertion.
+    let cleared = match (
+        PassedEnvironmentGate::cleared(evidence),
+        FailedEnvironmentGate::refused(evidence),
+    ) {
+        (Some(cleared), None) => cleared,
+        (None, Some(gate)) => {
+            let outcome = AttemptOutcome::PreflightRejected {
+                gate,
+                diagnostic: DiagnosticArtifact::of_error(&anyhow!(
+                    "the prospective environment gate refused to launch this attempt; the readings \
+                     it refused on travel with the refusal"
+                )),
+            };
+            return settle(
+                sink,
+                TerminalAttemptRecord::sealed(attempt, outcome),
+                None,
+                Vec::new,
+            );
+        }
+        // Two verdicts, or none, from one mechanical gate is a contradiction in the gate types
+        // themselves — not a disposition this attempt could honestly be recorded under.
+        (Some(_), Some(_)) | (None, None) => {
+            return settle(
+                sink,
+                Err(anyhow!(
+                    "the preflight readings were both cleared and refused, or neither; the two \
+                     verdicts are complements of one gate computation and cannot disagree"
+                )),
+                None,
+                Vec::new,
+            )
+        }
+    };
 
-         2. On a passing gate, record_preflight_cleared *before any provisioning or launch*, so the \
-         ledger shows the clearance preceding the instance it cleared. A persist failure here stops \
-         the attempt before launch, having acquired nothing.
+    // Before any provisioning or launch, so the ledger shows the clearance preceding the instance it
+    // cleared.
+    if let Err(persist) = record_preflight_cleared(sink, attempt, cleared) {
+        return settle(sink, Err(persist), None, Vec::new);
+    }
 
-         3. provision_and_record; on Provisioning::FailedBeforePublish settle with \
-         AttemptOutcome::Failed at FailureStage::BeforePublish.
+    let distribution = match VerifiedDistribution::resolve() {
+        Ok(distribution) => distribution,
+        Err(error) => {
+            return settle(
+                sink,
+                failed_record(
+                    attempt,
+                    FailureKind::Infrastructure(InfrastructurePhase::Provision),
+                    FailureStage::BeforePublish,
+                    Vec::new(),
+                    DiagnosticArtifact::of_error(&error),
+                ),
+                None,
+                Vec::new,
+            )
+        }
+    };
 
-         4. With the instance live, connect the measured subscriber and seed the owned and global \
-         slices, then hand the client to measure_attempt, which owns it for the whole measured \
-         window. Do *not* subscribe here: measure_attempt registers the delivery callbacks and \
-         issues the cold subscription itself, because E3 must be the first subscription this \
-         connection ever makes and its meter must already be open. Bind its (release, result) pair \
-         with a plain `let`, then validate_final_composition; on success seal ScalePointEvidence \
-         with the returned delivery evidence and build EvidenceArtifact::for_attempt.
+    let provisioning = match provision_and_record(sink, &distribution, listen, module_wasm, attempt)
+    {
+        Ok(provisioning) => provisioning,
+        Err(persist) => return settle(sink, Err(persist), None, Vec::new),
+    };
+    let (resources, artifact) = match provisioning {
+        Provisioning::Provisioned {
+            resources,
+            artifact,
+        } => (resources, artifact),
+        Provisioning::FailedBeforePublish {
+            kind,
+            diagnostic,
+            release_errors,
+        } => {
+            let record = failed_record(
+                attempt,
+                kind,
+                FailureStage::BeforePublish,
+                Vec::new(),
+                diagnostic,
+            );
+            // That stage released whatever it had acquired, so its errors *are* this path's
+            // release: handing them to `settle` puts them on the one channel that survives both
+            // outcomes — rendered as the release diagnostic when the ledger is healthy, aggregated
+            // behind the persist error when it is not.
+            return settle(sink, record, None, move || release_errors);
+        }
+    };
 
-         5. The moment the measured window ends — success or failure — call observe_environment \
-         immediately, before building the terminal record, before persisting anything, and before \
-         releasing any capability, so neither ledger latency nor teardown load can perturb the \
-         reading the spec asks for 'immediately after'. Capture it for every measured attempt \
-         (Complete, and Failed at MeasuredSampleBoundary::AfterFirst) and for no other, then carry \
-         it into settle, which appends its line after the Terminal line.
+    // `resources` is live from here on.
+    let database_identity = artifact.database_identity().canonical_hex();
+    let server_url = resources.server().listen().client_url();
 
-         6. If that observation itself fails, the measured outcome does not change. A post-attempt \
-         reading is supporting diagnostics that never invalidates evidence, so a Complete stays \
-         Complete and a Failed keeps its own kind and stage: rewriting either would let a \
-         retrospective diagnostic decide a measured disposition, which the contract forbids. Carry \
-         the error into settle as Some(Err(_)) rather than converting it into an outcome.
+    let client = match ConnectedClient::connect(&server_url, &database_identity) {
+        Ok(client) => client,
+        Err(error) => {
+            let record = failed_record(
+                attempt,
+                FailureKind::Infrastructure(InfrastructurePhase::Connect),
+                FailureStage::AfterPublishBeforeFirstSample,
+                Vec::new(),
+                DiagnosticArtifact::of_error(&error.context("connecting the measured subscriber")),
+            );
+            // Every `connect` failure is clientless, so nothing is outstanding to disconnect.
+            return settle(sink, record, None, move || {
+                released(MeasuredRelease::Released, resources)
+            });
+        }
+    };
 
-         Every exit routes through settle, so the disposition is durable while the capabilities \
-         that produced it are still owned"
+    // Captured before the measured window consumes the client. The composition expectation is
+    // derived from these two identities, so reading the measured one afterwards would need a client
+    // this attempt no longer owns.
+    let owned_owner = client.measured_identity();
+    let foreign_owner = Identity::from_claims(EXPERIMENT_ISSUER, GLOBAL_IDENTITY_SUBJECT);
+
+    // Both seeding failures are staged the same way: published and connected, with no channel yet
+    // open, so nothing has been measured.
+    let plan = match seed_plan(attempt.scale(), owned_owner, foreign_owner) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let record = failed_record(
+                attempt,
+                FailureKind::Infrastructure(InfrastructurePhase::Seeding),
+                FailureStage::AfterPublishBeforeFirstSample,
+                Vec::new(),
+                DiagnosticArtifact::of_error(&error),
+            );
+            return settle(sink, record, None, move || {
+                released(MeasuredRelease::Connected(client), resources)
+            });
+        }
+    };
+
+    if let Err(failure) = seed_attempt(&client, &plan) {
+        let (kind, error) = classified(failure, InfrastructurePhase::Seeding);
+        let record = failed_record(
+            attempt,
+            kind,
+            FailureStage::AfterPublishBeforeFirstSample,
+            Vec::new(),
+            DiagnosticArtifact::of_error(&error),
+        );
+        return settle(sink, record, None, move || {
+            released(MeasuredRelease::Connected(client), resources)
+        });
+    }
+
+    // The measured window owns the client for its whole duration and hands back which client, if
+    // any, survived it. It registers the delivery callbacks and issues the cold subscription itself,
+    // so nothing here may subscribe first.
+    let (release, measured) = measure_attempt(client, attempt, artifacts);
+    // Immediately: before validation, before the terminal record, before any persist, and before any
+    // release, so neither ledger latency nor teardown load is inside the reading.
+    let post_attempt = post_attempt_reading(&measured);
+
+    let record = match measured {
+        Ok((measured, delivery)) => {
+            match validate_final_composition(attempt, measured, owned_owner, foreign_owner) {
+                Ok((channels, composition)) => {
+                    complete_record(attempt, channels, composition, delivery)
+                }
+                Err(failure) => failed_record(
+                    attempt,
+                    failure.kind,
+                    failure.stage,
+                    failure.measured,
+                    DiagnosticArtifact::of_error(&failure.error),
+                ),
+            }
+        }
+        Err(failure) => failed_record(
+            attempt,
+            failure.kind,
+            failure.stage,
+            failure.measured,
+            DiagnosticArtifact::of_error(&failure.error),
+        ),
+    };
+
+    settle(sink, record, post_attempt, move || {
+        released(release, resources)
+    })
+}
+
+/// The reading required immediately after a measured window, or `None` when the attempt measured
+/// nothing.
+///
+/// Taken for exactly the attempts reconciliation requires a line for: a window that closed — whether
+/// it becomes `Complete` or a composition refusal, both measured — and a failure staged after the
+/// first measured sample. Read from the measured result rather than the terminal outcome, because it
+/// must be taken before that outcome is built.
+///
+/// A failed reading is returned as `Some(Err(_))` for [`settle`] to lead with, never folded into the
+/// disposition: a retrospective diagnostic may not decide a measured outcome.
+fn post_attempt_reading(
+    measured: &std::result::Result<(MeasuredAttempt, SubscriberDeliveryEvidence), MeasuredFailure>,
+) -> Option<Result<EnvironmentSample>> {
+    let required = match measured {
+        Ok(_) => true,
+        Err(failure) => {
+            failure.stage.measured_sample_boundary() == MeasuredSampleBoundary::AfterFirst
+        }
+    };
+    required.then(|| observe_environment(POST_ATTEMPT_SAMPLE_OFFSET_NANOS))
+}
+
+/// Release one attempt's capabilities: the client first, if one is still outstanding, then the
+/// server and staged module.
+///
+/// Client before resources, because a connection outliving the server it is connected to would be
+/// reported as an abnormal disconnect that the teardown order caused. Both always run, and every
+/// failure is collected rather than short-circuited.
+fn released(release: MeasuredRelease, resources: RunResources) -> Vec<Error> {
+    let mut errors = Vec::new();
+    match release {
+        MeasuredRelease::Connected(client) => {
+            if let Err(e) = client.disconnect() {
+                errors.push(e.context("disconnecting the measured subscriber"));
+            }
+        }
+        MeasuredRelease::Released => {}
+        MeasuredRelease::ReleasedWithError(error) => errors.push(error),
+    }
+    if let Err(e) = resources.teardown() {
+        errors.push(e);
+    }
+    errors
+}
+
+/// Seal a complete attempt's terminal record.
+///
+/// Fallible rather than panicking: [`run_attempt`] holds live capabilities at every call, so a seal
+/// that refuses must reach [`settle`] as the primary error and let the release still run.
+fn complete_record(
+    attempt: AttemptKey,
+    channels: Vec<ChannelEvidence>,
+    composition: ValidatedComposition,
+    delivery: SubscriberDeliveryEvidence,
+) -> Result<TerminalAttemptRecord> {
+    let evidence = ScalePointEvidence::sealed(attempt.scale(), channels, composition, delivery)?;
+    let artifact = EvidenceArtifact::for_attempt(attempt, evidence)?;
+    TerminalAttemptRecord::sealed(
+        attempt,
+        AttemptOutcome::Complete {
+            artifact,
+            validity: MethodValidity::Valid,
+        },
     )
+}
+
+/// Seal a failed attempt's terminal record, retaining whatever channels had completed.
+///
+/// No composition finding is retained, because this driver's order leaves none to retain: every path
+/// here either refused composition or never reached it, a *passing* validation being followed only by
+/// sealing. Fallible for the same reason as [`complete_record`].
+fn failed_record(
+    attempt: AttemptKey,
+    kind: FailureKind,
+    stage: FailureStage,
+    channels: Vec<ChannelEvidence>,
+    diagnostic: DiagnosticArtifact,
+) -> Result<TerminalAttemptRecord> {
+    let partial = PartialEvidence::sealed(attempt.scale(), channels, None)?;
+    TerminalAttemptRecord::sealed(
+        attempt,
+        AttemptOutcome::Failed {
+            kind,
+            stage,
+            partial,
+            diagnostic,
+        },
+    )
+}
+
+/// One row of an attempt's deterministic seeding: its primary key, and which identity owns it.
+struct SeedRow {
+    entity_uuid: u64,
+    owner: Identity,
+}
+
+/// Every row one attempt seeds before its measured window opens, in key order.
+///
+/// Derived from the frozen constants rather than from the composition expectation those constants
+/// also feed: a plan taken from the expectation could not disagree with it, so a wrong seeding would
+/// be unfalsifiable instead of being caught by composition validation. The axis is matched because it
+/// decides which slice the swept quantity sizes.
+///
+/// Fallible rather than asserted, because it reads [`ScalePoint::scale`]: the compile-time proof in
+/// [`campaign_params`](super::campaign_params) covers the frozen ladder alone, and a later one
+/// breaking it must reach the caller — which holds live capabilities — as a value, not a panic.
+fn seed_plan(
+    scale: ScalePoint,
+    owned_owner: Identity,
+    foreign_owner: Identity,
+) -> Result<Vec<SeedRow>> {
+    let (owned_rows, foreign_rows) = match scale.axis() {
+        ExperimentAxis::UnrelatedGlobalRows => (SUBSCRIBER_VISIBLE_ROWS_BASELINE, scale.scale()),
+    };
+    let owned_end = OWNED_KEY_BASE.checked_add(owned_rows).with_context(|| {
+        format!("an owned slice of {owned_rows} rows from key {OWNED_KEY_BASE} overflows u64")
+    })?;
+    let foreign_end = GLOBAL_KEY_BASE.checked_add(foreign_rows).with_context(|| {
+        format!("a foreign slice of {foreign_rows} rows from key {GLOBAL_KEY_BASE} overflows u64")
+    })?;
+    ensure!(
+        owned_end <= GLOBAL_KEY_BASE,
+        "the owned slice reaches key {owned_end}, at or past the foreign slice's base \
+         {GLOBAL_KEY_BASE}; the two seeded ranges must stay disjoint",
+    );
+
+    Ok((OWNED_KEY_BASE..owned_end)
+        .map(|entity_uuid| SeedRow {
+            entity_uuid,
+            owner: owned_owner,
+        })
+        .chain((GLOBAL_KEY_BASE..foreign_end).map(|entity_uuid| SeedRow {
+            entity_uuid,
+            owner: foreign_owner,
+        }))
+        .collect())
+}
+
+/// Apply the seed plan, one confirmed reducer round trip at a time.
+///
+/// Classified rather than flattened: seeding decides retry eligibility for a slot that has measured
+/// nothing, so a module refusal must not arrive as the infrastructure failure that would make it
+/// retryable.
+fn seed_attempt(
+    client: &ConnectedClient,
+    plan: &[SeedRow],
+) -> std::result::Result<(), MeasuredStepFailure> {
+    for row in plan {
+        client.insert_entity_owner_classified(
+            row.entity_uuid,
+            row.owner,
+            SEEDED_ROW_PAYLOAD.to_string(),
+        )?;
+    }
+    Ok(())
 }
 
 /// **Stage 2 — two-sample preflight.** Take the frozen prospective gate's two readings and pair
@@ -828,11 +1172,11 @@ fn provision_and_record(
 ///
 /// Every edge above is the same kind, since [`InfrastructurePhase::Provision`] covers staging,
 /// starting and publishing. The caller supplies the matching [`FailureStage::BeforePublish`].
-fn failed_before_publish(error: &Error, release: Vec<Error>) -> Provisioning {
+fn failed_before_publish(error: &Error, release_errors: Vec<Error>) -> Provisioning {
     Provisioning::FailedBeforePublish {
         kind: FailureKind::Infrastructure(InfrastructurePhase::Provision),
         diagnostic: DiagnosticArtifact::of_error(error),
-        release: (!release.is_empty()).then(|| DiagnosticArtifact::of_error(&into_error(release))),
+        release_errors,
     }
 }
 

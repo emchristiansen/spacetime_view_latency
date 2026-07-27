@@ -10,8 +10,9 @@
 //! single difference. Between them they cover every rule reachable without a live server: sequence
 //! contiguity, the opening inventory, one terminal per identity, every predeclared original
 //! present, retries only off eligible originals, preflight-clearance cardinality and position,
-//! post-attempt readings for attempts that measured nothing, orphan auxiliary lines, supersession
-//! reach, and the one path through selection that a ledger with no complete attempt can take.
+//! post-attempt readings for attempts that measured nothing, the auxiliary-line-free accounting of a
+//! preflight that could not be read, orphan auxiliary lines, supersession reach, and the one path
+//! through selection that a ledger with no complete attempt can take.
 //!
 //! Four rules are **compile-checked and directly inspected only**, because each needs an
 //! [`AttemptProvenance`](crate::view_read_set_campaign::attempt_provenance::AttemptProvenance),
@@ -56,4 +57,5 @@ mod an_attempts_preflight_clearances_must_match_its_outcome;
 mod an_auxiliary_line_for_an_attempt_with_no_terminal_record_is_refused;
 mod an_eligible_original_may_be_retried_once;
 mod an_identity_with_more_than_one_terminal_record_is_refused;
+mod an_unreadable_preflight_carries_no_auxiliary_lines;
 mod fixture;

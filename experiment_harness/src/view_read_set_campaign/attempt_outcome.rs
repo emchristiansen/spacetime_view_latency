@@ -18,14 +18,14 @@ use crate::view_read_set_campaign::partial_evidence::PartialEvidence;
 /// carries exactly the payload its disposition requires. The payload types carry the rest of the
 /// guarantee — see [`EvidenceArtifact`] and [`PartialEvidence`].
 ///
-/// **Why the preflight rejection is its own variant.** It is not a kind of failure of a run, because
-/// no run happened: the gate is prospective and ends immediately before launch. Folding it into
-/// [`Self::Failed`] would give it a [`PartialEvidence`] field, and "the preflight refused, and here
-/// is the evidence it measured" is a state with no meaning. Having its own variant with no evidence
-/// field at all makes that unrepresentable rather than merely unused.
+/// **Why the two preflight dispositions are their own variants.** Neither is a kind of failure of a
+/// run, because no run happened: the gate is prospective and ends immediately before launch. Folding
+/// either into [`Self::Failed`] would give it a [`PartialEvidence`] field, and "the preflight ended
+/// the attempt, and here is the evidence it measured" is a state with no meaning. Separate variants
+/// with no evidence field at all make that unrepresentable rather than merely unused.
 ///
-/// **This is what the retry rule total-matches over.** [`Self::PreflightRejected`] is categorically
-/// eligible; [`Self::Failed`] is eligible only for
+/// **This is what the retry rule total-matches over.** [`Self::PreflightRejected`] and
+/// [`Self::PreflightUnreadable`] are categorically eligible; [`Self::Failed`] is eligible only for
 /// [`FailureKind::Infrastructure`] together with a stage whose
 /// [`MeasuredSampleBoundary`](super::measured_sample_boundary::MeasuredSampleBoundary) is
 /// `BeforeFirst`; everything else is ineligible. A variant added here without a retry disposition
@@ -49,6 +49,18 @@ pub(crate) enum AttemptOutcome {
         gate: FailedEnvironmentGate,
         diagnostic: DiagnosticArtifact,
     },
+    /// The prospective preflight could not be read, so the gate never reached a verdict.
+    ///
+    /// Distinct from [`Self::PreflightRejected`], which carries a [`FailedEnvironmentGate`] — a
+    /// refusal *derived* from real readings. There are no readings here, so there is no verdict to
+    /// derive and no gate field that could be filled without forging one.
+    ///
+    /// Distinct from [`Self::Failed`], which reconciliation requires to have exactly one preflight
+    /// clearance. A clearance is minted only from a *passing* gate, so a `Failed` record for an
+    /// attempt whose readings never existed is a ledger state reconciliation refuses. The single
+    /// diagnostic is the whole honest content: nothing launched, nothing published and nothing
+    /// measured, so there is no [`FailureStage`] to state and no [`PartialEvidence`] to retain.
+    PreflightUnreadable { diagnostic: DiagnosticArtifact },
     /// Launched, then terminated before completing, retaining whatever channels and composition
     /// finding it had produced.
     ///

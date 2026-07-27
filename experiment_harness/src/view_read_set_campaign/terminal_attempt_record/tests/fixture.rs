@@ -105,6 +105,16 @@ pub(super) fn preflight_rejected() -> AttemptOutcome {
     }
 }
 
+/// An attempt whose prospective preflight could not be read, so no gate verdict exists.
+///
+/// Carries a diagnostic and nothing else, which is the variant's whole shape: there are no readings
+/// to pair, so nothing here stands in for a gate.
+pub(super) fn preflight_unreadable() -> AttemptOutcome {
+    AttemptOutcome::PreflightUnreadable {
+        diagnostic: diagnostic(),
+    }
+}
+
 /// A predeclared attempt that never executed, because a preceding attempt's release failed.
 pub(super) fn not_run() -> AttemptOutcome {
     AttemptOutcome::NotRun {

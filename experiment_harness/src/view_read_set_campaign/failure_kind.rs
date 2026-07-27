@@ -20,7 +20,10 @@ use crate::view_read_set_campaign::infrastructure_phase::InfrastructurePhase;
 /// environment-gate invalidation, which is not a failure of a run at all — nothing had launched. It
 /// is [`AttemptOutcome::PreflightRejected`](super::attempt_outcome::AttemptOutcome::PreflightRejected),
 /// a sibling of the variant this enum lives inside, so it can carry its gate readings and *no*
-/// evidence field.
+/// evidence field. A preflight whose readings could not be taken lands on the same side, as
+/// [`AttemptOutcome::PreflightUnreadable`](super::attempt_outcome::AttemptOutcome::PreflightUnreadable):
+/// it is an infrastructure failure before the first measured sample, but it has no launched run to
+/// classify a cause or a lifecycle phase for.
 ///
 /// **What each class settles about retry.** [`Self::Infrastructure`] is *conditionally* eligible: it
 /// qualifies only together with the first-measured-sample boundary, which this enum does not record,

@@ -33,9 +33,10 @@ mod sealed {
     /// **What sealing proves.** That the outcome's evidence, where it has any, was measured at
     /// exactly the scale point the key names, and under the axis the key names. A `Complete` outcome
     /// carrying another rung's evidence, or a `Failed` outcome whose partial evidence came from
-    /// another scale point, is refused. [`AttemptOutcome::PreflightRejected`] and
-    /// [`AttemptOutcome::NotRun`] have no evidence at all, so for them the pairing is unconstrained —
-    /// correctly, since there is nothing that could disagree.
+    /// another scale point, is refused. [`AttemptOutcome::PreflightRejected`],
+    /// [`AttemptOutcome::PreflightUnreadable`] and [`AttemptOutcome::NotRun`] have no evidence at
+    /// all, so for them the pairing is unconstrained — correctly, since there is nothing that could
+    /// disagree.
     ///
     /// **What it does not prove.** That this is the *only* terminal record for the slot, or that no
     /// lower retry ordinal exists elsewhere in the ledger. Those are facts about a reconciled ledger
@@ -77,9 +78,11 @@ mod sealed {
                         key.scale(),
                     );
                 }
-                // Neither carries evidence, so neither can contradict the identity it is paired
+                // None of these carries evidence, so none can contradict the identity it is paired
                 // with.
-                AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => {}
+                AttemptOutcome::PreflightRejected { .. }
+                | AttemptOutcome::PreflightUnreadable { .. }
+                | AttemptOutcome::NotRun { .. } => {}
             }
             Ok(Self { key, outcome })
         }
@@ -102,11 +105,10 @@ mod sealed {
         /// **Classify, then cap.** The first step asks what *this kind of termination* disposes of:
         /// a retry the protocol offers, a retry it refuses, or no retry question at all. The second
         /// applies the protocol's cap of one retry per logical slot, and it applies to every outcome
-        /// alike — so "categorically eligible" describes
-        /// [`AttemptOutcome::PreflightRejected`]'s *classification*, not an exception to the cap. A
-        /// preflight rejection or an early infrastructure failure at
-        /// [`RetryOrdinal::RETRY`] is [`RetryEligibility::Ineligible`], because the retry it would
-        /// authorize is the attempt being judged.
+        /// alike — so "categorically eligible" describes the two preflight outcomes'
+        /// *classification*, not an exception to the cap. A preflight disposition or an early
+        /// infrastructure failure at [`RetryOrdinal::RETRY`] is [`RetryEligibility::Ineligible`],
+        /// because the retry it would authorize is the attempt being judged.
         ///
         /// The cap sits outside the classification rather than as a clause inside each arm, which is
         /// what makes it global: an outcome variant added later is capped whether or not whoever
@@ -115,9 +117,12 @@ mod sealed {
         /// retry question pass through unchanged, and folding the three states into a boolean first
         /// would discard exactly the distinction the cap is defined over.
         ///
-        /// **The classification.** [`AttemptOutcome::PreflightRejected`] qualifies because the
-        /// prospective gate ends before the first measured sample — nothing was measured, so
-        /// retrying references no measured outcome. [`AttemptOutcome::Failed`] qualifies only for
+        /// **The classification.** [`AttemptOutcome::PreflightRejected`] and
+        /// [`AttemptOutcome::PreflightUnreadable`] qualify because the prospective gate ends before
+        /// the first measured sample — nothing was measured, so retrying references no measured
+        /// outcome. The spec's two retryable branches meet here: a refusal is gate invalidation, and
+        /// readings that could not be taken are an infrastructure failure before the first sample.
+        /// [`AttemptOutcome::Failed`] qualifies only for
         /// [`FailureKind::Infrastructure`], and then only before the first sample:
         /// [`FailureKind::Application`], [`FailureKind::Timeout`],
         /// [`FailureKind::NonpositiveStatistic`] and [`FailureKind::SemanticsOrSecurity`] are each a
@@ -134,7 +139,8 @@ mod sealed {
         /// state added later must state its own disposition instead of inheriting a default.
         pub(crate) fn retry_eligibility(&self) -> RetryEligibility {
             let classified = match &self.outcome {
-                AttemptOutcome::PreflightRejected { .. } => RetryEligibility::Eligible,
+                AttemptOutcome::PreflightRejected { .. }
+                | AttemptOutcome::PreflightUnreadable { .. } => RetryEligibility::Eligible,
                 AttemptOutcome::Failed { kind, stage, .. } => match kind {
                     FailureKind::Infrastructure(_) => match stage.measured_sample_boundary() {
                         MeasuredSampleBoundary::BeforeFirst => RetryEligibility::Eligible,

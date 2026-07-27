@@ -408,6 +408,7 @@ mod sealed {
                 validity: MethodValidity::Valid,
             } => artifact,
             AttemptOutcome::PreflightRejected { .. }
+            | AttemptOutcome::PreflightUnreadable { .. }
             | AttemptOutcome::Failed { .. }
             | AttemptOutcome::NotRun { .. } => return None,
         };
@@ -611,11 +612,15 @@ mod sealed {
     /// already carried, as a
     /// [`FailedEnvironmentGate`](crate::view_read_set_campaign::failed_environment_gate::FailedEnvironmentGate),
     /// inside the terminal record itself, so a clearance for that identity is a contradiction.
+    /// [`AttemptOutcome::PreflightUnreadable`] did not launch either, and could not have: a
+    /// clearance is minted only from a passing gate, and its gate produced no readings at all.
     /// [`AttemptOutcome::NotRun`] was never gated.
     fn required_clearances(outcome: &AttemptOutcome) -> usize {
         match outcome {
             AttemptOutcome::Complete { .. } | AttemptOutcome::Failed { .. } => 1,
-            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+            AttemptOutcome::PreflightRejected { .. }
+            | AttemptOutcome::PreflightUnreadable { .. }
+            | AttemptOutcome::NotRun { .. } => 0,
         }
     }
 
@@ -631,7 +636,9 @@ mod sealed {
         match outcome {
             AttemptOutcome::Complete { .. } => 1,
             AttemptOutcome::Failed { stage, .. } => usize::from(stage.published()),
-            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+            AttemptOutcome::PreflightRejected { .. }
+            | AttemptOutcome::PreflightUnreadable { .. }
+            | AttemptOutcome::NotRun { .. } => 0,
         }
     }
 
@@ -650,7 +657,9 @@ mod sealed {
                 MeasuredSampleBoundary::AfterFirst => 1,
                 MeasuredSampleBoundary::BeforeFirst => 0,
             },
-            AttemptOutcome::PreflightRejected { .. } | AttemptOutcome::NotRun { .. } => 0,
+            AttemptOutcome::PreflightRejected { .. }
+            | AttemptOutcome::PreflightUnreadable { .. }
+            | AttemptOutcome::NotRun { .. } => 0,
         }
     }
 

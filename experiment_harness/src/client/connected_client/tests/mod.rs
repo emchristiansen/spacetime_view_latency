@@ -19,9 +19,15 @@
 //! its own target key and no other, reports that key's *own* observer instant as the sample's
 //! endpoint, and surfaces a failed write instead of letting it expire.
 //!
+//! The campaign's seeding step adds the one-completion barrier ([`await_reducer_completion`]),
+//! covered for both callback-delivered failures: a reducer refusal and an SDK internal error are
+//! each the application's answer, and each keeps its own wording.
+//!
 //! Out of reach without a server, and covered by inspection instead: anything holding a
 //! `DbConnection` — observer registration and removal, delivery-callback registration, the cache
 //! read-back, and both apply channels, which are network events with no pure factor to extract.
+//! With them the awaited reducer's remaining branches: a failed issue, an elapsed wait, and a
+//! sender dropped without a callback, none of which a hand-delivered message can produce.
 
 mod a_duplicate_measured_confirmation_is_rejected;
 mod a_duplicate_prerequisite_confirmation_is_rejected;
@@ -34,6 +40,8 @@ mod a_missing_prerequisite_times_out_at_the_supplied_deadline;
 mod a_paced_sample_reports_its_own_observer_instant;
 mod a_paced_sample_stops_only_on_its_own_target_key;
 mod a_prerequisite_failure_is_rejected;
+mod a_seeding_internal_error_is_an_application_failure;
+mod a_seeding_reducer_error_is_an_application_failure;
 mod measured_confirmations_seal_in_issue_order;
 mod prerequisites_confirm_regardless_of_order;
 mod saturated_confirmations_seal_in_issue_order;

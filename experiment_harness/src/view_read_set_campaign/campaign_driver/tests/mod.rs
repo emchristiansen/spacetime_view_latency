@@ -11,9 +11,15 @@
 //! whole of its input.
 //!
 //! Order is covered exactly where it is owned. Terminal-immediately-followed-by-post-attempt is
-//! `settle`'s, and is proved here; Inventory-first and clearance-before-provisioning belong to
-//! `run_campaign` and `run_attempt`, which are still `todo!()`. Reconciliation re-derives all three
-//! independently from the finished ledger.
+//! `settle`'s, and is proved here; clearance-before-provisioning is `run_attempt`'s, whose stages
+//! hold live capabilities and are covered by inspection; Inventory-first belongs to `run_campaign`,
+//! which is still `todo!()`. Reconciliation re-derives all three independently from the finished
+//! ledger.
+//!
+//! `run_attempt`'s one pure factor is extracted and proved here: the seed plan, which decides the two
+//! key ranges and their owners from the frozen constants alone. The rest of that stage is ownership
+//! routing over live capabilities — gate, provisioning, connection, measurement, release — with no
+//! seam that would not weaken the sealed types it composes.
 //!
 //! The measurement stage is live and mostly untestable from here: `measure_attempt` and
 //! `measure_channel` take a connected client, subscribe, reconnect, and issue writes against a real
@@ -53,3 +59,4 @@ mod each_recording_adapter_appends_its_own_record;
 mod every_primary_failure_leads_while_release_still_runs;
 mod memory_pressure_reads_full_avg60_and_not_some;
 mod swap_out_reads_the_cumulative_pswpout_counter;
+mod the_seed_plan_fills_both_slices_at_both_ladder_extremes;
