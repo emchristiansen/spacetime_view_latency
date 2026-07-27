@@ -87,6 +87,49 @@ impl AttemptKey {
         self.retry
     }
 
+    /// The identity of this logical slot's one permitted retry, or `None` when this identity is
+    /// already that retry.
+    ///
+    /// **Why the transition lives on the identity and not at the driver that wants it.** Two
+    /// reasons, neither of which is coordinate transposition — [`Self::new`] takes six distinct
+    /// types, so a swapped pair does not compile, and a seventh component would change its arity and
+    /// break every call site rather than pass silently.
+    ///
+    /// The first is access: [`StageRepetition`] is the one coordinate this type deliberately does
+    /// not expose, and rebuilding a key elsewhere would require publishing it for no reason but
+    /// this. The second is that reconstruction names *values*, and a call site can supply a
+    /// well-typed wrong one — the ladder's other rung, the matched role, another block's
+    /// repetition — producing a valid identity for an attempt that was never run. Copying `self` and
+    /// advancing one closed field names no coordinate at all, so there is none to get wrong. It is
+    /// the constructive direction of [`Self::same_logical_slot`], which is why the two live together
+    /// and cannot drift apart.
+    ///
+    /// **Why this rather than a setter.** An arbitrary-ordinal setter could also move a retry *back*
+    /// to [`RetryOrdinal::ORIGINAL`], minting an identity claiming to be the attempt it was derived
+    /// from — which would overwrite its predecessor's evidence, the one thing the retry ordinal
+    /// exists to prevent. This takes no parameter, so the only reachable transition is the permitted
+    /// one.
+    ///
+    /// **The cap is the ordinal type's, not a rule restated here.** [`RetryOrdinal`] holds exactly
+    /// two values, so an identity that is not the original is the retry and has no successor. The
+    /// test asks "is this the original?" rather than "is this the retry?" deliberately: were a third
+    /// ordinal ever added inside that type's sealed module, this yields no retry rather than
+    /// silently granting one.
+    ///
+    /// It promises nothing about *scheduling*. Whether a retry may be run at all is the outcome
+    /// question answered by
+    /// [`retry_eligibility`](super::terminal_attempt_record::TerminalAttemptRecord::retry_eligibility),
+    /// and when it runs is the driver's.
+    pub(crate) fn next_retry(self) -> Option<Self> {
+        if self.retry != RetryOrdinal::ORIGINAL {
+            return None;
+        }
+        Some(Self {
+            retry: RetryOrdinal::RETRY,
+            ..self
+        })
+    }
+
     /// The complete identity as one frozen canonical string — the spelling its retained artifacts
     /// are filed under.
     ///

@@ -25,6 +25,7 @@ use crate::view_read_set_campaign::failure_kind::FailureKind;
 use crate::view_read_set_campaign::failure_stage::FailureStage;
 use crate::view_read_set_campaign::measurement_channel::MeasurementChannel;
 use crate::view_read_set_campaign::passed_environment_gate::PassedEnvironmentGate;
+use crate::view_read_set_campaign::retry_eligibility::RetryEligibility;
 use crate::view_read_set_campaign::terminal_attempt_record::TerminalAttemptRecord;
 
 /// A classified failure inside one attempt's measured window, carrying everything the terminal
@@ -88,9 +89,10 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase 1 boundary.** Every body in this file is an explicit `todo!()`. What is fixed is the
-/// stage decomposition, the typed inputs and outputs of each stage, and the ordering discipline the
-/// stubs describe.
+/// **Phase boundary.** Every body in this file is still an explicit `todo!()` except
+/// [`schedule_retry`], which is pure and depends on nothing this file has yet to build. What is
+/// fixed for the rest is the stage decomposition, the typed inputs and outputs of each stage, and
+/// the ordering discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -400,14 +402,31 @@ fn record_post_attempt(
 ///
 /// Takes the bound [`TerminalAttemptRecord`] rather than a key and an outcome, so the retry ordinal
 /// consulted is necessarily the ordinal of the attempt that produced the outcome consulted.
+///
+/// **The split of responsibility, which is the whole design.** Whether this slot has earned another
+/// attempt is an *outcome* question, and it is already answered whole by
+/// [`TerminalAttemptRecord::retry_eligibility`] — including the protocol's global cap of one retry
+/// per slot, which that function applies to every outcome alike. What the identity of that retry
+/// *is* is a question about the key, answered by [`AttemptKey::next_retry`]. Neither is restated
+/// here, so this function is exactly the join of the two and has no rule of its own to drift.
+///
+/// The three eligibility states are matched by name rather than compared against `Eligible`, so a
+/// fourth must state its own scheduling disposition instead of falling into a catch-all.
+///
+/// **This promises nothing about *when*.** A returned identity says a retry is authorized, not that
+/// it has been placed; [`run_inventory`] remains responsible for running it immediately after the
+/// original it belongs to, which is a property of the driver's schedule and deliberately not one
+/// reconciliation re-derives from the ledger.
 fn schedule_retry(record: &TerminalAttemptRecord) -> Option<AttemptKey> {
-    let _ = record;
-    todo!(
-        "Phase 2: return None unless TerminalAttemptRecord::retry_eligibility is \
-         RetryEligibility::Eligible; otherwise mint the same logical slot's identity at \
-         RetryOrdinal::RETRY. The eligibility rule already conjoins the original's ordinal, so at \
-         most one retry per slot follows from it rather than from a second check here"
-    )
+    match record.retry_eligibility() {
+        // Nothing to schedule, for two different reasons that both end here: the slot was refused
+        // another attempt, or its outcome raises no retry question at all.
+        RetryEligibility::Ineligible | RetryEligibility::None => None,
+        RetryEligibility::Eligible => Some(record.key().next_retry().expect(
+            "retry eligibility applies the one-retry ordinal cap globally, so a record it reports \
+             as eligible is always at the original ordinal and always has a next retry",
+        )),
+    }
 }
 
 /// **Stage 8 — cleanup.** Close out one attempt while its capabilities are still owned: write its
@@ -455,3 +474,10 @@ fn settle(
          returned diagnostic instead"
     )
 }
+
+// A child of this module, which is what lets it reach the private `schedule_retry`. Unlike the
+// sealed minting clusters elsewhere in this campaign, nothing here is protected by that privacy:
+// `schedule_retry` is a pure function over a record anyone in the crate can already build, so a
+// child test module can forge nothing it could not forge from outside.
+#[cfg(test)]
+mod tests;

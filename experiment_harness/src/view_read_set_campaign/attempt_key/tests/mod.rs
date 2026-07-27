@@ -2,3 +2,4 @@
 
 mod every_coordinate_changes_the_canonical_tag;
 mod the_canonical_tag_is_the_frozen_spelling;
+mod the_one_permitted_retry_advances_only_the_ordinal;
