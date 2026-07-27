@@ -10,6 +10,7 @@ use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::verified_module_artifact::VerifiedModuleArtifact;
 use crate::observation::output_path::OutputPath;
 use crate::provision::run_resources::RunResources;
+use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
@@ -90,10 +91,10 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** The pure [`schedule_retry`] and the four recording adapters are implemented;
-/// every other body in this file is still an explicit `todo!()`. What is fixed for the rest is the
-/// stage decomposition, the typed inputs and outputs of each stage, and the ordering discipline the
-/// stubs describe.
+/// **Phase boundary.** The pure [`schedule_retry`], the four recording adapters, and [`settle`] are
+/// implemented; every other body in this file is still an explicit `todo!()`. What is fixed for the
+/// rest is the stage decomposition, the typed inputs and outputs of each stage, and the ordering
+/// discipline the stubs describe.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
@@ -347,10 +348,10 @@ fn measure_channel(
          PACED_SAMPLE_DELAY_MS between completed samples; SaturatedQueueGrowthPerWrite issues the \
          same count back-to-back without awaiting, recording issue and confirmation offsets from a \
          common origin. The two write-issuing channels drive MutationSchedule::of(channel), whose \
-         target_key and payload are themselves Phase 2, through an update path the module does not \
-         yet have — adding that reducer and its client method is authorized work in its own right, \
-         not part of this driver. Each ChannelEvidence constructor performs its own reduction, so \
-         no statistic is computed here"
+         target_key and payload derivations checkpoint 1ffbbe9a implemented, through \
+         ConnectedClient::update_entity_owner — the owner-preserving update path that checkpoint \
+         added together with the module's own reducer. Each ChannelEvidence constructor performs \
+         its own reduction, so no statistic is computed here"
     )
 }
 
@@ -460,33 +461,60 @@ fn schedule_retry(record: &TerminalAttemptRecord) -> Option<AttemptKey> {
 /// - `None` — this attempt measured nothing, so no post-attempt line is required or permitted;
 /// - `Some(Ok(sample))` — measured, and the reading was taken;
 /// - `Some(Err(error))` — measured, and the reading itself failed. The measured disposition still
-///   stands, because a retrospective diagnostic may not decide it.
+///   stands, because a retrospective diagnostic may not decide it, but that error becomes the
+///   primary and stops the campaign: the ledger now permanently lacks a line reconciliation
+///   requires for a measured attempt, so continuing would append later attempts under a contract
+///   this ledger can no longer satisfy. What is lost is the campaign, not the attempt — the
+///   evidence already written stays on disk and stays valid.
+///
+/// A failed Terminal append skips the post-attempt line rather than offering it to a sink that has
+/// just poisoned itself. And nothing here checks `post_attempt` against the outcome: whether a
+/// measured attempt carries a reading is [`run_attempt`]'s to get right and reconciliation's to
+/// reject, and re-deriving it here would be a second copy of that rule.
 fn settle(
     sink: &mut CampaignSink,
     record: Result<TerminalAttemptRecord>,
     post_attempt: Option<Result<EnvironmentSample>>,
     release: impl FnOnce() -> Vec<Error>,
 ) -> Result<(TerminalAttemptRecord, Option<DiagnosticArtifact>)> {
-    let _ = (sink, record, post_attempt, release);
-    todo!(
-        "Phase 2: append the terminal record through record_terminal unless the outcome is already \
-         a persist failure — the measured disposition is written unchanged whatever post_attempt \
-         holds. Then, for Some(Ok(sample)), append it through record_post_attempt so it follows \
-         the Terminal line, which is what reconciliation's 'following that identity's terminal \
-         line' checks. Run release unconditionally after both.
+    let settled = match record {
+        Err(primary) => Err(primary),
+        Ok(record) => match record_terminal(sink, &record) {
+            Err(primary) => Err(primary),
+            Ok(()) => match post_attempt {
+                None => Ok(record),
+                Some(Err(primary)) => Err(primary),
+                Some(Ok(sample)) => {
+                    record_post_attempt(sink, record.key(), sample).map(|()| record)
+                }
+            },
+        },
+    };
 
-         Some(Err(_)) is the case worth stating: the terminal record is still written and release \
-         still runs, but that error is returned, which stops the campaign. It must be, because the \
-         ledger now permanently lacks a line reconciliation requires for a measured attempt — \
-         continuing would append further attempts under a contract this ledger can no longer \
-         satisfy, and report generation would fail on the whole run rather than on the one \
-         attempt. The evidence already written stays on disk and stays valid; what is lost is the \
-         campaign, not the attempt.
+    let mut release_errors = release();
 
-         A ledger error leads over a release error, aggregating the release errors after it with \
-         provision::teardown::into_error; with the ledger healthy, a release failure becomes the \
-         returned diagnostic instead"
-    )
+    match settled {
+        Ok(record) => Ok((record, release_failure(release_errors))),
+        Err(primary) => {
+            let mut errors = vec![primary];
+            errors.append(&mut release_errors);
+            Err(into_error(errors))
+        }
+    }
+}
+
+/// The diagnostic for a set of release failures, or `None` when every capability was provably
+/// released.
+///
+/// The Pilot's helper, copied rather than shared: it belongs to that campaign's driver, and the two
+/// drivers are deliberately separate modules. Aggregating rather than reporting only the first keeps
+/// a teardown failure from hiding behind a disconnect failure.
+fn release_failure(release: Vec<Error>) -> Option<DiagnosticArtifact> {
+    if release.is_empty() {
+        None
+    } else {
+        Some(DiagnosticArtifact::of_error(&into_error(release)))
+    }
 }
 
 // A child of this module, which is what lets it reach the private `schedule_retry`. Unlike the
