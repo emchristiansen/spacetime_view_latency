@@ -14,6 +14,7 @@ mod client;
 mod dataset;
 mod entity_owner_pilot;
 mod entity_owner_smoke;
+mod entity_owner_visible_rows_probe;
 mod execute_run;
 mod manifest;
 mod module_artifact;
@@ -176,6 +177,31 @@ enum Command {
         /// Path to the built module WASM whose bytes are hash-verified before publication.
         #[arg(long)]
         module_wasm: PathBuf,
+    },
+    /// Visible-rows derisking probe for the `EntityOwnerSenderView` candidate (spec c33f2e51): hold
+    /// the backing table at a fixed population and vary only how it is partitioned between the
+    /// measured identity and a non-connecting other owner, measuring the paced and saturated
+    /// channels per rung on a fresh isolated server per attempt. Each block runs one Arm per rung
+    /// plus exactly one Control, which is invariant to the partition.
+    EntityOwnerVisibleRowsProbe {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed driving the within-block attempt order. The seeded data is
+        /// seed-independent: only execution order varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
     },
     /// Pilot stage for the `EntityOwnerSenderView` candidate (spec c33f2e51): freeze the ten
     /// predeclared attempts in a seeded randomized order, then walk the frozen `N_global` ladder on
@@ -385,6 +411,22 @@ fn main() -> Result<()> {
         } => {
             let listen = ListenAddress::parse(&server)?;
             crate::entity_owner_smoke::entity_owner_sender_view_smoke(listen, &module_wasm)
+        }
+        Command::EntityOwnerVisibleRowsProbe {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_visible_rows_probe::entity_owner_visible_rows_probe(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
+            )
         }
         Command::EntityOwnerPilot {
             server,
