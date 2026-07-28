@@ -311,9 +311,16 @@ pub fn insert_entity_owner(
 /// `control_activity` — `callosum/callosum/src/tables/insert_chronicle_message/control_activity_update.rs`
 /// inserts at three sites and Callosum contains no update or delete of that table — so the
 /// owner-preserving in-place update frozen for `EntityOwnerSenderView` has no counterpart here,
-/// and the spec's requirement of a *production-representative fixed-cardinality* mutation is not
-/// yet satisfiable for this candidate. The spec requires that mutation be frozen before this
-/// candidate's first measured run; seeding and view composition do not depend on it.
+/// and a *production-representative fixed-cardinality* mutation is not currently defined for this
+/// candidate.
+///
+/// The governing spec rules on this candidate directly: E2 paced visible-apply evidence is
+/// required for `IndexedControlActivitySenderView` to reach `Evaluated`, because the deployed
+/// client consumes both the initial backfill and ongoing `on_insert` delivery; E3 cold-subscription
+/// evidence is screen-only and cannot substitute; no Site 4 performance run may begin until an
+/// append-only E2 estimand is explicitly frozen in the spec; and production representativeness may
+/// not be weakened with a synthetic delete or an in-place update to manufacture one. Seeding and
+/// view composition do not depend on that ruling, which is why they land first.
 #[reducer]
 pub fn insert_control_activity(
     ctx: &ReducerContext,
