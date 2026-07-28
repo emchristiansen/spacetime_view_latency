@@ -46,6 +46,12 @@ const SEEDED_ROW_COUNT: u64 = 3;
 /// is fixed so a seeded row is reproducible from the seed alone.
 const SEEDED_CONTROL_UUID_BASE: u64 = 9_000;
 
+/// Fixed literal timestamp for every seeded row, in microseconds since the Unix epoch, so the
+/// seeded state is reproducible rather than clock-dependent. `Timestamp::now()` would make two runs
+/// of this reproducer seed different rows for no benefit: the view under test filters on `id` and
+/// never reads `ts`.
+const SEEDED_TS_MICROS: i64 = 1_700_000_000_000_000;
+
 /// Provision, publish, seed, subscribe, and verify the typed-contradiction empty view end to end,
 /// tearing the server down on every exit path — mirrors
 /// [`crate::entity_owner_smoke::entity_owner_sender_view_smoke`]'s acquisition/teardown pipeline
@@ -129,7 +135,7 @@ fn drive(server: &RunningPinnedServer, database_identity: &str) -> Result<()> {
 /// exactly the seeded rows, and the typed-contradiction view must return none.
 fn run_reproducer(client: &ConnectedClient) -> Result<()> {
     let user_identity = client.measured_identity();
-    let ts = Timestamp::now();
+    let ts = Timestamp::from_micros_since_unix_epoch(SEEDED_TS_MICROS);
 
     for i in 0..SEEDED_ROW_COUNT {
         client.insert_control_activity(i, ts, SEEDED_CONTROL_UUID_BASE + i, user_identity)?;
