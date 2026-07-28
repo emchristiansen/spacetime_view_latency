@@ -16,10 +16,20 @@
 //! same bare sender-equality query-builder filter, with an opaque `record` payload
 //! standing in for the real `EntityRecord` enum (the payload's shape is not the
 //! object of study).
+//!
+//! Also defines `ControlActivity`/`control_activity_sender_view` and
+//! `IndexedControlActivity`/`indexed_control_activity_sender_view`: the same spec's
+//! `ControlActivitySenderView` and `IndexedControlActivitySenderView` candidates for site 4,
+//! analogues of Muninn's real `control_activity` table and its `control_activity_view`
+//! (`callosum/callosum/src/tables/control_activity{,_view}.rs`). The two arms differ in exactly
+//! one thing — whether the filtered `user_identity` column carries a btree index — because that
+//! absence in production is site 4's held static finding.
 
 use std::ops::Bound;
 
-use spacetimedb::{reducer, table, view, Identity, Query, ReducerContext, Table, ViewContext};
+use spacetimedb::{
+    reducer, table, view, Identity, Query, ReducerContext, Table, Timestamp, ViewContext,
+};
 
 // ---------------------------------------------------------------------------
 // Base tables
@@ -65,6 +75,49 @@ pub struct EntityOwner {
     #[index(btree)]
     pub owner: Identity,
     pub record: String,
+}
+
+/// Production-composition analogue of Muninn's real `control_activity` table: one row per Control
+/// entity appearing in a chronicle message's source or target, carrying the message timestamp, the
+/// Control's uuid, and the identity of the user who owns that Control's UX
+/// (`callosum/callosum/src/tables/control_activity.rs`).
+///
+/// **`user_identity` deliberately carries no index, exactly as production does.** That absence is
+/// what site 4 studies: the sender-scoped view below filters on this column, while the analogous
+/// production `message_visibility.viewer` *is* indexed. [`IndexedControlActivity`] is the same
+/// composition with that one index added, and the two tables exist separately only because an
+/// index is a property of the table, not of the view that reads it.
+///
+/// Two departures from production's declaration, both following departures the arms above already
+/// make from the real tables they mirror, so neither is new to this module: the primary
+/// key is harness-assigned rather than `#[auto_inc]` (production's `message_visibility.id` is
+/// auto-inc while this module's [`MessageVisibility`] takes an explicit `id`), and `control_uuid`
+/// is a `u64` stand-in for production's `Uuid` (as `message_uuid` and `entity_uuid` already are).
+/// Neither the key sequence nor the uuid width is part of the read set under study.
+#[table(accessor = control_activity, public)]
+pub struct ControlActivity {
+    #[primary_key]
+    pub id: u64,
+    pub ts: Timestamp,
+    pub control_uuid: u64,
+    pub user_identity: Identity,
+}
+
+/// [`ControlActivity`] with exactly one difference: a btree index on `user_identity`, the column
+/// the sender-scoped view filters on. Every other column, its order, its type, and the primary key
+/// are identical, so a comparison between the two arms varies the index and nothing else.
+///
+/// This table has no production counterpart — production's `control_activity.user_identity` is
+/// unindexed. It is the site 4 `IndexedControlActivitySenderView` candidate: the experiment-module
+/// analogue of the minimal useful sender index the spec proposes for control activity.
+#[table(accessor = indexed_control_activity, public)]
+pub struct IndexedControlActivity {
+    #[primary_key]
+    pub id: u64,
+    pub ts: Timestamp,
+    pub control_uuid: u64,
+    #[index(btree)]
+    pub user_identity: Identity,
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +208,33 @@ pub fn entity_owner_sender_view(ctx: &ViewContext) -> impl Query<EntityOwner> {
         .r#where(|row| row.owner.eq(ctx.sender()))
 }
 
+/// `ControlActivitySenderView` — the unindexed arm, a bare transcription of production's
+/// `control_activity_view` (`callosum/callosum/src/tables/control_activity_view.rs`): every user,
+/// admin included, sees only their own activity, expressed as a single-table sender-equality
+/// filter over a column with no index.
+///
+/// The spec records this candidate `DiagnosticOnly`: it may explain mechanism but can never be
+/// recommended.
+#[view(accessor = control_activity_sender_view, public)]
+pub fn control_activity_sender_view(ctx: &ViewContext) -> impl Query<ControlActivity> {
+    ctx.from
+        .control_activity()
+        .r#where(|row| row.user_identity.eq(ctx.sender()))
+}
+
+/// `IndexedControlActivitySenderView` — the indexed arm. Its query structure is the same
+/// single-table sender-equality predicate on `user_identity` as [`control_activity_sender_view`];
+/// what differs is the backing table it names — and hence the accessor and result type — which
+/// carries a btree index on that filtered column.
+#[view(accessor = indexed_control_activity_sender_view, public)]
+pub fn indexed_control_activity_sender_view(
+    ctx: &ViewContext,
+) -> impl Query<IndexedControlActivity> {
+    ctx.from
+        .indexed_control_activity()
+        .r#where(|row| row.user_identity.eq(ctx.sender()))
+}
+
 // ---------------------------------------------------------------------------
 // Seeding reducers
 // ---------------------------------------------------------------------------
@@ -220,6 +300,55 @@ pub fn insert_entity_owner(
         owner,
         record,
     });
+}
+
+/// Seeds one [`ControlActivity`] row. `ts` is an explicit parameter rather than `ctx.timestamp`
+/// because production's `control_activity_update` likewise receives the originating chronicle
+/// message's timestamp rather than reading the clock, and because a seeded row must be
+/// reproducible from the seed alone.
+///
+/// No measured-mutation reducer accompanies these two tables. Production only ever *inserts* into
+/// `control_activity` — `callosum/callosum/src/tables/insert_chronicle_message/control_activity_update.rs`
+/// inserts at three sites and Callosum contains no update or delete of that table — so the
+/// owner-preserving in-place update frozen for `EntityOwnerSenderView` has no counterpart here,
+/// and the spec's requirement of a *production-representative fixed-cardinality* mutation is not
+/// yet satisfiable for this candidate. The spec requires that mutation be frozen before this
+/// candidate's first measured run; seeding and view composition do not depend on it.
+#[reducer]
+pub fn insert_control_activity(
+    ctx: &ReducerContext,
+    id: u64,
+    ts: Timestamp,
+    control_uuid: u64,
+    user_identity: Identity,
+) {
+    ctx.db.control_activity().insert(ControlActivity {
+        id,
+        ts,
+        control_uuid,
+        user_identity,
+    });
+}
+
+/// Seeds one [`IndexedControlActivity`] row — the indexed arm's twin of
+/// [`insert_control_activity`], identical in every argument, so both arms can be seeded from one
+/// row generator without a per-arm branch in the caller.
+#[reducer]
+pub fn insert_indexed_control_activity(
+    ctx: &ReducerContext,
+    id: u64,
+    ts: Timestamp,
+    control_uuid: u64,
+    user_identity: Identity,
+) {
+    ctx.db
+        .indexed_control_activity()
+        .insert(IndexedControlActivity {
+            id,
+            ts,
+            control_uuid,
+            user_identity,
+        });
 }
 
 /// The fixed-cardinality measured mutation for the `EntityOwnerSenderView` candidate: replace an
