@@ -131,13 +131,7 @@ fn one_unrelated_global_rows_ladder(
     Ok(())
 }
 
-// This type is intended crate-visible Phase-1 surface — it is the input to the endpoint-factor
-// classifier — but that later analysis layer does not exist, so nothing names it yet. It is exposed
-// as a type alias rather than a `use` re-export for that reason: an unused `use` is an
-// `unused_imports` warning, which must never be silenced, whereas an alias preserves the type and
-// its associated functions identically and an unexercised one is ordinary dead code, already
-// governed crate-wide by the skeleton's `#![allow(dead_code)]`.
-pub(crate) type UnrelatedGlobalRowsLadderEvidence = sealed::UnrelatedGlobalRowsLadderEvidence;
+pub(crate) use sealed::UnrelatedGlobalRowsLadderEvidence;
 
 // A *sibling* of `sealed`, never a child, so these tests cannot write the struct literal around a
 // set the rule rejects.

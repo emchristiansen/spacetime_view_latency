@@ -43,6 +43,7 @@ pub(crate) mod cell_statistic;
 pub(crate) mod channel_evidence;
 pub(crate) mod composition_validation;
 pub(crate) mod diagnostic_artifact;
+pub(crate) mod endpoint_factor;
 pub(crate) mod environment_gate_evidence;
 pub(crate) mod environment_sample;
 pub(crate) mod evidence_artifact;

@@ -1,4 +1,4 @@
-//! Addition, subtraction, multiplication, and integer division are exact and reduced.
+//! Addition, subtraction, multiplication, and both divisions are exact and reduced.
 
 use crate::analysis::stats::rational::Rational;
 
@@ -21,6 +21,16 @@ fn arithmetic_is_exact() {
     );
     // (3/4) / 2 = 3/8.
     assert_eq!(Rational::new(3, 4).div_int(2), Rational::new(3, 8));
+    // (3/4) / (2/5) = 15/8.
+    assert_eq!(
+        Rational::new(3, 4).div(Rational::new(2, 5)),
+        Rational::new(15, 8)
+    );
+    // A negative divisor leaves the sign on the numerator, not the denominator.
+    assert_eq!(
+        Rational::new(1, 2).div(Rational::new(-1, 3)),
+        Rational::new(-3, 2)
+    );
     // Negation moves the sign onto the numerator.
     assert_eq!(Rational::new(1, 2).neg(), Rational::new(-1, 2));
 }
