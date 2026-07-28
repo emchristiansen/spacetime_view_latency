@@ -42,7 +42,12 @@
 //! standalone and a real publish, and its provenance is mintable only from those live capabilities.
 //! Its acquisition order and four release edges are covered by inspection instead.
 //!
-//! One executable body remains `todo!()`: the pilot entrypoint.
+//! The entrypoint's own pure factor is extracted the same way: how a finished campaign and a
+//! finalized ledger combine into one report. Creating the ledger and walking the inventory need the
+//! filesystem and live servers respectively, so the ordering around them — pins frozen before
+//! anything is created, no `?` after creation, finalize on every path — is covered by inspection.
+//!
+//! No executable body of this driver remains `todo!()`.
 
 mod capturing_writer;
 mod composition_fixture;
@@ -50,6 +55,7 @@ mod fixture;
 mod scratch_dir;
 mod scripted_writer;
 
+mod a_campaign_and_its_finalization_each_report_and_neither_hides_the_other;
 mod a_control_attempt_validates_the_whole_swept_slice;
 mod a_leaked_foreign_row_fails_as_semantics_or_security;
 mod a_load_average_reads_its_first_field_in_hundredths;

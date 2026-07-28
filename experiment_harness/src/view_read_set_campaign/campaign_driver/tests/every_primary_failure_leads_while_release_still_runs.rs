@@ -32,14 +32,16 @@ fn every_primary_failure_leads_while_release_still_runs() {
     };
     let assert_leads = |error: &Error, primary: &str| {
         let rendered = format!("{error:#}");
+        let (Some(leads), Some(first_release), true) = (
+            rendered.find(primary),
+            rendered.find(releasing_the_server),
+            rendered.contains(removing_the_data_directory),
+        ) else {
+            panic!("the primary and every release failure must all be visible: {rendered}")
+        };
         assert!(
-            rendered.contains(primary),
-            "the primary failure must lead: {rendered}"
-        );
-        assert!(
-            rendered.contains(releasing_the_server)
-                && rendered.contains(removing_the_data_directory),
-            "release must still have run, with every failure visible: {rendered}"
+            leads < first_release,
+            "the primary failure must lead, with release behind it: {rendered}"
         );
     };
 

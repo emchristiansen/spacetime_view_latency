@@ -22,7 +22,6 @@ use crate::params::EXPERIMENT_ISSUER;
 use crate::provision::run_resources::RunResources;
 use crate::provision::running_pinned_server::RunningPinnedServer;
 use crate::provision::staged_module_wasm::StagedModuleWasm;
-use crate::provision::teardown::into_error;
 use crate::provision::verified_distribution::VerifiedDistribution;
 use crate::view_read_set_campaign::attempt_inventory::AttemptInventory;
 use crate::view_read_set_campaign::attempt_key::AttemptKey;
@@ -271,27 +270,47 @@ enum Provisioning {
 /// sets as content-addressed files: without a directory there is nowhere for
 /// [`ObservedRowSet::persisted`] to write, and a finding pointing at nothing would be unauditable.
 ///
-/// **Phase boundary.** Everything the campaign body does is implemented, down to the inventory line
-/// [`run_campaign`] opens with. What remains is this entrypoint alone: freezing the inventory and
-/// pins, creating the ledger, and finalizing it on every path — including a failure of that very
-/// first write, which is why the body is a separate function. It is still an explicit `todo!()`, and
-/// what is fixed for it is the stage decomposition, the typed inputs and outputs, and the ordering
-/// discipline the stub describes.
+/// **Both preparations precede the ledger**, so a failure to freeze the order or resolve the pins
+/// cannot strand an exclusively created file behind it. After that, nothing may `?`:
+/// [`CampaignSink`] has no `Drop` backstop, so an early return past its creation is a ledger that is
+/// never finalized.
 pub(crate) fn view_read_set_campaign_pilot(
     listen: ListenAddress,
     module_wasm: &Path,
     output: &OutputPath,
     artifacts: &Path,
 ) -> Result<()> {
-    let _ = (listen, module_wasm, output, artifacts);
-    todo!(
-        "Phase 2: freeze the inventory with AttemptInventory::frozen and resolve \
-         CampaignProvenance::resolved before creating anything; create the ledger with \
-         CampaignSink::create; then run the campaign body and finalize the sink on every path — \
-         including a failure of the very first write — surfacing both failures rather than letting \
-         either hide the other, exactly as entity_owner_sender_view_pilot does. Nothing may `?` \
-         past the sink's creation, since CampaignSink has no Drop backstop"
-    )
+    let inventory =
+        AttemptInventory::frozen().context("freezing the campaign attempt inventory")?;
+    let provenance =
+        CampaignProvenance::resolved().context("resolving the campaign's frozen pins")?;
+
+    let mut sink = CampaignSink::create(output).context("creating the campaign ledger")?;
+
+    let walked = run_campaign(
+        &mut sink,
+        &inventory,
+        &provenance,
+        listen,
+        module_wasm,
+        artifacts,
+    );
+    let finalized = sink.finalize().context("finalizing the campaign ledger");
+    campaign_outcome(walked, finalized)
+}
+
+/// Report a campaign that has run and a ledger that has been finalized, hiding neither.
+///
+/// The campaign's own failure leads: finalization is what the harness did afterward, not what went
+/// wrong. Finalizing always runs, so a ledger poisoned by its very first write is still synced and
+/// still accounted for here.
+fn campaign_outcome(walked: Result<()>, finalized: Result<()>) -> Result<()> {
+    match (walked, finalized) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(body), Ok(())) => Err(body),
+        (Ok(()), Err(finalize)) => Err(finalize),
+        (Err(body), Err(finalize)) => Err(campaign_error(body, vec![finalize])),
+    }
 }
 
 /// Record the frozen order and campaign pins, then execute every predeclared attempt.
@@ -431,15 +450,15 @@ fn stop_unreleased(
             attempt.canonical_tag(),
             untouched.len(),
         ))),
-        Err(persist) => Err(into_error(vec![
+        Err(persist) => Err(campaign_error(
             persist.context(format!(
                 "recording the {} predeclared attempts skipped after {} could not prove its \
                  release",
                 untouched.len(),
                 attempt.canonical_tag()
             )),
-            error,
-        ])),
+            vec![error],
+        )),
     }
 }
 
@@ -796,7 +815,7 @@ fn failed_record(
 /// skipped slot's
 /// [`PriorAttemptReleaseFailed`](super::not_run_reason::NotRunReason::PriorAttemptReleaseFailed),
 /// since a ledger holds renderings, and the live [`Error`] for the campaign's own failure, since
-/// [`into_error`] is how a primary failure keeps a cause behind it and a rendering cannot be
+/// [`campaign_error`] is how a primary failure keeps a cause behind it and a rendering cannot be
 /// aggregated behind anything.
 ///
 /// Both minted from one aggregated error, so neither can be the one that lost something.
@@ -1278,11 +1297,11 @@ fn provision_and_record(
             artifact,
         }),
         Err(persist) => {
-            let mut errors = vec![persist];
+            let mut teardown = Vec::new();
             if let Err(e) = resources.teardown() {
-                errors.push(e);
+                teardown.push(e);
             }
-            Err(into_error(errors))
+            Err(campaign_error(persist, teardown))
         }
     }
 }
@@ -1933,15 +1952,11 @@ fn settle(
         },
     };
 
-    let mut release_errors = release();
+    let release_errors = release();
 
     match settled {
         Ok(record) => Ok((record, release_failure(release_errors))),
-        Err(primary) => {
-            let mut errors = vec![primary];
-            errors.append(&mut release_errors);
-            Err(into_error(errors))
-        }
+        Err(primary) => Err(campaign_error(primary, release_errors)),
     }
 }
 
@@ -1952,14 +1967,45 @@ fn settle(
 /// drivers are deliberately separate modules. Aggregating rather than reporting only the first keeps
 /// a teardown failure from hiding behind a disconnect failure.
 fn release_failure(release: Vec<Error>) -> Option<UnreleasedCapabilities> {
-    if release.is_empty() {
+    // The empty guard and the primary are one step: nothing was left unreleased exactly when there
+    // is no first failure to lead.
+    let mut release = release.into_iter();
+    let Some(primary) = release.next() else {
         return None;
-    }
-    let error = into_error(release);
+    };
+    let error = campaign_error(primary, release.collect());
     Some(UnreleasedCapabilities {
         diagnostic: DiagnosticArtifact::of_error(&error),
         error,
     })
+}
+
+/// One error for a primary failure and whatever happened behind it, enumerated in that order:
+/// `primary` is always `[1]`.
+///
+/// **The primary is a separate argument because there is always exactly one.** A single `Vec` would
+/// make "aggregating nothing" representable, leaving a caller-side contract where a type will do;
+/// every call site already knows which failure is the primary, so nothing is lost by saying so.
+/// `later` being empty returns `primary` unchanged, wrapping nothing that has nothing to aggregate.
+///
+/// [`into_error`](crate::provision::teardown::into_error) is the same enumeration and stays where it
+/// is; this campaign needs its own because that one's text names provisioning, which is true of the
+/// capabilities it aggregates and false of a ledger refusal, a teardown, or a final sync.
+fn campaign_error(primary: Error, later: Vec<Error>) -> Error {
+    if later.is_empty() {
+        return primary;
+    }
+
+    let rendered = std::iter::once(&primary)
+        .chain(later.iter())
+        .enumerate()
+        .map(|(position, error)| format!("  [{}] {error:#}", position + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    anyhow!(
+        "{} failures during campaign execution:\n{rendered}",
+        later.len() + 1
+    )
 }
 
 // A child of this module, which is what lets it reach the private `schedule_retry`. Unlike the

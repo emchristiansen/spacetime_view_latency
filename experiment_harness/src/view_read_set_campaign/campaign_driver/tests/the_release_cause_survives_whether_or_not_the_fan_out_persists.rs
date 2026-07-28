@@ -14,7 +14,7 @@ use super::scripted_writer::ScriptedWriter;
 /// failure may consume it. Both paths run from one release failure, since what must not vary is
 /// what they have in common.
 ///
-/// Order is the assertion with teeth: `into_error` enumerates, so a reversed aggregation would
+/// Order is the assertion with teeth: `campaign_error` enumerates, so a reversed aggregation would
 /// contain both strings and still report a stopped ledger as a consequence of a teardown. The
 /// failing path also proves the message drops the fan-out's claim — nothing was recorded, and a
 /// test searching only for the release text would pass while the error asserted a fan-out that
