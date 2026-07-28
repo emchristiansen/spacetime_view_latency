@@ -24,6 +24,10 @@
 //! (`callosum/callosum/src/tables/control_activity{,_view}.rs`). The two arms differ in exactly
 //! one thing — whether the filtered `user_identity` column carries a btree index — because that
 //! absence in production is site 4's held static finding.
+//!
+//! Also defines `control_activity_empty_view`, the capability reproducer for site 4's second
+//! question: whether the pinned release can express a genuinely empty view result without the
+//! sentinel predicate production's `control_activity_view_all` resorts to.
 
 use std::ops::Bound;
 
@@ -233,6 +237,41 @@ pub fn indexed_control_activity_sender_view(
     ctx.from
         .indexed_control_activity()
         .r#where(|row| row.user_identity.eq(ctx.sender()))
+}
+
+/// Capability reproducer for site 4's second question — admin empty-result capability: can a view
+/// return a genuinely empty result *without* naming a sentinel value that some row could one day
+/// hold?
+///
+/// Production's `control_activity_view_all`
+/// (`callosum/callosum/src/tables/control_activity_view_all.rs`) answers its non-admin branch with
+/// `row.id.eq(u64::MAX)`, an always-false filter written, in its own comment, "for want of an empty
+/// query primitive". Its emptiness rests on no row ever holding that `id`, and no schema invariant
+/// says so. This view is that branch with the sentinel removed: `row.id.ne(row.id)` compares the
+/// column to *itself*, so no row can satisfy it whatever values the table holds — the predicate is
+/// unsatisfiable by construction rather than by assumption about the data.
+///
+/// Pinned 2.7.0 exposes no `Query::empty()`, but the typed builder does accept a column on the
+/// right-hand side — `Col<T, V>` is `Copy` and implements `RHS<T, V>`
+/// (`spacetimedb-query-builder-2.7.0/src/table.rs:57`, `src/expr.rs:70`) — and lowers this to
+/// `WHERE ("control_activity"."id" <> "control_activity"."id")`. That is *static* expressibility,
+/// which the type checker alone settles. Whether the server accepts the query and applies an empty
+/// subscription is what running this view is for, and is the only thing it can establish.
+///
+/// The typed contradiction is the whole of this view. The governing spec admits raw-query and
+/// procedural-empty alternatives only if this form fails, so neither is pre-wired here.
+///
+/// **No admin branch, deliberately.** This module has no analogue of production's `admin` table,
+/// and the authorization half of site 4's question is the separate, unrun G4 gate — non-admin
+/// callers receive no unauthorized output from admin views — whose deployed premise is itself in
+/// doubt, since the admin subscription currently reads the raw public table and never reaches
+/// `control_activity_view_all`. Capability and authorization are answered apart; this view answers
+/// only capability.
+#[view(accessor = control_activity_empty_view, public)]
+pub fn control_activity_empty_view(ctx: &ViewContext) -> impl Query<ControlActivity> {
+    ctx.from
+        .control_activity()
+        .r#where(|row| row.id.ne(row.id))
 }
 
 // ---------------------------------------------------------------------------

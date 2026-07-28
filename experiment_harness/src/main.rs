@@ -11,6 +11,7 @@
 mod analysis;
 mod campaign;
 mod client;
+mod control_activity_empty_view_reproducer;
 mod dataset;
 mod entity_owner_pilot;
 mod entity_owner_smoke;
@@ -171,6 +172,18 @@ enum Command {
     /// isolated server, seed owned and non-owned `entity_owner` rows, subscribe to
     /// `entity_owner_sender_view`, and assert the security-scoped result set is exact.
     EntityOwnerSmoke {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// Capability reproducer for site 4's admin empty-result question (spec c33f2e51): provision a
+    /// fresh isolated server, seed `control_activity` rows for the measured identity, and assert
+    /// the sender view returns them while the typed-contradiction `control_activity_empty_view`
+    /// returns none. Answers whether the server accepts and empties such a query; measures nothing.
+    ControlActivityEmptyViewReproducer {
         /// Explicit `host:port` listen address for the fresh isolated standalone.
         #[arg(long)]
         server: String,
@@ -411,6 +424,16 @@ fn main() -> Result<()> {
         } => {
             let listen = ListenAddress::parse(&server)?;
             crate::entity_owner_smoke::entity_owner_sender_view_smoke(listen, &module_wasm)
+        }
+        Command::ControlActivityEmptyViewReproducer {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_activity_empty_view_reproducer::control_activity_empty_view_reproducer(
+                listen,
+                &module_wasm,
+            )
         }
         Command::EntityOwnerVisibleRowsProbe {
             server,

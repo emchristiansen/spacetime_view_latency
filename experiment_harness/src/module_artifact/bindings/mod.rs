@@ -11,6 +11,7 @@ pub mod chronicle_message_type;
 pub mod chronicle_point_view_table;
 pub mod chronicle_query_pk_view_table;
 pub mod chronicle_query_view_table;
+pub mod control_activity_empty_view_table;
 pub mod control_activity_sender_view_table;
 pub mod control_activity_table;
 pub mod control_activity_type;
@@ -41,6 +42,7 @@ pub use chronicle_message_type::ChronicleMessage;
 pub use chronicle_point_view_table::*;
 pub use chronicle_query_pk_view_table::*;
 pub use chronicle_query_view_table::*;
+pub use control_activity_empty_view_table::*;
 pub use control_activity_sender_view_table::*;
 pub use control_activity_table::*;
 pub use control_activity_type::ControlActivity;
@@ -213,6 +215,7 @@ pub struct DbUpdate {
     chronicle_query_pk_view: __sdk::TableUpdate<ChronicleMessage>,
     chronicle_query_view: __sdk::TableUpdate<ChronicleMessage>,
     control_activity: __sdk::TableUpdate<ControlActivity>,
+    control_activity_empty_view: __sdk::TableUpdate<ControlActivity>,
     control_activity_sender_view: __sdk::TableUpdate<ControlActivity>,
     entity_owner: __sdk::TableUpdate<EntityOwner>,
     entity_owner_sender_view: __sdk::TableUpdate<EntityOwner>,
@@ -247,6 +250,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "control_activity" => db_update
                     .control_activity
                     .append(control_activity_table::parse_table_update(table_update)?),
+                "control_activity_empty_view" => db_update.control_activity_empty_view.append(
+                    control_activity_empty_view_table::parse_table_update(table_update)?,
+                ),
                 "control_activity_sender_view" => db_update.control_activity_sender_view.append(
                     control_activity_sender_view_table::parse_table_update(table_update)?,
                 ),
@@ -350,6 +356,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.chronicle_query_view,
             )
             .with_updates_by_pk(|row| &row.uuid);
+        diff.control_activity_empty_view = cache
+            .apply_diff_to_table::<ControlActivity>(
+                "control_activity_empty_view",
+                &self.control_activity_empty_view,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.control_activity_sender_view = cache
             .apply_diff_to_table::<ControlActivity>(
                 "control_activity_sender_view",
@@ -399,6 +411,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "control_activity" => db_update
                     .control_activity
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_activity_empty_view" => db_update
+                    .control_activity_empty_view
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "control_activity_sender_view" => db_update
                     .control_activity_sender_view
@@ -461,6 +476,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "control_activity" => db_update
                     .control_activity
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_activity_empty_view" => db_update
+                    .control_activity_empty_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "control_activity_sender_view" => db_update
                     .control_activity_sender_view
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -514,6 +532,7 @@ pub struct AppliedDiff<'r> {
     chronicle_query_pk_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     chronicle_query_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     control_activity: __sdk::TableAppliedDiff<'r, ControlActivity>,
+    control_activity_empty_view: __sdk::TableAppliedDiff<'r, ControlActivity>,
     control_activity_sender_view: __sdk::TableAppliedDiff<'r, ControlActivity>,
     entity_owner: __sdk::TableAppliedDiff<'r, EntityOwner>,
     entity_owner_sender_view: __sdk::TableAppliedDiff<'r, EntityOwner>,
@@ -561,6 +580,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ControlActivity>(
             "control_activity",
             &self.control_activity,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlActivity>(
+            "control_activity_empty_view",
+            &self.control_activity_empty_view,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ControlActivity>(
@@ -1279,6 +1303,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         chronicle_query_pk_view_table::register_table(client_cache);
         chronicle_query_view_table::register_table(client_cache);
         control_activity_table::register_table(client_cache);
+        control_activity_empty_view_table::register_table(client_cache);
         control_activity_sender_view_table::register_table(client_cache);
         entity_owner_table::register_table(client_cache);
         entity_owner_sender_view_table::register_table(client_cache);
@@ -1297,6 +1322,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "chronicle_query_pk_view",
         "chronicle_query_view",
         "control_activity",
+        "control_activity_empty_view",
         "control_activity_sender_view",
         "entity_owner",
         "entity_owner_sender_view",

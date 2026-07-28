@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use spacetimedb_sdk::__codegen::InternalError;
-use spacetimedb_sdk::{DbContext, Identity, Table};
+use spacetimedb_sdk::{DbContext, Identity, Table, Timestamp};
 
 use crate::client::measured_step_failure::MeasuredStepFailure;
 use crate::client::reconnect_failure::ReconnectFailure;
@@ -17,9 +17,11 @@ use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
-    insert_chronicle_message, insert_entity_owner, insert_message, insert_message_visibility,
-    update_entity_owner, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
-    EntityOwnerTableAccess, ReducerEventContext, SubscriptionHandle,
+    insert_chronicle_message, insert_control_activity, insert_entity_owner, insert_message,
+    insert_message_visibility, update_entity_owner, ControlActivity,
+    ControlActivityEmptyViewTableAccess, ControlActivitySenderViewTableAccess, DbConnection,
+    EntityOwner, EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess, ReducerEventContext,
+    SubscriptionHandle,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -51,6 +53,16 @@ pub(crate) const TABLE_ENTITY_OWNER_SENDER_VIEW: &str = "entity_owner_sender_vie
 /// contract, with the module's `#[table(accessor = entity_owner, public)]`, shared for the same
 /// reason.
 pub(crate) const TABLE_ENTITY_OWNER: &str = "entity_owner";
+/// The `control_activity_sender_view` subscription query name — the same cross-component contract
+/// with the module's `#[view(accessor = control_activity_sender_view, …)]`. The empty-view
+/// reproducer subscribes to this one as its composition control: it proves the seeded rows are
+/// present and visible to the caller, so an empty answer from the view below is emptiness by
+/// predicate rather than an empty table.
+pub(crate) const TABLE_CONTROL_ACTIVITY_SENDER_VIEW: &str = "control_activity_sender_view";
+/// The `control_activity_empty_view` subscription query name — the contract with the module's
+/// `#[view(accessor = control_activity_empty_view, …)]`, the typed-contradiction capability
+/// reproducer for site 4's admin empty-result question.
+pub(crate) const TABLE_CONTROL_ACTIVITY_EMPTY_VIEW: &str = "control_activity_empty_view";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -521,6 +533,58 @@ impl ConnectedClient {
     /// issuing no new subscription.
     pub(crate) fn read_entity_owner_sender_view(&self) -> Vec<EntityOwner> {
         self.conn.db.entity_owner_sender_view().iter().collect()
+    }
+
+    /// Seed one `control_activity` row via its confirmed insertion reducer — the site 4 empty-view
+    /// reproducer's seeding primitive. Copies [`Self::insert_entity_owner`] exactly, over
+    /// `insert_control_activity`, so both candidates' seeding waits on the same confirmation
+    /// primitive and cannot diverge in how they wait.
+    ///
+    /// `ts` is an explicit parameter because the module's reducer takes one rather than reading the
+    /// clock, which is what makes a seeded row reproducible from the seed alone.
+    pub(crate) fn insert_control_activity(
+        &self,
+        id: u64,
+        ts: Timestamp,
+        control_uuid: u64,
+        user_identity: Identity,
+    ) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn
+                .reducers
+                .insert_control_activity_then(id, ts, control_uuid, user_identity, cb)
+        })
+        .with_context(|| format!("seeding control_activity id={id}"))
+    }
+
+    /// Subscribe to `control_activity_sender_view` and, once its initial snapshot is applied, read
+    /// the caller-scoped rows out of the client cache — the empty-view reproducer's **composition
+    /// control**. Built on [`Self::subscribe_and_await_applied`], the same primitive every other
+    /// candidate's subscription uses.
+    pub(crate) fn subscribe_and_read_control_activity_sender_view(
+        &self,
+    ) -> Result<Vec<ControlActivity>> {
+        self.subscribe_and_await_applied(format!(
+            "SELECT * FROM {TABLE_CONTROL_ACTIVITY_SENDER_VIEW}"
+        ))?;
+        Ok(self.conn.db.control_activity_sender_view().iter().collect())
+    }
+
+    /// Subscribe to `control_activity_empty_view` and, once its initial snapshot is applied, read
+    /// whatever reached the client cache — the reproducer's **arm**.
+    ///
+    /// Identical in shape to the control above, differing only in the subscribed name, so the two
+    /// answers differ for one reason: the view's predicate. Reaching the read at all is itself part
+    /// of the result — a query the server refused would fail in
+    /// [`Self::subscribe_and_await_applied`] rather than return an empty vector, which is precisely
+    /// the distinction the capability question turns on.
+    pub(crate) fn subscribe_and_read_control_activity_empty_view(
+        &self,
+    ) -> Result<Vec<ControlActivity>> {
+        self.subscribe_and_await_applied(format!(
+            "SELECT * FROM {TABLE_CONTROL_ACTIVITY_EMPTY_VIEW}"
+        ))?;
+        Ok(self.conn.db.control_activity_empty_view().iter().collect())
     }
 
     /// Subscribe to the `entity_owner` base table and block until its initial snapshot is applied —
