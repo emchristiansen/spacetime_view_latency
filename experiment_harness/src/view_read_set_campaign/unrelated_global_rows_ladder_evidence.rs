@@ -7,6 +7,15 @@
 //! could write the struct literal around six selections of the same rung, or of six different
 //! ladders, and record it as a whole ladder. `sealed` has no children, so that constructor really is
 //! the only door.
+//!
+//! The validator below and the tests are **siblings** of `sealed`, never descendants.
+
+use anyhow::{ensure, Result};
+
+use crate::view_read_set_campaign::attempt_key::AttemptKey;
+use crate::view_read_set_campaign::axis_ladder::AxisLadder;
+use crate::view_read_set_campaign::campaign_params::UNRELATED_GLOBAL_ROWS_LADDER_LEN;
+use crate::view_read_set_campaign::experiment_axis::ExperimentAxis;
 
 mod sealed {
     use anyhow::Result;
@@ -46,9 +55,6 @@ mod sealed {
     /// [`AttemptProvenance`](crate::view_read_set_campaign::attempt_provenance::AttemptProvenance) —
     /// so keeping the whole ladder is what lets a reader see which runtime and instance produced
     /// every point without looking anything back up in the campaign this came from.
-    ///
-    /// **Phase 1 boundary.** The sealing checks are an explicit `todo!()`; what is fixed is the
-    /// shape.
     #[derive(Debug, Clone, Serialize)]
     pub(crate) struct UnrelatedGlobalRowsLadderEvidence {
         rungs: [SelectedCompleteAttempt; UNRELATED_GLOBAL_ROWS_LADDER_LEN],
@@ -58,23 +64,16 @@ mod sealed {
         /// Seal six selections into one ladder, failing loud unless they are one ladder with each
         /// rung present exactly once.
         ///
-        /// **Phase 1 boundary.** The checks land in Phase 2 and are frozen in the `todo!()` below.
+        /// Projects the keys and delegates to
+        /// [`one_unrelated_global_rows_ladder`](super::one_unrelated_global_rows_ladder), where the
+        /// rule is decided and proved; the selections are stored unchanged.
         pub(crate) fn sealed(
             rungs: [SelectedCompleteAttempt; UNRELATED_GLOBAL_ROWS_LADDER_LEN],
         ) -> Result<Self> {
-            let _ = rungs;
-            todo!(
-                "Phase 2: require every selection to satisfy AttemptKey::same_ladder against the \
-                 first — which is exactly the candidate, stage block, role, axis, and candidate \
-                 version agreeing, and is reused rather than restated so the grouping the endpoint \
-                 factor is computed over is defined in one place; require that shared axis to be \
-                 ExperimentAxis::UnrelatedGlobalRows, since a ladder of another axis would be \
-                 interpreted against the wrong endpoint factor F; and require the six \
-                 ScalePoint::rung values to be the six frozen rungs with each occurring exactly \
-                 once, so a repeated rung with another missing cannot pass on count alone. Retry \
-                 ordinals may differ between rungs: each is its own slot's lowest, and requiring \
-                 them equal would reject a legitimate ladder"
-            )
+            super::one_unrelated_global_rows_ladder(
+                rungs.each_ref().map(SelectedCompleteAttempt::key),
+            )?;
+            Ok(Self { rungs })
         }
 
         /// Every rung of the ladder, retained in full so provenance and intermediate points travel
@@ -85,6 +84,53 @@ mod sealed {
     }
 }
 
+/// Whether six identities are one whole unrelated-global-rows ladder.
+///
+/// Three claims: every key is in the first's [`same_ladder`](AttemptKey::same_ladder) class, reused
+/// rather than restated, so the grouping over which `T = S_last / S_first` is computed stays defined
+/// in one place;
+/// that shared axis is [`ExperimentAxis::UnrelatedGlobalRows`], since another axis's ladder carries
+/// a different endpoint factor; and the six rungs sorted are the frozen ladder, which is what a
+/// count cannot stand in for, a repeated rung always pairing with a missing one. Retry ordinals may
+/// differ — `same_ladder` excludes the ordinal, and each rung's selection is its own slot's lowest
+/// survivor.
+///
+/// Pure, and a sibling of [`sealed`], because
+/// [`SelectedCompleteAttempt`](crate::view_read_set_campaign::reconciled_campaign::SelectedCompleteAttempt)
+/// is mintable only from a live campaign: over [`AttemptKey`] the same decision is exactly testable.
+fn one_unrelated_global_rows_ladder(
+    keys: [AttemptKey; UNRELATED_GLOBAL_ROWS_LADDER_LEN],
+) -> Result<()> {
+    let [first, later @ ..] = keys;
+    for (offset, key) in later.iter().enumerate() {
+        ensure!(
+            first.same_ladder(*key),
+            "a ladder is one candidate, axis, role, block and version; selection {} sits on a \
+             different ladder than the first: {} against {}",
+            offset + 2,
+            key.canonical_tag(),
+            first.canonical_tag(),
+        );
+    }
+
+    let axis = first.scale().axis();
+    ensure!(
+        axis == ExperimentAxis::UnrelatedGlobalRows,
+        "an unrelated-global-rows ladder must be swept over that axis, got {}",
+        axis.canonical_tag(),
+    );
+
+    let mut selected: Vec<_> = keys.iter().map(|key| key.scale().rung()).collect();
+    selected.sort();
+    ensure!(
+        selected == AxisLadder::of(axis).rungs(),
+        "a whole ladder is each of the {UNRELATED_GLOBAL_ROWS_LADDER_LEN} frozen rungs exactly \
+         once, got {:?}",
+        selected.iter().map(|rung| rung.get()).collect::<Vec<_>>(),
+    );
+    Ok(())
+}
+
 // This type is intended crate-visible Phase-1 surface — it is the input to the endpoint-factor
 // classifier — but that later analysis layer does not exist, so nothing names it yet. It is exposed
 // as a type alias rather than a `use` re-export for that reason: an unused `use` is an
@@ -92,3 +138,8 @@ mod sealed {
 // its associated functions identically and an unexercised one is ordinary dead code, already
 // governed crate-wide by the skeleton's `#![allow(dead_code)]`.
 pub(crate) type UnrelatedGlobalRowsLadderEvidence = sealed::UnrelatedGlobalRowsLadderEvidence;
+
+// A *sibling* of `sealed`, never a child, so these tests cannot write the struct literal around a
+// set the rule rejects.
+#[cfg(test)]
+mod tests;
