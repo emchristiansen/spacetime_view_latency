@@ -12,7 +12,9 @@ use crate::control_registry_discovery_screen::cold_apply_evidence::ColdApplyEvid
 /// [`ScreenRecord`](super::screen_record::ScreenRecord), where the two are separate variants rather
 /// than one variant with optional fields. That split is what makes "complete or failed implies fully
 /// observed" a structural property instead of a convention.
-#[derive(Debug, Clone, Serialize)]
+/// **No `Debug`**, inherited from [`AttemptFailure`]'s retained partial evidence — see
+/// [`RejectedApplyNanos`](super::rejected_apply_nanos::RejectedApplyNanos).
+#[derive(Clone, Serialize)]
 pub(crate) enum AttemptedOutcome {
     /// The attempt measured its target and its composition validated.
     Complete { evidence: ColdApplyEvidence },

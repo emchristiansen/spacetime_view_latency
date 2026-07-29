@@ -1,10 +1,22 @@
-//! Phase 1 driver skeleton for the `ControlRegistry` discovery E3 screen.
+//! Driver for the `ControlRegistry` discovery E3 screen.
 //!
-//! The frozen inventory, its execution order, the gate/`NotRun` path, and the durable ledger seam
-//! are real here, because those are what the freeze constrains and what the focused tests prove.
-//! The per-attempt acquisition — provision, publish, seed, subscribe, time, validate, tear down —
-//! is [`todo!`] pending Phase 2. Nothing in this file measures anything yet, and no evidence line
-//! this skeleton could write would be valid.
+//! The frozen inventory, its execution order, gate totality, terminal-record settlement, and the
+//! durable ledger seam are real here. The per-attempt acquisition — provision, publish, seed,
+//! observe, time, validate, tear down — is [`todo!`] pending the acquisition milestone. Nothing in
+//! this file measures anything yet.
+//!
+//! **Every fallible operation except ledger storage itself ends as exactly one terminal record.**
+//! Ledger create, serialization, append, and flush are the deliberate exception: claiming durable
+//! terminal coverage after the storage operation failed would be false, so those fail immediately.
+//!
+//! **There is no retry scheduler here, deliberately.** This invocation executes exactly the sixteen
+//! frozen original identities, and each settles with exactly one terminal record.
+//! `RetryEligibility::Retryable` on a `Provision` or `Connect` failure is a prospective fact
+//! authorizing a separately frozen future retry inventory — never an instruction for this run to
+//! loop. Scheduling retries here would need a bound the spec intentionally does not define, and
+//! would recreate the dormant campaign's retry, reconciliation, and selection machinery that the
+//! evidence lifecycle forbids extending. Re-running this screen is a new screen run, not a retry,
+//! and mints no supersession link: every record this driver writes is an original.
 
 use std::fs;
 use std::fs::File;
@@ -13,19 +25,25 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 
 use crate::control_registry_discovery_screen::attempt_inventory::AttemptInventory;
 use crate::control_registry_discovery_screen::attempt_key::AttemptKey;
-use crate::control_registry_discovery_screen::method_facts::MethodFacts;
+use crate::control_registry_discovery_screen::diagnostic_artifact::DiagnosticArtifact;
 use crate::control_registry_discovery_screen::not_run_reason::NotRunReason;
 use crate::control_registry_discovery_screen::pinned_artifact_identity::PinnedArtifactIdentity;
-use crate::control_registry_discovery_screen::screen_composition::ScreenComposition;
+use crate::control_registry_discovery_screen::retry_ordinal::RetryOrdinal;
 use crate::control_registry_discovery_screen::screen_record::ScreenRecord;
-use crate::control_registry_discovery_screen::supersession::Supersession;
 use crate::manifest::listen_address::ListenAddress;
 use crate::manifest::schedule_seed::ScheduleSeed;
 use crate::observation::output_path::OutputPath;
+
+/// Every identity this driver records is an original, so none supersedes an earlier attempt.
+///
+/// Spelled as a named constant at each call site rather than a bare `None`, because the absence of a
+/// supersession link here is a frozen property of this screen — sixteen originals, no scheduler —
+/// and not an argument that happened to be left empty.
+const ORIGINAL_HAS_NO_SUPERSESSION: Option<RetryOrdinal> = None;
 
 /// The gate every attempt waits behind, fixed rather than exposed as flags, so an attempt admitted
 /// by a different gate cannot be compared to one admitted by this. Copied verbatim from
@@ -69,15 +87,17 @@ pub(crate) fn control_registry_discovery_screen(
         output.path().display()
     );
 
+    let attempts = inventory.attempts();
     // Opened on the first attempt reached, never before: a run that freezes an inventory and then
     // refuses every slot must still leave a truthful ledger, but a run that fails to resolve its
     // waiter has not started and must leave the requested path untouched and reusable.
     let mut ledger: Option<File> = None;
-    for attempt in inventory.attempts() {
-        let target = attempt.target();
+
+    for (index, attempt) in attempts.iter().enumerate() {
+        let attempt = *attempt;
         println!(
             "screen: {} at {} rows",
-            target.canonical_tag(),
+            attempt.target().canonical_tag(),
             attempt.rung().history_rows()
         );
 
@@ -86,29 +106,73 @@ pub(crate) fn control_registry_discovery_screen(
             empty => empty.insert(create_ledger(output)?),
         };
 
-        // A refusal consumes no slot and does not abort the remaining slots: it is recorded and the
-        // screen moves on, which is what makes the attempt inventory restart-safe.
-        let record = match admitted_by_gate(&host_waiter)? {
-            false => not_run_record(*attempt, &pinned, seed, NotRunReason::EnvironmentRefused)?,
-            true => run_attempt(listen, module_wasm, *attempt, &pinned, seed)?,
+        let record = match admitted_by_gate(&host_waiter) {
+            // Nothing was gated, and a waiter that cannot be spawned will not gate any later
+            // attempt either. Measuring on an ungated host is what the gate exists to prevent, so
+            // this slot and every remaining one settle here.
+            Err(error) => {
+                let reason = NotRunReason::GateInoperable {
+                    diagnostic: DiagnosticArtifact::of_error(&error),
+                };
+                append_all(
+                    ledger,
+                    &settle_remaining(&attempts[index..], &pinned, seed, &reason)?,
+                )?;
+                return Err(error.context(
+                    "the host gate could not be run, so this attempt and every remaining slot were \
+                     recorded NotRun(GateInoperable) and the screen stopped",
+                ));
+            }
+            // A refusal consumes no slot and does not abort the remaining slots: it is recorded and
+            // the screen moves on, which is what makes the attempt inventory restart-safe.
+            Ok(false) => ScreenRecord::not_run(
+                attempt,
+                &pinned,
+                seed,
+                ORIGINAL_HAS_NO_SUPERSESSION,
+                NotRunReason::EnvironmentRefused,
+            )?,
+            Ok(true) => run_attempt(listen, module_wasm, attempt, &pinned, seed)?,
         };
 
-        let line = serde_json::to_string(&record).context("encoding a screen record")?;
-        writeln!(ledger, "{line}").context("appending a screen record")?;
-        // Flushed per attempt: a screen killed partway keeps the attempts it finished, and the next
-        // attempt's gate wait begins with this one already durable.
-        ledger.flush().context("flushing a screen record")?;
+        // Appended and flushed *before* the release verdict is acted on, so this attempt's own
+        // evidence — including a release failure on the very last slot — is durable regardless of
+        // what the verdict decides about the rest of the run.
+        append_all(ledger, std::slice::from_ref(&record))?;
+
+        if let Some(diagnostic) = record.release_failure_diagnostic() {
+            let reason = NotRunReason::PriorAttemptReleaseFailed {
+                diagnostic: diagnostic.clone(),
+            };
+            append_all(
+                ledger,
+                &settle_remaining(&attempts[index + 1..], &pinned, seed, &reason)?,
+            )?;
+            return Err(anyhow!(
+                "attempt {} did not provably release every resource it acquired, so every \
+                 remaining slot was recorded NotRun(PriorAttemptReleaseFailed) and the screen \
+                 stopped: {diagnostic:?}",
+                attempt.target().canonical_tag(),
+            ));
+        }
     }
+
     Ok(())
 }
 
 /// One attempt's terminal record, measured on its own fresh isolated instance.
 ///
-/// Phase 2 fills this in: provision a verified pinned distribution and fresh server/data directory,
-/// publish the hash-verified module, seed `K` controls with `N / K` history rows each through the
-/// two atomic registry reducers only, observe the host, subscribe to the timed target and stop
-/// inside `on_applied` as its first statement, observe the host again, then validate all four caches
-/// and tear down.
+/// The acquisition milestone fills this in: provision a verified pinned distribution and fresh
+/// server/data directory, publish the hash-verified module, seed `K` controls with `N / K` history
+/// rows each through the two atomic registry reducers only, take the `before` host observation
+/// immediately before issuing the timed subscription, stop the clock inside `on_applied` as its
+/// first statement, take the `after` observation immediately after the timed interval and before any
+/// validation subscription or cache read, then subscribe the other three targets, validate all four
+/// caches, settle, and tear down.
+///
+/// Returns a record rather than an error for every attempt-level failure: each of the nine failure
+/// kinds settles into exactly one of the five record shapes, carrying the facts that existed at its
+/// stage. Only a harness bug propagates.
 fn run_attempt(
     _listen: ListenAddress,
     _module_wasm: &Path,
@@ -117,42 +181,60 @@ fn run_attempt(
     _seed: ScheduleSeed,
 ) -> Result<ScreenRecord> {
     todo!(
-        "Phase 2: provision, publish, seed through the atomic registry reducers, observe the host, \
-         time the cold apply inside on_applied, observe the host again, read all four caches into a \
-         FourWayObservation, then seal ColdApplyEvidence or record a typed AttemptFailure, and tear \
-         down"
+        "acquisition milestone: provision through the monotone PartialProvision prefix, publish, \
+         seed through the atomic registry reducers, take the before observation, time the cold \
+         apply inside on_applied, take the after observation, subscribe the validation targets, \
+         read the four caches into a FourWayObservation, then seal ColdApplyEvidence or settle a \
+         typed AttemptFailure into its stage's record shape, attempt disconnect and teardown, and \
+         record the resulting ResourceDisposition"
     )
 }
 
-/// The record for a slot the gate never admitted.
+/// Settle every slot in `remaining` as `NotRun` under one reason.
 ///
-/// Carries no provision provenance and no host observations, because the gate runs before anything
-/// is provisioned and a refused attempt genuinely observed nothing — the `NotRun` variant has no
-/// fields for them to be absent from. It still carries identity, composition, frozen method facts,
-/// and the pinned artifact identity, so a reader can see what this slot was going to measure.
-fn not_run_record(
-    attempt: AttemptKey,
+/// Separated from the append so the settlement is a pure, testable function: the frozen inventory
+/// promises one terminal record per predeclared attempt, and a run that stops early keeps that
+/// promise only if the slots it never reached are recorded rather than omitted.
+fn settle_remaining(
+    remaining: &[AttemptKey],
     pinned: &PinnedArtifactIdentity,
     seed: ScheduleSeed,
-    reason: NotRunReason,
-) -> Result<ScreenRecord> {
-    Ok(ScreenRecord::NotRun {
-        key: attempt,
-        composition: ScreenComposition::of(attempt),
-        method: MethodFacts::frozen(),
-        pinned: pinned.clone(),
-        supersession: Supersession::of(attempt.retry(), None)?,
-        schedule_seed: seed.get(),
-        reason,
-    })
+    reason: &NotRunReason,
+) -> Result<Vec<ScreenRecord>> {
+    remaining
+        .iter()
+        .map(|attempt| {
+            ScreenRecord::not_run(
+                *attempt,
+                pinned,
+                seed,
+                ORIGINAL_HAS_NO_SUPERSESSION,
+                reason.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Append each record as one NDJSON line and flush.
+///
+/// Flushed per call: a screen killed partway keeps the attempts it finished, and the next attempt's
+/// gate wait begins with this one already durable. A storage failure here is the one fallible
+/// operation that propagates rather than settling into a record — a ledger cannot append a truthful
+/// record about its own failure to append.
+fn append_all(ledger: &mut File, records: &[ScreenRecord]) -> Result<()> {
+    for record in records {
+        let line = serde_json::to_string(record).context("encoding a screen record")?;
+        writeln!(ledger, "{line}").context("appending a screen record")?;
+    }
+    ledger.flush().context("flushing the screen ledger")
 }
 
 /// Whether the host gate admits the next attempt.
 ///
 /// Returns the refusal rather than raising it: the spec requires a refusal to record
 /// `NotRun(EnvironmentRefused)` and leave the remaining slots runnable, so a non-zero exit is a
-/// result here, not an error. A failure to *run* the waiter at all remains an error, because then
-/// nothing was gated.
+/// result here, not an error. A failure to *run* the waiter remains an error, because then nothing
+/// was gated — and the caller settles that as `NotRun(GateInoperable)` for every remaining slot.
 fn admitted_by_gate(host_waiter: &Path) -> Result<bool> {
     let status = Command::new(host_waiter)
         .args(HOST_WAITER_ARGS)
@@ -190,3 +272,6 @@ fn resolve_host_waiter(host_waiter: &Path) -> Result<PathBuf> {
     );
     Ok(resolved)
 }
+
+#[cfg(test)]
+mod tests;
