@@ -62,6 +62,17 @@ const HISTORY_ROW_COUNT: u64 = 1_000;
 /// loop about their own composition.
 const ROWS_PER_CONTROL: u64 = HISTORY_ROW_COUNT / CONTROL_COUNT;
 
+/// The derivation above is only faithful when the division is exact. Integer division would
+/// otherwise truncate, and the seeding loop would write `K * ROWS_PER_CONTROL` rows while the
+/// composition checks assert against `N` — the two constants disagreeing about the composition they
+/// are supposed to fix. The spec freezes `N / K = 100` exactly, so this is a compile-time property
+/// rather than something the driver should be able to get wrong at run time.
+const _: () = assert!(
+    HISTORY_ROW_COUNT % CONTROL_COUNT == 0,
+    "HISTORY_ROW_COUNT must divide evenly by CONTROL_COUNT: the frozen composition is N/K rows per \
+     control exactly",
+);
+
 /// Fixed literal `control_uuid` base. Not the object of study; fixed so seeded state is reproducible
 /// from the seed alone.
 const CONTROL_UUID_BASE: u64 = 9_000;
@@ -86,6 +97,11 @@ const IDENTITY_BYTE_BASE: u8 = 0x40;
 /// Matched to the harness's other single-round-trip budgets. Elapsing is a real failure of this
 /// milestone — the caches did not converge — never a retryable infrastructure fault.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Pause between convergence polls. Short enough that it adds no meaningful latency to a milestone
+/// that is never timed, long enough to remove the hot-spin starvation pressure on the delivery it
+/// waits for. Scheduler behavior on an oversubscribed host is not something a sleep can guarantee.
+const CONVERGENCE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A control's full logical current-state row, independent of which relation produced it.
 ///
@@ -192,35 +208,38 @@ fn run_step_one(client: &ConnectedClient) -> Result<()> {
         .context("subscribing to base control_activity")?;
 
     let expected = expected_after_seeding();
-    check_composition(client, &expected, HISTORY_ROW_COUNT, "after seeding")?;
-    let snapshot_events = await_events(&events_rx, CONTROL_COUNT, "the Arm A initial snapshot")?;
+    let seeded_history = expected_history(false);
+    check_composition(client, &expected, &seeded_history, "after seeding")?;
+    let snapshot_events = collect_events(&events_rx, CONTROL_COUNT, "the Arm A initial snapshot")?;
 
     // Live repeat activity: one strictly later event per control, through the repeat reducer.
     let expected_after_repeat = expected_after_repeat_round();
+    let repeat_history = expected_history(true);
     for control_index in 0..CONTROL_COUNT {
         let id = repeat_round_id(control_index);
         client
             .record_control_activity(id, control_uuid(control_index), activity_ts(id))
             .with_context(|| format!("repeat activity for control index {control_index}"))?;
     }
-    let repeat_events = await_events(&events_rx, CONTROL_COUNT, "the Arm A repeat round")?;
-    await_convergence(client, &expected_after_repeat, HISTORY_ROW_COUNT + CONTROL_COUNT)?;
+    // Every repeat call above has returned, and the pinned SDK invokes a successful reducer's row
+    // callbacks *before* its completion callback (`db_connection.rs:216-219`, whose `apply_update`
+    // runs `invoke_row_callbacks` at `:312`). So the whole repeat round's Arm A deliveries are
+    // already queued here, and the drain inside `collect_events` is exhaustive rather than a
+    // prefix — which is what makes the recorded shape a recording instead of an assumption.
+    let repeat_events = collect_events(&events_rx, CONTROL_COUNT, "the Arm A repeat round")?;
+    await_convergence(client, &expected_after_repeat, &repeat_history)?;
+    // This is also where identity preservation is proven, and the only place it can be: the
+    // expectation carries each control's `control_identity`, `CurrentState` compares identity as
+    // part of the value, and the repeat reducer was never given one to pass. Comparing the two
+    // locally-built expectations to each other would prove nothing, since both derive identity from
+    // the same function.
     check_composition(
         client,
         &expected_after_repeat,
-        HISTORY_ROW_COUNT + CONTROL_COUNT,
+        &repeat_history,
         "after repeat activity",
     )?;
-    ensure!(
-        identities_unchanged(&expected, &expected_after_repeat),
-        "the repeat round changed a control's user_identity; the derived-identity contract failed",
-    );
-
-    let refusals = prove_refusals_roll_back(
-        client,
-        &expected_after_repeat,
-        HISTORY_ROW_COUNT + CONTROL_COUNT,
-    )?;
+    let refusals = prove_refusals_roll_back(client, &expected_after_repeat, &repeat_history)?;
 
     println!(
         "ControlRegistry Step 1: seeded N={HISTORY_ROW_COUNT} history rows across K={CONTROL_COUNT} \
@@ -230,9 +249,12 @@ fn run_step_one(client: &ConnectedClient) -> Result<()> {
          and base control_registry agree on exactly {CONTROL_COUNT} full logical rows; base \
          control_activity holds {HISTORY_ROW_COUNT} rows over exactly {CONTROL_COUNT} controls. \
          After one strictly later activity per control all three reconverge on {CONTROL_COUNT} rows \
-         with {} history rows, every identity preserved and every last_ts advanced. Arm A delivered \
-         [{}] on the initial snapshot and [{}] on the repeat round. All four refusals failed loud \
-         and rolled back with both tables byte-identical:\n{}",
+         with {} history rows, every identity preserved and every last_ts advanced. The whole audit \
+         history was compared row for row against an independently constructed expectation at every \
+         phase, so per-control multiplicity, identity, id, and timestamp are proven rather than \
+         inferred from totals. Arm A delivered [{}] on the initial snapshot and [{}] on the repeat \
+         round, each drained to exhaustion rather than truncated at K. All four refusals failed \
+         loud and rolled back with both tables logically identical across every column:\n{}",
         ROWS_PER_CONTROL - 1,
         HISTORY_ROW_COUNT + CONTROL_COUNT,
         describe(&snapshot_events),
@@ -337,14 +359,42 @@ fn expected_after_repeat_round() -> CurrentState {
         .collect()
 }
 
-/// Whether every control's identity is the same in both states — the derived-identity contract.
-fn identities_unchanged(before: &CurrentState, after: &CurrentState) -> bool {
-    before.len() == after.len()
-        && before.iter().all(|(control_uuid, (identity, _))| {
-            after
-                .get(control_uuid)
-                .is_some_and(|(later, _)| later == identity)
-        })
+/// The complete audit history at a phase, in the canonical order [`sorted_activity`] produces.
+///
+/// Comparing against this is what makes the history proof exact. Totals cannot do it: a row written
+/// under the wrong `control_uuid`, or carrying the wrong identity or timestamp, leaves both the row
+/// count and the distinct-control count untouched while silently changing the per-control
+/// composition the spec freezes.
+type History = Vec<(u64, u64, Identity, Timestamp)>;
+
+/// Every history row the writer contract must have produced, built independently of anything the
+/// server returned.
+///
+/// `include_repeat_round` adds the one strictly later row per control that the live phase appends.
+fn expected_history(include_repeat_round: bool) -> History {
+    let mut rows: History = Vec::new();
+    for control_index in 0..CONTROL_COUNT {
+        for occurrence in 0..ROWS_PER_CONTROL {
+            let id = activity_id(control_index, occurrence);
+            rows.push((
+                id,
+                control_uuid(control_index),
+                control_identity(control_index),
+                activity_ts(id),
+            ));
+        }
+        if include_repeat_round {
+            let id = repeat_round_id(control_index);
+            rows.push((
+                id,
+                control_uuid(control_index),
+                control_identity(control_index),
+                activity_ts(id),
+            ));
+        }
+    }
+    rows.sort();
+    rows
 }
 
 /// Project [`ControlRegistry`] rows to the comparable current state.
@@ -371,7 +421,7 @@ fn activity_state(rows: &[ControlActivity]) -> CurrentState {
 fn check_composition(
     client: &ConnectedClient,
     expected: &CurrentState,
-    history_rows: u64,
+    expected_history: &History,
     phase: &str,
 ) -> Result<()> {
     let arm_a = client.read_control_registry_all_view();
@@ -404,10 +454,12 @@ fn check_composition(
         );
     }
 
+    // Totals first, because they name the failure most directly when they are what broke.
     ensure!(
-        base_activity.len() == history_rows as usize,
-        "{phase}: base control_activity holds {} rows, expected {history_rows}",
+        base_activity.len() == expected_history.len(),
+        "{phase}: base control_activity holds {} rows, expected {}",
         base_activity.len(),
+        expected_history.len(),
     );
     let distinct: BTreeSet<u64> = base_activity.iter().map(|row| row.control_uuid).collect();
     ensure!(
@@ -417,7 +469,42 @@ fn check_composition(
         distinct.len(),
     );
 
+    // Then the whole history, row for row. This is the check that actually pins the frozen
+    // composition: per-control multiplicity, every identity, every id, and every timestamp —
+    // including the non-latest rows, which no current-state projection can see.
+    let observed_history = sorted_activity(&base_activity);
+    if &observed_history != expected_history {
+        let (index, observed_row, expected_row) = first_history_divergence(
+            &observed_history,
+            expected_history,
+        );
+        return Err(anyhow!(
+            "{phase}: base control_activity does not match the expected history. First divergence \
+             at canonical index {index}: observed {observed_row}, expected {expected_row}",
+        ));
+    }
+
     Ok(())
+}
+
+/// Locate the first differing canonical position between an observed and expected history, so a
+/// mismatch reports the offending row rather than two thousand-row dumps.
+fn first_history_divergence(
+    observed: &History,
+    expected: &History,
+) -> (usize, String, String) {
+    let render = |row: Option<&(u64, u64, Identity, Timestamp)>| match row {
+        Some((id, control_uuid, identity, ts)) => {
+            format!("(id={id}, control_uuid={control_uuid}, identity={identity}, ts={ts:?})")
+        }
+        None => "<no row>".to_string(),
+    };
+    let index = observed
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| observed.len().min(expected.len()));
+    (index, render(observed.get(index)), render(expected.get(index)))
 }
 
 /// Block until all four relations reflect the post-repeat state, so the composition check that
@@ -427,17 +514,24 @@ fn check_composition(
 /// subscription has applied them. Re-reading under one absolute deadline until the caches agree is
 /// what separates "not yet delivered" from "wrong", and a timeout here means the caches never
 /// converged — a real failure of this milestone.
+///
+/// The poll backs off between passes rather than spinning. Each pass re-collects all four caches,
+/// including the whole `N + K`-row history, and the thread it would spin is competing for cores with
+/// the SDK background thread that must deliver the very updates being waited on — on a loaded host a
+/// hot loop could manufacture the timeout it is supposed to detect. This is the backoff loop the
+/// sleep policy admits, not a fixed delay standing in for coordination: the exit is the condition,
+/// and the deadline is still absolute.
 fn await_convergence(
     client: &ConnectedClient,
     expected: &CurrentState,
-    history_rows: u64,
+    expected_history: &History,
 ) -> Result<()> {
     let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
     loop {
         if registry_state(&client.read_control_registry_all_view()) == *expected
             && activity_state(&client.read_control_activity_latest_by_control_view()) == *expected
             && registry_state(&client.read_control_registry()) == *expected
-            && client.read_control_activity().len() == history_rows as usize
+            && client.read_control_activity().len() == expected_history.len()
         {
             return Ok(());
         }
@@ -447,37 +541,48 @@ fn await_convergence(
                  {CONVERGENCE_TIMEOUT:?}",
             ));
         }
+        std::thread::sleep(CONVERGENCE_POLL_INTERVAL);
     }
 }
 
-/// Block for exactly `count` Arm A row callbacks, returning their shapes.
+/// Block for at least `minimum` Arm A row callbacks, then drain whatever else is already queued,
+/// returning the whole observed sequence in delivery order.
 ///
-/// Blocks rather than draining what happens to be queued: the pinned SDK writes the cache, runs
-/// `on_applied`, and only then runs the row callbacks, so a non-blocking read would race them and
-/// mis-attribute one phase's events to the next. The count is known exactly — one row per control
-/// in each phase.
-fn await_events(
+/// **Both halves are load-bearing, for opposite reasons.**
+///
+/// It must *block* first because the pinned SDK writes the cache, runs `on_applied`, and only then
+/// runs the row callbacks — so after a subscription is applied, a purely non-blocking read would
+/// race the deliveries and mis-attribute one phase's events to the next.
+///
+/// It must then *drain* because `minimum` is a lower bound, not the count. A control's replacement
+/// may surface as one in-place update or as a delete plus an insert, and stopping at exactly K
+/// would silently truncate the second shape to a K-event prefix — reporting ten deletes as if they
+/// were the whole story, and turning the recording the spec demands back into the assumption it
+/// forbids. For the repeat round the caller's completed reducer calls guarantee every delivery is
+/// already queued, so the drain there is exhaustive.
+fn collect_events(
     events: &mpsc::Receiver<ViewEventShape>,
-    count: u64,
+    minimum: u64,
     phase: &str,
 ) -> Result<Vec<ViewEventShape>> {
     let deadline = Instant::now() + CONVERGENCE_TIMEOUT;
-    let expected = usize::try_from(count).expect("the phase event count fits usize");
-    let mut observed = Vec::with_capacity(expected);
+    let minimum = usize::try_from(minimum).expect("the phase event count fits usize");
+    let mut observed = Vec::with_capacity(minimum);
 
-    while observed.len() < expected {
+    while observed.len() < minimum {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match events.recv_timeout(remaining) {
             Ok(event) => observed.push(event),
             Err(waiting) => {
                 return Err(anyhow!(
-                    "{phase} delivered only [{}] of the {expected} expected Arm A row callbacks \
-                     before {waiting}",
+                    "{phase} delivered only [{}] of the at-least-{minimum} expected Arm A row \
+                     callbacks before {waiting}",
                     describe(&observed),
                 ))
             }
         }
     }
+    observed.extend(events.try_iter());
 
     Ok(observed)
 }
@@ -485,7 +590,9 @@ fn await_events(
 /// Exercise each fail-loud precondition and prove it **rolled back**, returning one report line per
 /// case.
 ///
-/// Every case reads both tables before and after, and requires them byte-identical. That is the
+/// Every case reads both tables before and after and requires them logically identical across every
+/// column — the subscriber sees typed rows, not storage bytes, so this is the logical half of the
+/// spec's byte-for-byte/logically-unchanged requirement, and the report says so. That is the
 /// difference between a refusal and a rollback: an error message alone would be satisfied by a
 /// reducer that wrote the audit row, failed on the registry, and left the two disagreeing. The
 /// caller re-checks whole-composition afterward, which also catches a write delivered too late for
@@ -493,12 +600,16 @@ fn await_events(
 fn prove_refusals_roll_back(
     client: &ConnectedClient,
     expected: &CurrentState,
-    history_rows: u64,
+    expected_history: &History,
 ) -> Result<Vec<String>> {
     let unseeded_control = CONTROL_UUID_BASE + CONTROL_COUNT;
     let fresh_id = HISTORY_ROW_COUNT + CONTROL_COUNT;
     let existing_control = control_uuid(0);
-    let stale_ts = activity_ts(0);
+    // Exactly the control's current `last_ts`, not merely something older. The frozen precondition
+    // is `ts <= last_ts`, and only the equality case separates it from `ts < last_ts`: a reducer
+    // regressed to the strict comparison would refuse any older timestamp just as loudly while
+    // wrongly accepting a duplicate one, and a strictly-older probe could never catch it.
+    let boundary_ts = activity_ts(repeat_round_id(0));
 
     // Each case carries the substring its refusal must contain, so the proof is that the message
     // *identifies the offending key or condition* rather than merely that some error arrived. A
@@ -532,9 +643,11 @@ fn prove_refusals_roll_back(
             }),
         ),
         (
-            "repeat activity whose ts is not strictly later",
+            "repeat activity whose ts equals the recorded last_ts",
             "is not strictly later than the recorded last_ts".to_string(),
-            Box::new(move || client.record_control_activity(fresh_id, existing_control, stale_ts)),
+            Box::new(move || {
+                client.record_control_activity(fresh_id, existing_control, boundary_ts)
+            }),
         ),
     ];
 
@@ -571,7 +684,7 @@ fn prove_refusals_roll_back(
         report.push(format!("{label}: {refusal_text}"));
     }
 
-    check_composition(client, expected, history_rows, "after the refusal cases")?;
+    check_composition(client, expected, expected_history, "after the refusal cases")?;
     Ok(report)
 }
 

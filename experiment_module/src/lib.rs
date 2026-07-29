@@ -136,8 +136,15 @@ pub struct IndexedControlActivity {
     pub user_identity: Identity,
 }
 
-/// The `ControlRegistry` candidate's bounded current-state relation: one row per Control that has
-/// ever had activity, carrying the identity that owns it and the timestamp of its latest activity.
+/// The `ControlRegistry` candidate's bounded current-state relation: under that candidate's writer
+/// contract, one row per Control that has had activity, carrying the identity that owns it and the
+/// timestamp of its latest activity.
+///
+/// The scoping is not pedantry. The retained history-only [`insert_control_activity`] and
+/// [`insert_indexed_control_activity`] belong to the sender-view candidates and write audit rows
+/// with no registry maintenance at all, so nothing structural excludes a control from having
+/// activity and no registry row. The registry reproducer never calls those paths and re-checks
+/// composition after every phase; that discipline, not the schema, is what holds the correspondence.
 ///
 /// This is Arm A of site 4's discovery pair — an O(K) relation maintained by the activity writer —
 /// against Arm B's O(N) [`control_activity_latest_by_control_view`] scan of the audit history. Both
@@ -522,8 +529,11 @@ pub fn insert_indexed_control_activity(
 /// A Control's **first** recorded activity: writes the audit row and creates the
 /// [`ControlRegistry`] row that summarizes it, in one transaction.
 ///
-/// This is where a control's `user_identity` enters the experiment, and the only place it ever
-/// does — [`record_control_activity`] derives it from the registry rather than accepting one. That
+/// This is where a control's `user_identity` enters **the registry candidate's writer contract**,
+/// and the only place in that contract it ever does — [`record_control_activity`] derives it from
+/// the registry rather than accepting one. It is not the only reducer in the module that takes an
+/// identity: the sender-view candidates' [`insert_control_activity`] and
+/// [`insert_indexed_control_activity`] each accept one, and neither maintains a registry row. That
 /// mirrors production's sole writer
 /// (`callosum/callosum/src/tables/insert_chronicle_message/control_activity_update.rs`), which reads
 /// the identity from the owning record rather than taking it from its caller.
