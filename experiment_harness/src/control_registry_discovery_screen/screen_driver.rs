@@ -198,11 +198,16 @@ pub(crate) fn control_registry_discovery_screen(
 ///
 /// Provisions a verified pinned distribution and fresh server/data directory, publishes the
 /// hash-verified module, seeds `K` controls with `N / K` history rows each through the two atomic
-/// registry reducers only, takes the `before` host observation immediately before issuing the timed
-/// subscription, stops the clock inside `on_applied` as its first statement, takes the `after`
-/// observation immediately after the timed interval and before any validation subscription or cache
-/// read, then subscribes the other three targets, validates all four caches, settles, and tears
-/// down.
+/// registry reducers only, takes the `before` host observation immediately before the timed adapter
+/// call, stops the clock inside `on_applied` as its first statement, takes the `after` observation
+/// immediately after the timed interval and before any validation subscription or cache read, then
+/// subscribes the other three targets, validates all four caches, settles, and tears down.
+///
+/// "Immediately before the timed adapter call" is the exact claim, and not "adjacent to the SDK's
+/// `.subscribe`": between the `before` reading and the SDK issue sits the adapter's disclosed fixed
+/// residue — one `mpsc` channel and two boxed callbacks — which is inside the measured interval by
+/// design. What the screen keeps out of both the interval and that gap is the query string and the
+/// diagnostic description, which are built before the bracket opens.
 ///
 /// **Returns a record rather than an error for every attempt-level failure.** Each of the ten
 /// failure kinds settles into exactly one of the five record shapes, carrying the facts that existed
@@ -524,11 +529,11 @@ fn measure(client: &ConnectedClient, attempt: AttemptKey) -> Result<MeasuredSett
         return MeasuredSettlement::not_measured(FailureKind::Reducer, error);
     }
 
-    // Everything the timed subscription needs is prepared *before* the bracket opens, so that the
-    // `before` reading really is immediately before the subscription is issued. Preparing them
-    // afterwards would put two `format!`s between the observation and the measurement and make
-    // "immediately before" false; it would also put the query inside the sample, which the frozen
-    // estimand — cold subscription materialization plus cache apply — excludes.
+    // Everything the timed subscription needs is prepared *before* the bracket opens, so the
+    // `before` reading is immediately before the timed adapter call. Preparing them afterwards would
+    // put two `format!`s between the observation and the measurement, and would also put the query
+    // inside the sample, which the frozen estimand — cold subscription materialization plus cache
+    // apply — excludes.
     let target = attempt.target();
     let sql = target.subscription_sql();
     let description = target.canonical_tag().to_string();
@@ -545,8 +550,9 @@ fn measure(client: &ConnectedClient, attempt: AttemptKey) -> Result<MeasuredSett
         }
     };
 
-    // Nothing between the observation above and the SDK issue but the helper's own disclosed fixed
-    // residue: one `mpsc` channel and two boxed callbacks.
+    // Between the observation above and the SDK issue sits only the adapter's disclosed fixed
+    // residue — one `mpsc` channel and two boxed callbacks — which is inside the measured interval
+    // by design and identical for every caller of that adapter.
     let timed = client.subscribe_cold_target(sql, description);
 
     // Attempted immediately after the timed interval whether or not it applied, and before any
