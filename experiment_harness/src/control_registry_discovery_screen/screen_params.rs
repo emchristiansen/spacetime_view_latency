@@ -6,6 +6,14 @@
 //! [`GLOBAL_ROW_LADDER`] rather than restated, because the freeze names the existing
 //! unrelated/global ladder and a restated copy would be a second source of truth able to drift
 //! from it.
+//!
+//! The seeding constants below — [`CONTROL_UUID_BASE`], [`TS_BASE_MICROS`], [`TS_STEP_MICROS`],
+//! [`IDENTITY_BYTE_BASE`] — are the accepted `ControlRegistry` Step 1 recipe copied exactly, per the
+//! spec's seeding-implementation decision. Freezing the screen's seeding by reference to the
+//! artifact whose capability and semantics were already proven is the point: a second deterministic
+//! recipe would be a second thing to get right. An earlier Phase 1 draft named a
+//! `SCREEN_CONTROL_SUBJECT` claims-derived identity here; it was never used, and it is removed
+//! rather than left contradicting the recipe actually in force.
 
 use crate::entity_owner_pilot::pilot_params::GLOBAL_ROW_LADDER;
 
@@ -90,14 +98,28 @@ pub(crate) const GENERATED_TREE_RECIPE: &str = "from experiment_harness/src/modu
      all relative file paths under LC_ALL=C, hash each file with SHA-256 in that order, then \
      SHA-256 the resulting manifest stream";
 
-/// The fixed subject deriving each control's owning identity. Every attempt gets a fresh isolated
-/// server, so no per-attempt domain separation is needed — the Pilot's
-/// `ENTITY_OWNER_PILOT_GLOBAL_SUBJECT` discipline.
-pub(crate) const SCREEN_CONTROL_SUBJECT: &str = "control-registry-discovery-screen-control";
-
 /// The first `control_uuid` assigned to the screen's controls. Matches the Step 1 reproducer's base
 /// so a reader comparing the two sees the same key space.
 pub(crate) const CONTROL_UUID_BASE: u64 = 9_000;
+
+/// Base timestamp for seeded activity, microseconds since the Unix epoch.
+///
+/// Fixed rather than clock-derived, so a rung's seeded state is reproducible from the frozen
+/// constants alone — the discipline the empty-view reproducer was corrected to follow.
+pub(crate) const TS_BASE_MICROS: i64 = 1_700_000_000_000_000;
+
+/// Microseconds between consecutive activity timestamps. Every row's `ts` is one step past the
+/// previous **global** row's, so all timestamps are globally unique and each control's history is
+/// strictly increasing — which the repeat reducer requires and the latest-per-control comparator
+/// needs to be unambiguous.
+pub(crate) const TS_STEP_MICROS: i64 = 1_000;
+
+/// Base byte of each control's fixed owning identity; control `i` owns `IDENTITY_BYTE_BASE + i`.
+///
+/// A distinct identity per control rather than one shared subject, so the `control_uuid ->
+/// user_identity` dependency the registry preserves is exercised by a column that actually varies
+/// across rows.
+pub(crate) const IDENTITY_BYTE_BASE: u8 = 0x40;
 
 /// Compile-time proof that the freeze is self-consistent.
 ///
@@ -146,5 +168,13 @@ const _: () = {
     assert!(
         CONTROL_UUID_BASE.checked_add(REGISTRY_CONTROLS).is_some(),
         "the control key space must not overflow u64"
+    );
+    assert!(
+        IDENTITY_BYTE_BASE as u64 + REGISTRY_CONTROLS <= u8::MAX as u64,
+        "every control must get a distinct identity byte without wrapping"
+    );
+    assert!(
+        TS_STEP_MICROS > 0,
+        "timestamps must strictly increase, or the repeat reducer refuses its own seeding"
     );
 };

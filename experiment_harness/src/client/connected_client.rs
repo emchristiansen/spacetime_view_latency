@@ -817,8 +817,69 @@ impl ConnectedClient {
         &self,
         target: MeasuredTarget,
     ) -> std::result::Result<(SubscriptionHandle, LatencySample), MeasuredStepFailure> {
+        // Description before the clock, query after it: the campaign's interval has always included
+        // building its own query string, and the diagnostic wording has never been inside it.
+        let description = measured_target_description(target);
         let origin = Instant::now();
-        self.subscribe_retained_from(target, origin)
+        let sql = target.subscription_sql();
+        self.subscribe_retained_sql(sql, description, origin)
+    }
+
+    /// The **cold subscription** channel (E3) for a site whose target the campaign's
+    /// [`MeasuredTarget`] does not name: subscribe to `sql`, block until applied, retain the handle,
+    /// and time the interval from its own issue.
+    ///
+    /// The same endpoint as [`Self::subscribe_measured_target`] — both delegate to
+    /// [`Self::subscribe_retained_sql`], so the interval ends inside `on_applied` as its first
+    /// statement on the SDK thread in either case. This exists because the E3 cold adapter is a
+    /// reusable measurement capability that sites opt into, while `MeasuredTarget` is the campaign's
+    /// own two-relation vocabulary; a site with four targets of its own must not have to mint a
+    /// second timing path to reach the same clock.
+    ///
+    /// **Both `sql` and `description` are already built when this is called**, unlike the campaign
+    /// path, which constructs its query after anchoring. That is the only difference between the two
+    /// intervals, and it is deliberate rather than an oversight in either.
+    ///
+    /// **What this interval contains, exactly.** The query and the description are prebuilt; then
+    /// the origin is anchored here; then [`Self::subscribe_retained_sql`] performs the same fixed
+    /// setup it performs for every caller — one `mpsc` channel and two boxed callbacks — followed by
+    /// the SDK subscription, the server's materialization, and the cache apply, ending inside
+    /// `on_applied` as its first statement. The channel and callback boxing are inside the sample on
+    /// purpose; they are the disclosed fixed residue the helper documents, not something this
+    /// wrapper removes.
+    ///
+    /// Measured once per attempt: a second subscription on this connection is no longer cold.
+    pub(crate) fn subscribe_cold_target(
+        &self,
+        sql: String,
+        description: String,
+    ) -> std::result::Result<(SubscriptionHandle, LatencySample), MeasuredStepFailure> {
+        let origin = Instant::now();
+        self.subscribe_retained_sql(sql, description, origin)
+    }
+
+    /// Subscribe to `sql`, block until its initial snapshot is applied, and **return the retained
+    /// handle**. Untimed.
+    ///
+    /// The unmeasured counterpart to [`Self::subscribe_cold_target`], for the validation
+    /// subscriptions a site issues *after* its timed interval has closed. Taking the query rather
+    /// than naming a relation lets the caller draw both from one place, so the relation whose
+    /// cardinality is validated is necessarily the relation that was subscribed.
+    ///
+    /// **The handle is returned rather than dropped, unlike
+    /// [`Self::subscribe_and_await_applied`].** A site validating a multi-relation composition holds
+    /// several subscriptions live at once and reads all their caches together, so the handles must
+    /// outlive the reads. In pinned SDK 2.7.0 that is belt and braces rather than a fix:
+    /// `SubscriptionHandleImpl` has no `Drop` impl, and unsubscription is only through
+    /// `unsubscribe`/`unsubscribe_then`, which consume `self` — so a dropped handle leaves its
+    /// subscription live. Relying on the absence of a `Drop` impl in an undocumented internal type
+    /// is not a property worth resting a composition check on, and a caller holding the handle does
+    /// not have to.
+    ///
+    /// Reaching the applied callback is part of the result: a query the server refused fails here
+    /// rather than returning an empty cache and being read as a composition mismatch.
+    pub(crate) fn subscribe_untimed(&self, sql: String) -> Result<SubscriptionHandle> {
+        self.subscribe_retained_untimed(sql)
     }
 
     /// The campaign's **reconnect** channel (E4): release this connection, establish a new one
@@ -849,6 +910,9 @@ impl ConnectedClient {
         let database_name = self.database_name.clone();
         let token = self.token.clone();
         let counters = DeliveryCounters::of(rows);
+        // Built before the origin below, like the cold channel's: E4's interval covers the
+        // reconnect and resubscribe, never the wording of a diagnostic about them.
+        let description = measured_target_description(target);
 
         self.disconnect().map_err(|error| {
             ReconnectFailure::ReleaseFailed(
@@ -872,7 +936,8 @@ impl ConnectedClient {
             }
         };
         target.register_delivery_callbacks(&client.conn, counters);
-        match client.subscribe_retained_from(target, origin) {
+        let sql = target.subscription_sql();
+        match client.subscribe_retained_sql(sql, description, origin) {
             Ok((subscription, applied)) => Ok((client, subscription, applied)),
             Err(failure) => Err(ReconnectFailure::NotResubscribed { client, failure }),
         }
@@ -972,13 +1037,35 @@ impl ConnectedClient {
     /// confirmation callback. Waking first would add one channel wake to every apply sample, and an
     /// additive residue biases the endpoint factor `T = S_last / S_first` toward one.
     ///
-    /// For E3 the caller anchors immediately before this call, so one `mpsc` channel, two boxed
-    /// callbacks, and the query string fall inside the interval. That residue is fixed and identical
-    /// for both channels, against a snapshot of thousands of rows over a socket; it is disclosed
-    /// rather than contorted out of an API the two share.
-    fn subscribe_retained_from(
+    /// For E3 the caller anchors immediately before this call, so one `mpsc` channel and two boxed
+    /// callbacks fall inside the interval. What else does depends on the caller's own frozen method,
+    /// and the two differ deliberately: the campaign's channels build their query *after* anchoring,
+    /// as they always have, while the `ControlRegistry` discovery screen builds its own before.
+    /// **No caller builds its diagnostic description inside the interval.** That residue is fixed
+    /// and identical for both campaign channels, against a snapshot of thousands of rows over a
+    /// socket; it is disclosed rather than contorted out of an API the two share.
+    /// Time one subscription's cold apply from an origin the caller already anchored.
+    ///
+    /// Parameterized by query rather than by the campaign's [`MeasuredTarget`], so a site whose
+    /// targets that enum does not name measures the **same** endpoint through the same code instead
+    /// of a lookalike of it. Every timed subscription in the harness goes through here, which is
+    /// what keeps them from drifting.
+    ///
+    /// **`description` names the subscription in this function's two diagnostics and is supplied
+    /// rather than derived**, because the two callers describe their subscriptions differently and
+    /// neither may be silently re-worded by the other's arrival: the campaign names its
+    /// [`MeasuredTarget`] variant, a site names its own target. It is a built `String`, not a
+    /// formatting argument evaluated here, so that every caller can construct it *before* anchoring
+    /// `origin` and no diagnostic wording falls inside a measured interval.
+    ///
+    /// `sql` is likewise already built, but where it was built is the **caller's** choice and the
+    /// callers differ: the campaign anchors first and constructs its query inside its interval, as
+    /// its recorded evidence was collected, while the discovery screen constructs its own before
+    /// anchoring. This function imposes neither.
+    fn subscribe_retained_sql(
         &self,
-        target: MeasuredTarget,
+        sql: String,
+        description: String,
         origin: Instant,
     ) -> std::result::Result<(SubscriptionHandle, LatencySample), MeasuredStepFailure> {
         let (applied_tx, applied_rx) =
@@ -996,21 +1083,22 @@ impl ConnectedClient {
             .on_error(move |_ctx, err| {
                 deliver(&applied_tx, Err(format!("{err:?}")));
             })
-            .subscribe([target.subscription_sql()]);
+            .subscribe([sql]);
 
         let applied = match applied_rx.recv_timeout(SUBSCRIPTION_TIMEOUT) {
             Ok(applied) => applied,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 return Err(MeasuredStepFailure::Timeout(anyhow!(
-                    "the subscription to {target:?} was not applied within {SUBSCRIPTION_TIMEOUT:?}"
+                    "the subscription to {description} was not applied within \
+                     {SUBSCRIPTION_TIMEOUT:?}"
                 )))
             }
             // Not an elapsed bound: both senders live in callbacks the subscription owns, so a
             // disconnect means the SDK dropped them without applying or erroring.
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(MeasuredStepFailure::Infrastructure(anyhow!(
-                    "the applied channel for the subscription to {target:?} disconnected without \
-                     reporting either an applied snapshot or an error"
+                    "the applied channel for the subscription to {description} disconnected \
+                     without reporting either an applied snapshot or an error"
                 )))
             }
         };
@@ -1272,8 +1360,20 @@ impl ConnectedClient {
     /// subscription error or an applied-timeout. Shared by the arm/control result read-back
     /// and the `message_visibility` pair-uniqueness read-back.
     fn subscribe_and_await_applied(&self, sql: String) -> Result<()> {
+        self.subscribe_retained_untimed(sql).map(drop)
+    }
+
+    /// Subscribe to `sql`, block until applied, and return the handle.
+    ///
+    /// The body of [`Self::subscribe_and_await_applied`], which now discards the handle explicitly
+    /// through this. Retaining it is what a caller validating several relations at once needs; the
+    /// single-relation callers that came first genuinely have nothing to hold it for, and dropping
+    /// it leaves the subscription live — pinned `SubscriptionHandleImpl` has no `Drop` impl, and both
+    /// its unsubscribe methods consume `self`.
+    fn subscribe_retained_untimed(&self, sql: String) -> Result<SubscriptionHandle> {
         let (applied_tx, applied_rx) = mpsc::channel::<std::result::Result<(), String>>();
-        self.conn
+        let subscription = self
+            .conn
             .subscription_builder()
             .on_applied({
                 let applied_tx = applied_tx.clone();
@@ -1289,7 +1389,8 @@ impl ConnectedClient {
         applied_rx
             .recv_timeout(SUBSCRIPTION_TIMEOUT)
             .context("waiting for the subscription to be applied")?
-            .map_err(|msg| anyhow!("subscription failed: {msg}"))
+            .map_err(|msg| anyhow!("subscription failed: {msg}"))?;
+        Ok(subscription)
     }
 
     /// Disconnect and join the message-processing thread, reporting every failure the release
@@ -1633,6 +1734,18 @@ fn deliver<T>(sender: &mpsc::Sender<T>, outcome: T) {
         // returned inside the error is the signal we no longer have anyone to hand it to.
         Err(mpsc::SendError(_unreceived)) => {}
     }
+}
+
+/// How the campaign's two measured channels name a subscription in a diagnostic.
+///
+/// A named function rather than an inline `format!` at the two call sites, so the wording the E3 and
+/// E4 adapters have always reported is one value a focused test can pin. It became worth pinning
+/// when [`ConnectedClient::subscribe_retained_sql`] was parameterized to serve a second site:
+/// a shared helper that derived its own description would have re-worded the campaign's diagnostics
+/// as a side effect of the screen arriving, which is exactly the kind of drift a caller-supplied
+/// description prevents.
+fn measured_target_description(target: MeasuredTarget) -> String {
+    format!("{target:?}")
 }
 
 /// Build the completion callback for one measured write at issue `index`, capturing `start` so the

@@ -2,6 +2,10 @@
 
 use serde::Serialize;
 
+use crate::client::connected_client::{
+    TABLE_CONTROL_ACTIVITY, TABLE_CONTROL_ACTIVITY_LATEST_BY_CONTROL_VIEW, TABLE_CONTROL_REGISTRY,
+    TABLE_CONTROL_REGISTRY_ALL_VIEW,
+};
 use crate::control_registry_discovery_screen::candidate_id::CandidateId;
 use crate::control_registry_discovery_screen::screen_params::REGISTRY_CONTROLS;
 use crate::control_registry_discovery_screen::screen_rung::ScreenRung;
@@ -79,6 +83,28 @@ impl ScreenTarget {
         }
     }
 
+    /// The subscription query this target is materialized by.
+    ///
+    /// **One source of truth for all four targets, timed and untimed alike.** The driver times
+    /// exactly one target and then issues the other three as untimed validation subscriptions; both
+    /// paths take their SQL from here, so the relation a cardinality is judged against is
+    /// necessarily the relation that was subscribed. The table names are the existing
+    /// `TABLE_CONTROL_*` constants — cross-component contracts with the module's own `#[view]` and
+    /// `#[table]` accessors — rather than literals restated here.
+    ///
+    /// Copies [`MeasuredTarget::subscription_sql`](crate::view_read_set_campaign::measured_target::MeasuredTarget::subscription_sql),
+    /// which is the same method for the campaign's two targets.
+    pub(crate) fn subscription_sql(self) -> String {
+        match self {
+            Self::ArmA => format!("SELECT * FROM {TABLE_CONTROL_REGISTRY_ALL_VIEW}"),
+            Self::ControlA => format!("SELECT * FROM {TABLE_CONTROL_REGISTRY}"),
+            Self::ArmB => {
+                format!("SELECT * FROM {TABLE_CONTROL_ACTIVITY_LATEST_BY_CONTROL_VIEW}")
+            }
+            Self::ControlB => format!("SELECT * FROM {TABLE_CONTROL_ACTIVITY}"),
+        }
+    }
+
     /// Stable tag naming this target in ledger records and order derivations. Spelled out rather
     /// than derived from the variant name, so a Rust rename cannot move a seeded order against a
     /// recorded seed.
@@ -91,3 +117,6 @@ impl ScreenTarget {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
