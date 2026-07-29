@@ -38,6 +38,7 @@ pub(crate) mod failure_phase;
 pub(crate) mod four_way_composition;
 pub(crate) mod four_way_expectation;
 pub(crate) mod four_way_observation;
+pub(crate) mod gate_outcome;
 pub(crate) mod generated_tree_digest;
 pub(crate) mod host_observations;
 pub(crate) mod method_facts;

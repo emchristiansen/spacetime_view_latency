@@ -164,7 +164,7 @@ impl FailureKind {
 
     /// Whether a failure of this kind can have read the four caches.
     ///
-    /// The `after` observation is taken immediately after the timed interval and *before* any
+    /// The `after` observation is taken immediately after the timed adapter returns and *before* any
     /// validation subscription or cache read, so both after-observation kinds and
     /// `ValidationSubscription` all strike while the caches are still unread. Only `Sample` and
     /// `Semantics` are reached past the reads.

@@ -14,6 +14,12 @@
 #
 # All input is /proc. Malformed input is an error, never a default, since a missing field would
 # otherwise become a passing sample.
+#
+# Exit contract. Zero means the host was admitted. Without `--refusal-exit-code` every other exit is
+# an error, refusal included, which is what the visible-rows probe has always relied on. With it, a
+# completed deadline refusal — and only that — exits with the caller's code, so a caller can tell a
+# gate that reached a verdict from one that never did. Every parse, argument, `/proc`, clock, page
+# size and counter failure keeps raising, because none of them measured the host.
 
 # One-minute load average, from /proc/loadavg.
 def read-load-1 []: nothing -> float {
@@ -109,12 +115,21 @@ def main [
     # Give up once this long has elapsed, checked once per sample, so the deadline can be reached up
     # to one interval late. Unset waits indefinitely.
     --timeout-minutes: float
+    # Exit with this status when the deadline is reached, rather than raising. Supplied by the caller
+    # rather than fixed here so the refusal code has exactly one definition, in the caller that has
+    # to decode it. Unset keeps the historical raise-on-refusal behaviour.
+    --refusal-exit-code: int
 ] {
     if $samples < 1 {
         error make { msg: $"--samples must be at least 1, got ($samples)" }
     }
     if $interval_seconds <= 0.0 {
         error make { msg: $"--interval-seconds must be positive, got ($interval_seconds)" }
+    }
+    # Zero would make a refusal indistinguishable from admission, and a status outside a byte is not
+    # a status a caller can observe.
+    if $refusal_exit_code != null and ($refusal_exit_code < 1 or $refusal_exit_code > 255) {
+        error make { msg: $"--refusal-exit-code must be between 1 and 255, got ($refusal_exit_code)" }
     }
 
     let cpus = (read-cpu-count)
@@ -191,7 +206,15 @@ def main [
         }
 
         if $deadline != null and (date now) >= $deadline {
-            error make { msg: $"timed out after ($sample) samples waiting for load <= ($ceiling_shown), RAM >= ($min_available_gib) GiB and swap I/O <= ($max_swap_io_mib_per_sec) MiB/s; last sample was load1=($load_shown), avail=($ram_shown)GiB, swap=($swap_shown)MiB/s" }
+            # One message, reported two ways: raised when no refusal code was supplied, so the
+            # historical caller sees exactly what it always saw, and written to stderr before the
+            # agreed exit when one was, so the refusal is still diagnosable at the same wording.
+            let refusal = $"timed out after ($sample) samples waiting for load <= ($ceiling_shown), RAM >= ($min_available_gib) GiB and swap I/O <= ($max_swap_io_mib_per_sec) MiB/s; last sample was load1=($load_shown), avail=($ram_shown)GiB, swap=($swap_shown)MiB/s"
+            if $refusal_exit_code == null {
+                error make { msg: $refusal }
+            }
+            print -e $refusal
+            exit $refusal_exit_code
         }
     }
 }

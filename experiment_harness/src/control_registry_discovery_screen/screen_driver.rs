@@ -41,6 +41,9 @@ use crate::control_registry_discovery_screen::failure_kind::FailureKind;
 use crate::control_registry_discovery_screen::four_way_composition::FourWayComposition;
 use crate::control_registry_discovery_screen::four_way_expectation::FourWayExpectation;
 use crate::control_registry_discovery_screen::four_way_observation::FourWayObservation;
+use crate::control_registry_discovery_screen::gate_outcome::{
+    GateOutcome, GATE_REFUSAL_EXIT_CODE, REFUSAL_EXIT_CODE_FLAG,
+};
 use crate::control_registry_discovery_screen::host_observations::HostObservations;
 use crate::control_registry_discovery_screen::not_run_reason::NotRunReason;
 use crate::control_registry_discovery_screen::partial_evidence::PartialEvidence;
@@ -140,33 +143,36 @@ pub(crate) fn control_registry_discovery_screen(
             empty => empty.insert(create_ledger(output)?),
         };
 
-        let record = match admitted_by_gate(&host_waiter) {
-            // Nothing was gated, and a waiter that cannot be spawned will not gate any later
-            // attempt either. Measuring on an ungated host is what the gate exists to prevent, so
-            // this slot and every remaining one settle here.
+        let record = match gate_outcome(&host_waiter) {
+            // The waiter could not be run at all.
             Err(error) => {
-                let reason = NotRunReason::GateInoperable {
-                    diagnostic: DiagnosticArtifact::of_error(&error),
-                };
-                append_all(
-                    ledger,
-                    &settle_remaining(&attempts[index..], &pinned, seed, &reason)?,
-                )?;
-                return Err(error.context(
-                    "the host gate could not be run, so this attempt and every remaining slot were \
-                     recorded NotRun(GateInoperable) and the screen stopped",
-                ));
+                return settle_gate_inoperable(ledger, &attempts[index..], &pinned, seed, error)
             }
-            // A refusal consumes no slot and does not abort the remaining slots: it is recorded and
-            // the screen moves on, which is what makes the attempt inventory restart-safe.
-            Ok(false) => ScreenRecord::not_run(
+            // The waiter ran but reached no verdict, which leaves this attempt exactly as ungated as
+            // one whose waiter never started — so both settle through the same helper.
+            Ok(GateOutcome::Inoperable { status }) => {
+                return settle_gate_inoperable(
+                    ledger,
+                    &attempts[index..],
+                    &pinned,
+                    seed,
+                    anyhow!(
+                        "the host waiter {} terminated with {status} rather than admitting or \
+                         refusing, so this attempt was never gated",
+                        host_waiter.display(),
+                    ),
+                )
+            }
+            // A refusal consumes no measurement or retry budget and does not abort the remaining
+            // slots: this slot settles terminally and the screen moves on to the next original.
+            Ok(GateOutcome::Refused) => ScreenRecord::not_run(
                 attempt,
                 &pinned,
                 seed,
                 ORIGINAL_HAS_NO_SUPERSESSION,
                 NotRunReason::EnvironmentRefused,
             )?,
-            Ok(true) => run_attempt(listen, module_wasm, attempt, &pinned, seed)?,
+            Ok(GateOutcome::Admitted) => run_attempt(listen, module_wasm, attempt, &pinned, seed)?,
         };
 
         // Appended and flushed *before* the release verdict is acted on, so this attempt's own
@@ -200,14 +206,18 @@ pub(crate) fn control_registry_discovery_screen(
 /// hash-verified module, seeds `K` controls with `N / K` history rows each through the two atomic
 /// registry reducers only, takes the `before` host observation immediately before the timed adapter
 /// call, stops the clock inside `on_applied` as its first statement, takes the `after` observation
-/// immediately after the timed interval and before any validation subscription or cache read, then
-/// subscribes the other three targets, validates all four caches, settles, and tears down.
+/// immediately after the timed adapter returns and before any validation subscription or cache read,
+/// then subscribes the other three targets, validates all four caches, settles, and tears down.
 ///
 /// "Immediately before the timed adapter call" is the exact claim, and not "adjacent to the SDK's
-/// `.subscribe`": between the `before` reading and the SDK issue sits the adapter's disclosed fixed
-/// residue — one `mpsc` channel and two boxed callbacks — which is inside the measured interval by
-/// design. What the screen keeps out of both the interval and that gap is the query string and the
-/// diagnostic description, which are built before the bracket opens.
+/// `.subscribe`": between the `before` reading and the enqueue that hands the query to the SDK's
+/// background path sits the adapter's whole setup — the channel and its sender clone, the builder
+/// and the connection-context clone, the two boxed callbacks, and the query conversion and
+/// subscription state that `subscribe` performs — all inside the measured interval by design, and
+/// some of it proportional to the query rather than fixed across targets.
+/// [`ConnectedClient::subscribe_cold_target`] enumerates it precisely. What the screen keeps out of
+/// both the interval and that gap is the query string and the diagnostic description, which are
+/// built before the bracket opens.
 ///
 /// **Returns a record rather than an error for every attempt-level failure.** Each of the ten
 /// failure kinds settles into exactly one of the five record shapes, carrying the facts that existed
@@ -550,13 +560,16 @@ fn measure(client: &ConnectedClient, attempt: AttemptKey) -> Result<MeasuredSett
         }
     };
 
-    // Between the observation above and the SDK issue sits only the adapter's disclosed fixed
-    // residue — one `mpsc` channel and two boxed callbacks — which is inside the measured interval
-    // by design and identical for every caller of that adapter.
+    // Between the observation above and the enqueue that hands the query to the SDK's background
+    // path sits the adapter's setup, all of it inside the measured interval by design: the channel
+    // and its sender clone, the builder and the connection-context clone its construction makes, the
+    // two boxed callbacks, and the query conversion and subscription state that `subscribe` itself
+    // performs. `subscribe_cold_target` enumerates it precisely. Some of that work scales with the
+    // query, so it is not a fixed residue and is not identical across targets.
     let timed = client.subscribe_cold_target(sql, description);
 
-    // Attempted immediately after the timed interval whether or not it applied, and before any
-    // validation subscription or cache read.
+    // Attempted immediately after the timed adapter returns whether or not it applied, and before
+    // any validation subscription or cache read.
     let after = observe_after(bracket_origin);
 
     let (_retained_timed, apply_nanos, host) = match (timed, after) {
@@ -758,7 +771,7 @@ impl LiveSubscriptions {
 /// claims.
 const BRACKET_ORIGIN_OFFSET_NANOS: u64 = 0;
 
-/// Read the host immediately after the timed interval, offset from the bracket's own origin.
+/// Read the host immediately after the timed adapter returns, offset from the bracket's own origin.
 fn observe_after(bracket_origin: Instant) -> Result<EnvironmentSample> {
     let elapsed = bracket_origin.elapsed();
     let offset_nanos = u64::try_from(elapsed.as_nanos()).with_context(|| {
@@ -892,18 +905,58 @@ fn append_all(ledger: &mut File, records: &[ScreenRecord]) -> Result<()> {
     ledger.flush().context("flushing the screen ledger")
 }
 
-/// Whether the host gate admits the next attempt.
+/// Record `remaining` — the current attempt and every slot after it — as `NotRun(GateInoperable)`
+/// and stop the screen.
 ///
-/// Returns the refusal rather than raising it: the spec requires a refusal to record
-/// `NotRun(EnvironmentRefused)` and leave the remaining slots runnable, so a non-zero exit is a
-/// result here, not an error. A failure to *run* the waiter remains an error, because then nothing
-/// was gated — and the caller settles that as `NotRun(GateInoperable)` for every remaining slot.
-fn admitted_by_gate(host_waiter: &Path) -> Result<bool> {
+/// Always returns `Err`, because there is no state in which it has anything to report: it exists for
+/// the two ways an attempt can end up ungated, a waiter that could not be spawned and one that ran
+/// without reaching a verdict. Both leave this run unable to show that what it would measure next
+/// was gated, and neither is distinguishable from the other in what it costs the inventory, so
+/// giving them one settlement is what keeps them from drifting apart. `error` is the only thing that
+/// differs, and it is retained on every settled slot.
+fn settle_gate_inoperable(
+    ledger: &mut File,
+    remaining: &[AttemptKey],
+    pinned: &PinnedArtifactIdentity,
+    seed: ScheduleSeed,
+    error: Error,
+) -> Result<()> {
+    let reason = NotRunReason::GateInoperable {
+        diagnostic: DiagnosticArtifact::of_error(&error),
+    };
+    append_all(ledger, &settle_remaining(remaining, pinned, seed, &reason)?)?;
+    Err(error.context(
+        "the host gate did not gate this attempt, so it and every remaining slot were recorded \
+         NotRun(GateInoperable) and the screen stopped",
+    ))
+}
+
+/// Run the host gate and decode what it concluded.
+///
+/// Returns a refusal rather than raising it: the spec requires a refusal to record
+/// `NotRun(EnvironmentRefused)` and leave the remaining slots runnable, so a *verdict* of refusal is
+/// a result here, not an error.
+///
+/// **Only the agreed exit code is that verdict.** The waiter has one deadline-refusal path and
+/// sixteen paths that raise instead — malformed `/proc/loadavg`, `/proc/cpuinfo`, `/proc/meminfo`
+/// and `/proc/vmstat`, an unreadable or implausible page size, a rejected argument, a clock that did
+/// not advance, swap counters that went backwards — and Nushell exits 1 for every one of them. So
+/// does a refusal, unless we ask for a distinct status. Reading "nonzero" as "refused" would file a
+/// host that was never measured under the reason that says it was measured and found busy.
+///
+/// [`GATE_REFUSAL_EXIT_CODE`] travels to the waiter as an argument instead of being written in the
+/// script, so the number has one definition and cannot drift from the decoder that depends on it.
+///
+/// Failing to spawn the waiter at all stays an error, as it always was: nothing was gated then
+/// either, and the caller settles both that and an inoperable verdict the same way.
+fn gate_outcome(host_waiter: &Path) -> Result<GateOutcome> {
     let status = Command::new(host_waiter)
         .args(HOST_WAITER_ARGS)
+        .arg(REFUSAL_EXIT_CODE_FLAG)
+        .arg(GATE_REFUSAL_EXIT_CODE.to_string())
         .status()
         .with_context(|| format!("running the host waiter {}", host_waiter.display()))?;
-    Ok(status.success())
+    Ok(GateOutcome::of_status(status))
 }
 
 /// Create the ledger exclusively, as the Pilot's and the probe's are: this is the authority on the

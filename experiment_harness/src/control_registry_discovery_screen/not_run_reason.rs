@@ -16,8 +16,8 @@ use crate::control_registry_discovery_screen::diagnostic_artifact::DiagnosticArt
 /// diagnostic that stopped the run rather than referring the reader to another record.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum NotRunReason {
-    /// The host gate ran and refused this attempt. It consumes no slot and does not abort the
-    /// remaining slots — the screen records it and moves on.
+    /// The host gate ran and refused this attempt. It consumes no measurement or retry budget and
+    /// does not abort the remaining slots — this slot settles here and the screen moves on.
     EnvironmentRefused,
     /// The host gate could not be executed at all, so nothing was gated.
     ///

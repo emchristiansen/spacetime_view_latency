@@ -23,16 +23,20 @@
 //! covered for both callback-delivered failures: a reducer refusal and an SDK internal error are
 //! each the application's answer, and each keeps its own wording.
 //!
-//! The timed-subscription adapter contributes one pure factor: the description its two failure
-//! diagnostics interpolate. It is supplied by the caller rather than derived inside the shared
-//! helper, so that serving a second site could not re-word the campaign's own diagnostics, and the
-//! campaign's wording is pinned here.
+//! The two timed cold-subscription adapters contribute no pure factor at all. Where each builds its
+//! query is not asserted here because it is not assertable here: `subscribe_retained_from` takes a
+//! `MeasuredTarget` and so can only build its query inside its own interval, while
+//! `subscribe_cold_target` takes an already-built `String` and so cannot build one there. The
+//! signatures carry that distinction, and a test restating it would only re-check the compiler.
 //!
 //! Out of reach without a server, and covered by inspection instead: anything holding a
 //! `DbConnection` — observer registration and removal, delivery-callback registration, the cache
 //! read-back, and both apply channels, which are network events with no pure factor to extract.
-//! With them the awaited reducer's remaining branches: a failed issue, an elapsed wait, and a
-//! sender dropped without a callback, none of which a hand-delivered message can produce.
+//! That includes the callback-first endpoint itself: `origin.elapsed()` being the applied callback's
+//! first statement is read from the source and from the pinned SDK's documented apply order, not
+//! from a hand-delivered message, because nothing pure can drive an SDK callback. With them the
+//! awaited reducer's remaining branches: a failed issue, an elapsed wait, and a sender dropped
+//! without a callback, none of which a hand-delivered message can produce.
 
 mod a_duplicate_measured_confirmation_is_rejected;
 mod a_duplicate_prerequisite_confirmation_is_rejected;
@@ -50,4 +54,3 @@ mod a_seeding_reducer_error_is_an_application_failure;
 mod measured_confirmations_seal_in_issue_order;
 mod prerequisites_confirm_regardless_of_order;
 mod saturated_confirmations_seal_in_issue_order;
-mod the_campaign_subscription_diagnostic_keeps_its_target_wording;
