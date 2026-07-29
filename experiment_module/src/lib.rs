@@ -28,7 +28,15 @@
 //! Also defines `control_activity_empty_view`, the capability reproducer for site 4's second
 //! question: whether the pinned release can express a genuinely empty view result without the
 //! sentinel predicate production's `control_activity_view_all` resorts to.
+//!
+//! Also defines `control_activity_latest_by_control_view`, the bounded capability probe for site
+//! 4's discovery comparator: whether a procedural view can compute latest-per-`control_uuid` over
+//! the unindexed production-shaped history table at all, and whether such a view is invalidated
+//! when that table changes. It reaches the table through the macro-generated in-crate table handle
+//! because the public `spacetimedb::Local` context is `#[non_exhaustive]` and unconstructible here.
+//! It probes a capability and is never a measured candidate.
 
+use std::collections::btree_map::{BTreeMap, Entry};
 use std::ops::Bound;
 
 use spacetimedb::{
@@ -272,6 +280,80 @@ pub fn control_activity_empty_view(ctx: &ViewContext) -> impl Query<ControlActiv
     ctx.from
         .control_activity()
         .r#where(|row| row.id.ne(row.id))
+}
+
+/// Bounded capability probe for site 4's discovery comparator: can a procedural view compute
+/// latest-per-`control_uuid` over production-shaped `control_activity`, which carries no index the
+/// view could range over?
+///
+/// The governing spec first classified this pattern `Blocked(CapabilityDesign)`, reasoning that a
+/// `#[view]` body receives `LocalReadOnly`, whose generated per-table handle exposes only `count()`
+/// and read-only index accessors, so the only whole-table read expressible is an unbounded range
+/// over a non-unique btree this table does not carry. Those facts are true and the conclusion does
+/// not follow: they bound the accessor surface a view is *handed*, not what its body may execute.
+///
+/// **The preferred public route does not exist, and P1 proved it.** The probe was first written as
+/// `Local {}.control_activity().iter()`, on the claim that `spacetimedb::Local` is a public
+/// field-less struct without `#[non_exhaustive]`. It carries that attribute
+/// (`spacetimedb-2.7.0/src/lib.rs:1543-1545`), as does `LocalReadOnly`, so this foreign module crate
+/// cannot construct it and the pinned compiler rejected the body with `E0639: cannot create
+/// non-exhaustive struct using struct expression`.
+///
+/// What compiles is the route below. The `#[table]` macro emits `control_activity__TableHandle`
+/// **into this crate** (`spacetimedb-bindings-macro-2.7.0/src/table.rs:1263-1267`) and implements
+/// [`Table`] for it (`:1117-1128`); `#[non_exhaustive]` constrains other crates, never the defining
+/// one, so the handle is constructible right here, and [`Table::iter`] is a defaulted public method
+/// on it (`spacetimedb-2.7.0/src/table.rs:40-44`). So the pinned release does not lack the ability
+/// for a view body to scan an unindexed table — it withholds the public context needed to reach it.
+/// That is a construction rule, not an engine limit.
+///
+/// This is a **generated typed** surface, version-coupled to the exact pinned release and not
+/// documented as stable. That does not by itself make the pattern undeployable, but it is a cost
+/// recorded for Control's deployability judgment, not one this module may discount. Raw
+/// `spacetimedb::sys` stays out of candidate code entirely; it is a lower-level diagnostic only.
+///
+/// **Static expressibility is all the type checker settles**, exactly as
+/// [`control_activity_empty_view`] found for its typed contradiction. Whether the server publishes
+/// this view, materializes a subscription over it, and — the question that actually matters —
+/// *invalidates* it when the scanned table changes are runtime questions no inspection can answer.
+/// An imperative scan is invisible to the machinery that learns a view's dependencies from the
+/// query it compiles, so a view that materializes correctly and is then never recomputed is a real
+/// possible outcome, and the reproducer's live-insert step exists to separate it from success.
+///
+/// Returns [`ControlActivity`] rather than a bespoke current-state row type: the latest row per
+/// control *is* one of the table's own rows, so the probe needs no new table, no new reducer, and
+/// no new index — only this view. `control_uuid` is a non-primary-key column of the returned row
+/// type, which is precisely the case an explicit view primary key exists for; pinned schema
+/// validation retains a declared procedural-view primary key rather than inferring one
+/// (`spacetimedb-schema-2.7.0/src/def/validate/v10.rs:1071-1077`).
+///
+/// The comparator is `(ts, id)` rather than `ts` alone. The seed allocates globally unique
+/// timestamps, so the tie-break can never fire; making the order *total* anyway means the result
+/// does not depend on the order the scan happens to yield rows in, which is not a property this
+/// module should have to assume.
+///
+/// **This view is a capability probe, not a candidate implementation.** It is never timed, and no
+/// performance run may use it: whether the composition-matched comparator is reinstated at all is a
+/// decision this probe returns to Control rather than settles.
+#[view(accessor = control_activity_latest_by_control_view, public, primary_key = control_uuid)]
+pub fn control_activity_latest_by_control_view(_ctx: &ViewContext) -> Vec<ControlActivity> {
+    let mut latest: BTreeMap<u64, ControlActivity> = BTreeMap::new();
+    // Parenthesized because a struct literal is not allowed in `for … in` expression position: the
+    // bare braces would parse as the loop body.
+    for row in (control_activity__TableHandle {}).iter() {
+        match latest.entry(row.control_uuid) {
+            Entry::Vacant(slot) => {
+                slot.insert(row);
+            }
+            Entry::Occupied(mut slot) => {
+                let incumbent = slot.get();
+                if (row.ts, row.id) > (incumbent.ts, incumbent.id) {
+                    slot.insert(row);
+                }
+            }
+        }
+    }
+    latest.into_values().collect()
 }
 
 // ---------------------------------------------------------------------------

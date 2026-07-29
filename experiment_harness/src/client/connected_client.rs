@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Error, Result};
 use spacetimedb_sdk::__codegen::InternalError;
-use spacetimedb_sdk::{DbContext, Identity, Table, Timestamp};
+use spacetimedb_sdk::{DbContext, Identity, Table, TableWithPrimaryKey, Timestamp};
 
 use crate::client::measured_step_failure::MeasuredStepFailure;
 use crate::client::reconnect_failure::ReconnectFailure;
+use crate::client::view_event_shape::ViewEventShape;
 use crate::dataset::seed_op::SeedOp;
 use crate::dataset::seeded_visibility::SeededVisibility;
 use crate::dataset::subscribed_rows::SubscribedRows;
@@ -19,8 +20,9 @@ use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_control_activity, insert_entity_owner, insert_message,
     insert_message_visibility, update_entity_owner, ControlActivity,
-    ControlActivityEmptyViewTableAccess, ControlActivitySenderViewTableAccess, DbConnection,
-    EntityOwner, EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess, ReducerEventContext,
+    ControlActivityEmptyViewTableAccess, ControlActivityLatestByControlViewTableAccess,
+    ControlActivitySenderViewTableAccess, DbConnection, EntityOwner,
+    EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess, ReducerEventContext,
     SubscriptionHandle,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
@@ -63,6 +65,11 @@ pub(crate) const TABLE_CONTROL_ACTIVITY_SENDER_VIEW: &str = "control_activity_se
 /// `#[view(accessor = control_activity_empty_view, …)]`, the typed-contradiction capability
 /// reproducer for site 4's admin empty-result question.
 pub(crate) const TABLE_CONTROL_ACTIVITY_EMPTY_VIEW: &str = "control_activity_empty_view";
+/// The `control_activity_latest_by_control_view` subscription query name — the contract with the
+/// module's `#[view(accessor = control_activity_latest_by_control_view, …)]`, the bounded
+/// capability probe for site 4's discovery comparator.
+pub(crate) const TABLE_CONTROL_ACTIVITY_LATEST_BY_CONTROL_VIEW: &str =
+    "control_activity_latest_by_control_view";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -585,6 +592,70 @@ impl ConnectedClient {
             "SELECT * FROM {TABLE_CONTROL_ACTIVITY_EMPTY_VIEW}"
         ))?;
         Ok(self.conn.db.control_activity_empty_view().iter().collect())
+    }
+
+    /// Subscribe to `control_activity_latest_by_control_view` and block until its initial snapshot
+    /// is applied, **without** reading — the latest-per-control probe's subscription.
+    ///
+    /// Split from the read — the [`Self::subscribe_entity_owner_sender_view`] /
+    /// [`Self::read_entity_owner_sender_view`] shape rather than the empty-view reproducer's
+    /// combined primitive — because this probe reads the same live subscription twice: once for the
+    /// initial materialization, and again after a later row is inserted, to prove the view is
+    /// actually invalidated.
+    ///
+    /// What P4 genuinely requires is the **cache-only** read below, which issues no new
+    /// subscription: a second subscription would materialize the view afresh and so could not
+    /// distinguish a maintained view from a recomputed one. The split here is the matching half of
+    /// that, and follows the existing pair; it is not itself load-bearing, since a combined
+    /// subscribe-and-read could have served the first read equally well.
+    ///
+    /// Reaching the applied callback at all is part of the result: a query the server refused fails
+    /// here rather than returning an empty cache.
+    pub(crate) fn subscribe_control_activity_latest_by_control_view(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!(
+            "SELECT * FROM {TABLE_CONTROL_ACTIVITY_LATEST_BY_CONTROL_VIEW}"
+        ))
+    }
+
+    /// Read the latest-per-control view's currently-subscribed rows out of the live client cache,
+    /// issuing no new subscription — the counterpart read for the subscription above.
+    pub(crate) fn read_control_activity_latest_by_control_view(&self) -> Vec<ControlActivity> {
+        self.conn
+            .db
+            .control_activity_latest_by_control_view()
+            .iter()
+            .collect()
+    }
+
+    /// Register all three row callbacks on the latest-per-control view, reporting each delivery's
+    /// [`ViewEventShape`] over `events`.
+    ///
+    /// All three, because the change under test — a control's latest row replaced by a strictly
+    /// later one under the same `control_uuid` key — could be reported as an in-place update or as a
+    /// delete plus an insert, and the probe must record which rather than assume it. Registering
+    /// only `on_update` would silently score a delete-plus-insert as no invalidation at all,
+    /// inverting the probe's answer.
+    ///
+    /// **The callbacks are never removed**, unlike
+    /// [`VisibilityObserver`](crate::view_read_set_campaign::visibility_observer::VisibilityObserver),
+    /// which the paced channel must cancel before the saturated channel runs so instrumentation does
+    /// not charge a channel send per delivered row to a later measurement. Nothing is measured here
+    /// and nothing follows: the probe disconnects immediately after its last check, which drops the
+    /// callbacks with the connection.
+    pub(crate) fn observe_control_activity_latest_by_control_view(
+        &self,
+        events: mpsc::Sender<ViewEventShape>,
+    ) {
+        let table = self.conn.db.control_activity_latest_by_control_view();
+        table.on_insert({
+            let events = events.clone();
+            move |_ctx, _row| deliver(&events, ViewEventShape::Insert)
+        });
+        table.on_update({
+            let events = events.clone();
+            move |_ctx, _old, _new| deliver(&events, ViewEventShape::Update)
+        });
+        table.on_delete(move |_ctx, _row| deliver(&events, ViewEventShape::Delete));
     }
 
     /// Subscribe to the `entity_owner` base table and block until its initial snapshot is applied —
