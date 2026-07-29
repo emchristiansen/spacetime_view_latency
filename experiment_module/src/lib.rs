@@ -35,6 +35,10 @@
 //! when that table changes. It reaches the table through the macro-generated in-crate table handle
 //! because the public `spacetimedb::Local` context is `#[non_exhaustive]` and unconstructible here.
 //! It probes a capability and is never a measured candidate.
+//!
+//! Also defines `ControlRegistry`, `control_registry_all_view`, and the two atomic activity
+//! reducers: site 4's discovery Arm A, a bounded current-state relation maintained by the activity
+//! writer, against that procedural view as the O(N) Arm B comparator.
 
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::ops::Bound;
@@ -130,6 +134,31 @@ pub struct IndexedControlActivity {
     pub control_uuid: u64,
     #[index(btree)]
     pub user_identity: Identity,
+}
+
+/// The `ControlRegistry` candidate's bounded current-state relation: one row per Control that has
+/// ever had activity, carrying the identity that owns it and the timestamp of its latest activity.
+///
+/// This is Arm A of site 4's discovery pair — an O(K) relation maintained by the activity writer —
+/// against Arm B's O(N) [`control_activity_latest_by_control_view`] scan of the audit history. Both
+/// answer the same question; they differ in read set, which is the object of study.
+///
+/// **Keyed on `control_uuid` alone**, because production establishes `control_uuid ->
+/// user_identity` as a function: `entity_owner.entity_uuid` is a primary key, all three activity
+/// insert paths read that stored identity, and no writer mutates it after claim
+/// (`callosum/callosum/src/tables/insert_chronicle_message/control_activity_update.rs`). The
+/// experiment preserves that dependency rather than assuming it — repeat activity derives the
+/// identity from this row instead of accepting one from the caller.
+///
+/// **`user_identity` deliberately carries no index.** Discovery is unfiltered — the deployed
+/// consumers subscribe to every control regardless of identity — so an index here would serve no
+/// read while adding write maintenance to the very write this candidate exists to justify.
+#[table(accessor = control_registry, public)]
+pub struct ControlRegistry {
+    #[primary_key]
+    pub control_uuid: u64,
+    pub user_identity: Identity,
+    pub last_ts: Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +309,17 @@ pub fn control_activity_empty_view(ctx: &ViewContext) -> impl Query<ControlActiv
     ctx.from
         .control_activity()
         .r#where(|row| row.id.ne(row.id))
+}
+
+/// `ControlRegistry` Arm A — the whole registry, unfiltered.
+///
+/// A bare pass-through, because discovery *is* unfiltered: the deployed admin consumers subscribe to
+/// every control regardless of identity, so there is no sender predicate to transcribe here. The
+/// arm's interest is entirely in its read set — O(K) registry rows rather than Arm B's O(N) history
+/// scan — not in its predicate.
+#[view(accessor = control_registry_all_view, public)]
+pub fn control_registry_all_view(ctx: &ViewContext) -> impl Query<ControlRegistry> {
+    ctx.from.control_registry()
 }
 
 /// Bounded capability probe for site 4's discovery comparator: can a procedural view compute
@@ -477,6 +517,143 @@ pub fn insert_indexed_control_activity(
             control_uuid,
             user_identity,
         });
+}
+
+/// A Control's **first** recorded activity: writes the audit row and creates the
+/// [`ControlRegistry`] row that summarizes it, in one transaction.
+///
+/// This is where a control's `user_identity` enters the experiment, and the only place it ever
+/// does — [`record_control_activity`] derives it from the registry rather than accepting one. That
+/// mirrors production's sole writer
+/// (`callosum/callosum/src/tables/insert_chronicle_message/control_activity_update.rs`), which reads
+/// the identity from the owning record rather than taking it from its caller.
+///
+/// **The two writes are one transaction, and that is the contract.** A registry row must never
+/// exist without the audit row it summarizes: `last_ts` claims to be the maximum timestamp over
+/// that control's history, and a registry row committed before any history would summarize nothing.
+/// A withdrawn earlier design did exactly that — a `seed_control_registry` taking `last_ts`
+/// directly — and was replaced for this reason, not for style.
+///
+/// **Both preconditions fail loud with the offending key named**, following
+/// [`insert_message_visibility`]'s boundary discipline: reaching the pinned `insert`'s generic
+/// unique-constraint failure would say a key collided without saying which.
+///
+/// **Returns `Result` rather than panicking, and that is a deliberate local divergence** from
+/// [`update_entity_owner`] and [`insert_message_visibility`], which panic. Both abort the
+/// transaction, so rollback is not what separates them: a panic traps the WASM instance and the
+/// caller receives only "The instance encountered a fatal error", losing the message entirely,
+/// while a returned `Err` is written to the error sink and delivered as the reducer's own text
+/// (`spacetimedb-2.7.0/src/rt.rs:219-224,1090-1097`). This candidate's contract is that a refusal
+/// *names the offending key or timestamp condition* at the caller, which a panic cannot honor. The
+/// divergence is confined to these two reducers and is not a licence to convert the existing ones.
+#[reducer]
+pub fn record_first_control_activity(
+    ctx: &ReducerContext,
+    id: u64,
+    control_uuid: u64,
+    user_identity: Identity,
+    ts: Timestamp,
+) -> Result<(), String> {
+    if ctx
+        .db
+        .control_registry()
+        .control_uuid()
+        .find(control_uuid)
+        .is_some()
+    {
+        return Err(format!(
+            "record_first_control_activity: control_registry already holds \
+             control_uuid={control_uuid}"
+        ));
+    }
+    if ctx.db.control_activity().id().find(id).is_some() {
+        return Err(format!(
+            "record_first_control_activity: control_activity already holds id={id}"
+        ));
+    }
+
+    ctx.db.control_activity().insert(ControlActivity {
+        id,
+        ts,
+        control_uuid,
+        user_identity,
+    });
+    ctx.db.control_registry().insert(ControlRegistry {
+        control_uuid,
+        user_identity,
+        last_ts: ts,
+    });
+    Ok(())
+}
+
+/// Every **subsequent** activity for a control: appends the audit row and advances the registry's
+/// `last_ts`, preserving its identity, in one transaction.
+///
+/// **There is no `user_identity` parameter, and that is the contract.** The identity is read back
+/// from the registry row, so a caller cannot re-attribute a control's activity by passing a
+/// different one — the `control_uuid -> user_identity` dependency production establishes is made
+/// unreachable to violate here rather than merely left unviolated. This is the same reasoning that
+/// keeps `owner` out of [`update_entity_owner`].
+///
+/// **`ts` must be strictly greater than the stored `last_ts`.** With that, the invariant
+/// `registry.last_ts == max(ts)` over the control's history follows by induction: the base case is
+/// [`record_first_control_activity`] committing both rows together, and each step advances the
+/// maximum to exactly the value written. Strictness also makes an out-of-order or replayed event
+/// *unrepresentable* rather than merely unwritten — a `>=` test would silently accept a duplicate
+/// timestamp and leave two rows tied for latest.
+///
+/// **Scope of that invariant.** It holds at every committed state reached *through these two
+/// reducers*. It is not module-global: [`insert_control_activity`] still writes history alone for
+/// the sender-view fixtures, deliberately untouched because its cost must stay representative of
+/// that separate candidate's pending write estimand. Nothing in the schema prevents mixing the two
+/// paths; the registry reproducer simply never calls the history-only one, and validates
+/// composition after every phase. A production migration would extend production's sole writer
+/// atomically rather than add a second writer.
+///
+/// All three preconditions fail loud and abort the transaction, so a refused write leaves both
+/// tables exactly as they were. As with [`record_first_control_activity`], the refusal is a returned
+/// `Err` rather than a panic so the caller receives the offending key or timestamp condition instead
+/// of an opaque instance trap.
+#[reducer]
+pub fn record_control_activity(
+    ctx: &ReducerContext,
+    id: u64,
+    control_uuid: u64,
+    ts: Timestamp,
+) -> Result<(), String> {
+    let Some(existing) = ctx.db.control_registry().control_uuid().find(control_uuid) else {
+        return Err(format!(
+            "record_control_activity: no control_registry row with control_uuid={control_uuid}"
+        ));
+    };
+    if ctx.db.control_activity().id().find(id).is_some() {
+        return Err(format!(
+            "record_control_activity: control_activity already holds id={id}"
+        ));
+    }
+    if ts <= existing.last_ts {
+        return Err(format!(
+            "record_control_activity: ts={ts:?} is not strictly later than the recorded \
+             last_ts={:?} for control_uuid={control_uuid}",
+            existing.last_ts,
+        ));
+    }
+
+    ctx.db.control_activity().insert(ControlActivity {
+        id,
+        ts,
+        control_uuid,
+        user_identity: existing.user_identity,
+    });
+    ctx.db
+        .control_registry()
+        .control_uuid()
+        .update(ControlRegistry {
+            control_uuid,
+            user_identity: existing.user_identity,
+            last_ts: ts,
+        });
+    Ok(())
 }
 
 /// The fixed-cardinality measured mutation for the `EntityOwnerSenderView` candidate: replace an

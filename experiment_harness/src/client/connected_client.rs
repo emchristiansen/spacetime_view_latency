@@ -19,11 +19,12 @@ use crate::dataset::subscribed_table::SubscribedTable;
 use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
     insert_chronicle_message, insert_control_activity, insert_entity_owner, insert_message,
-    insert_message_visibility, update_entity_owner, ControlActivity,
-    ControlActivityEmptyViewTableAccess, ControlActivityLatestByControlViewTableAccess,
-    ControlActivitySenderViewTableAccess, DbConnection, EntityOwner,
-    EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess, ReducerEventContext,
-    SubscriptionHandle,
+    insert_message_visibility, record_control_activity, record_first_control_activity,
+    update_entity_owner, ControlActivity, ControlActivityEmptyViewTableAccess,
+    ControlActivityLatestByControlViewTableAccess, ControlActivitySenderViewTableAccess,
+    ControlActivityTableAccess, ControlRegistry, ControlRegistryAllViewTableAccess,
+    ControlRegistryTableAccess, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
+    EntityOwnerTableAccess, ReducerEventContext, SubscriptionHandle,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -70,6 +71,17 @@ pub(crate) const TABLE_CONTROL_ACTIVITY_EMPTY_VIEW: &str = "control_activity_emp
 /// capability probe for site 4's discovery comparator.
 pub(crate) const TABLE_CONTROL_ACTIVITY_LATEST_BY_CONTROL_VIEW: &str =
     "control_activity_latest_by_control_view";
+/// The `control_activity` base-table subscription query name — the contract with the module's
+/// `#[table(accessor = control_activity, public)]`. The registry reproducer subscribes to it as the
+/// audit-history composition control: Arm B's latest-per-control answer means nothing unless the N
+/// history rows it summarizes are known present.
+pub(crate) const TABLE_CONTROL_ACTIVITY: &str = "control_activity";
+/// The `control_registry_all_view` subscription query name — the contract with the module's
+/// `#[view(accessor = control_registry_all_view, …)]`, site 4's discovery Arm A.
+pub(crate) const TABLE_CONTROL_REGISTRY_ALL_VIEW: &str = "control_registry_all_view";
+/// The `control_registry` base-table subscription query name — Arm A's matched direct
+/// public-table Control, the same role base `entity_owner` plays for the sender view.
+pub(crate) const TABLE_CONTROL_REGISTRY: &str = "control_registry";
 
 /// Wait budget for the initial connection handshake (`on_connect` / `on_connect_error`).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -647,6 +659,114 @@ impl ConnectedClient {
         events: mpsc::Sender<ViewEventShape>,
     ) {
         let table = self.conn.db.control_activity_latest_by_control_view();
+        table.on_insert({
+            let events = events.clone();
+            move |_ctx, _row| deliver(&events, ViewEventShape::Insert)
+        });
+        table.on_update({
+            let events = events.clone();
+            move |_ctx, _old, _new| deliver(&events, ViewEventShape::Update)
+        });
+        table.on_delete(move |_ctx, _row| deliver(&events, ViewEventShape::Delete));
+    }
+
+    /// Record a Control's **first** activity through the atomic registry reducer — the
+    /// `ControlRegistry` candidate's identity-establishing write.
+    ///
+    /// Copies [`Self::insert_control_activity`] exactly, over `record_first_control_activity`, so
+    /// every candidate's seeding waits on the same confirmation primitive.
+    ///
+    /// The module refuses a duplicate registry key or activity id by **returning** an error rather
+    /// than panicking, so the refusal arrives at [`ReducerCompletion::ReducerFailed`] carrying the
+    /// module's own text — the offending key named. A panicking reducer traps the instance and would
+    /// arrive as [`ReducerCompletion::Internal`] with "The instance encountered a fatal error"
+    /// instead, losing the message the fail-loud proofs assert against. Both abort the transaction;
+    /// only one of them says why.
+    pub(crate) fn record_first_control_activity(
+        &self,
+        id: u64,
+        control_uuid: u64,
+        user_identity: Identity,
+        ts: Timestamp,
+    ) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn.reducers.record_first_control_activity_then(
+                id,
+                control_uuid,
+                user_identity,
+                ts,
+                cb,
+            )
+        })
+        .with_context(|| format!("recording first control activity id={id}"))
+    }
+
+    /// Record a **subsequent** activity through the atomic registry reducer.
+    ///
+    /// **Takes no `user_identity`**, unlike its first-activity counterpart, because the module
+    /// derives it from the registry row. A caller cannot re-attribute a control's activity through
+    /// this method, which is what makes the `control_uuid -> user_identity` dependency unreachable
+    /// to violate rather than merely unviolated — the same reason
+    /// [`Self::update_entity_owner`] takes no `owner`.
+    pub(crate) fn record_control_activity(
+        &self,
+        id: u64,
+        control_uuid: u64,
+        ts: Timestamp,
+    ) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn
+                .reducers
+                .record_control_activity_then(id, control_uuid, ts, cb)
+        })
+        .with_context(|| format!("recording control activity id={id}"))
+    }
+
+    /// Subscribe to `control_registry_all_view` and block until applied — Arm A's subscription.
+    pub(crate) fn subscribe_control_registry_all_view(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!("SELECT * FROM {TABLE_CONTROL_REGISTRY_ALL_VIEW}"))
+    }
+
+    /// Read Arm A's currently-subscribed rows out of the live client cache, issuing no new
+    /// subscription — the reproducer re-reads this after every phase.
+    pub(crate) fn read_control_registry_all_view(&self) -> Vec<ControlRegistry> {
+        self.conn.db.control_registry_all_view().iter().collect()
+    }
+
+    /// Subscribe to the `control_registry` base table and block until applied — Arm A's matched
+    /// direct public-table Control.
+    pub(crate) fn subscribe_control_registry(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!("SELECT * FROM {TABLE_CONTROL_REGISTRY}"))
+    }
+
+    /// Read the `control_registry` base table out of the live client cache, issuing no new
+    /// subscription.
+    pub(crate) fn read_control_registry(&self) -> Vec<ControlRegistry> {
+        self.conn.db.control_registry().iter().collect()
+    }
+
+    /// Subscribe to the `control_activity` base table and block until applied — the audit-history
+    /// composition control for Arm B.
+    pub(crate) fn subscribe_control_activity(&self) -> Result<()> {
+        self.subscribe_and_await_applied(format!("SELECT * FROM {TABLE_CONTROL_ACTIVITY}"))
+    }
+
+    /// Read the `control_activity` base table out of the live client cache, issuing no new
+    /// subscription.
+    pub(crate) fn read_control_activity(&self) -> Vec<ControlActivity> {
+        self.conn.db.control_activity().iter().collect()
+    }
+
+    /// Register all three row callbacks on Arm A, reporting each delivery's [`ViewEventShape`].
+    ///
+    /// Same reasoning as
+    /// [`Self::observe_control_activity_latest_by_control_view`]: the repeat-activity round replaces
+    /// each control's row under an unchanged `control_uuid` key, and whether the server reports that
+    /// as an in-place update or a delete plus an insert is an observation the spec requires be
+    /// recorded rather than presumed. The callbacks are likewise never removed — nothing is measured
+    /// and the reproducer disconnects immediately afterward.
+    pub(crate) fn observe_control_registry_all_view(&self, events: mpsc::Sender<ViewEventShape>) {
+        let table = self.conn.db.control_registry_all_view();
         table.on_insert({
             let events = events.clone();
             move |_ctx, _row| deliver(&events, ViewEventShape::Insert)

@@ -13,6 +13,7 @@ mod campaign;
 mod client;
 mod control_activity_empty_view_reproducer;
 mod control_activity_latest_by_control_view_reproducer;
+mod control_registry_step_one_reproducer;
 mod dataset;
 mod entity_owner_pilot;
 mod entity_owner_smoke;
@@ -198,6 +199,19 @@ enum Command {
     /// one latest row per control, and is invalidated when a strictly later row is inserted into the
     /// unindexed table it scans. Answers a capability; measures nothing.
     ControlActivityLatestByControlViewReproducer {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// `ControlRegistry` Step 1 (spec c33f2e51): provision a fresh isolated server, seed K=10
+    /// controls and N=1000 history rows through the two atomic registry reducers only, and prove
+    /// Arm A, Diagnostic Arm B, and the base registry agree on the same K logical rows — before and
+    /// after live repeat activity — and that all four fail-loud preconditions roll back. Capability
+    /// and semantics only; measures nothing.
+    ControlRegistryStepOne {
         /// Explicit `host:port` listen address for the fresh isolated standalone.
         #[arg(long)]
         server: String,
@@ -455,6 +469,16 @@ fn main() -> Result<()> {
         } => {
             let listen = ListenAddress::parse(&server)?;
             crate::control_activity_latest_by_control_view_reproducer::control_activity_latest_by_control_view_reproducer(
+                listen,
+                &module_wasm,
+            )
+        }
+        Command::ControlRegistryStepOne {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_registry_step_one_reproducer::control_registry_step_one_reproducer(
                 listen,
                 &module_wasm,
             )
