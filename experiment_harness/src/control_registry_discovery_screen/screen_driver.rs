@@ -938,7 +938,7 @@ fn settle_gate_inoperable(
 /// a result here, not an error.
 ///
 /// **Only the agreed exit code is that verdict.** The waiter has one deadline-refusal path and
-/// sixteen paths that raise instead — malformed `/proc/loadavg`, `/proc/cpuinfo`, `/proc/meminfo`
+/// seventeen paths that raise instead — malformed `/proc/loadavg`, `/proc/cpuinfo`, `/proc/meminfo`
 /// and `/proc/vmstat`, an unreadable or implausible page size, a rejected argument, a clock that did
 /// not advance, swap counters that went backwards — and Nushell exits 1 for every one of them. So
 /// does a refusal, unless we ask for a distinct status. Reading "nonzero" as "refused" would file a

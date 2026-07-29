@@ -19,12 +19,17 @@ pub(crate) enum NotRunReason {
     /// The host gate ran and refused this attempt. It consumes no measurement or retry budget and
     /// does not abort the remaining slots — this slot settles here and the screen moves on.
     EnvironmentRefused,
-    /// The host gate could not be executed at all, so nothing was gated.
+    /// The host gate reached no verdict, so nothing was gated.
     ///
-    /// Terminal for the run rather than for this slot alone: a waiter that cannot be spawned will
-    /// not gate any later attempt either, and measuring on an ungated host is exactly what the gate
-    /// exists to prevent. The current slot and every remaining one are recorded with this reason and
-    /// flushed before the screen stops.
+    /// Two ways in: a waiter that could not be spawned at all, and one that ran but terminated on an
+    /// unexpected code or a signal instead of admitting or refusing. Neither established a gate
+    /// verdict, so the run cannot claim the attempt was admitted or refused — which is what
+    /// separates this from `EnvironmentRefused`.
+    ///
+    /// Terminal for the run rather than for this slot alone — not as a prediction that the fault is
+    /// permanent, but because this run can no longer show that what it would measure next was gated,
+    /// and measuring on an ungated host is exactly what the gate exists to prevent. The current slot
+    /// and every remaining one are recorded with this reason and flushed before the screen stops.
     GateInoperable { diagnostic: DiagnosticArtifact },
     /// A preceding attempt did not provably release every resource it acquired, so this slot was
     /// never executed.

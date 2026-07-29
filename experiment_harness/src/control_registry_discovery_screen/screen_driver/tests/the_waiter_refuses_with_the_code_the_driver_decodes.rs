@@ -12,11 +12,12 @@ use crate::control_registry_discovery_screen::gate_outcome::{
 /// rather than the frozen eight-minute budget.
 ///
 /// The failing condition is a memory floor above every value the waiter could report. It reads
-/// `MemAvailable` in kB and divides by 1048576, and that field parses as `u64`, so the largest
-/// available figure it can produce at all is `u64::MAX / 1048576` — about 1.76e13 GiB. A floor of
-/// 1e15 GiB is two orders of magnitude beyond that, and still under 2^53, so it survives the
-/// waiter's float parse exactly. The sample therefore cannot pass for any input the waiter is
-/// capable of reading, not merely for any host that plausibly exists.
+/// `MemAvailable` in kB and divides by 1048576. The kernel emits that counter as a `u64` kB value,
+/// which Nushell then converts to a float, so the largest available figure the waiter can produce at
+/// all is bounded by `u64::MAX / 1048576` — about 1.76e13 GiB. A floor of 1e15 GiB is more than 50
+/// times beyond that — about 56.8× — and is itself under 2^53, so it is exactly representable as a
+/// float. The sample therefore cannot pass for any input the waiter is capable of reading, not
+/// merely for any host that plausibly exists.
 ///
 /// The bound has to come from the representable range rather than from physical plausibility, and a
 /// low load ceiling would not give one at all: an idle host can genuinely report a one-minute load
