@@ -13,6 +13,7 @@ mod campaign;
 mod client;
 mod control_activity_empty_view_reproducer;
 mod control_activity_latest_by_control_view_reproducer;
+mod control_registry_discovery_screen;
 mod control_registry_step_one_reproducer;
 mod dataset;
 mod entity_owner_pilot;
@@ -218,6 +219,31 @@ enum Command {
         /// Path to the built module WASM whose bytes are hash-verified before publication.
         #[arg(long)]
         module_wasm: PathBuf,
+    },
+    /// `ControlRegistry` discovery E3 screen (spec c33f2e51): freeze the sixteen predeclared
+    /// attempts — four measured targets at each of two ladder endpoints in each of two
+    /// counterbalanced blocks — and time one cold subscription apply per attempt on its own fresh
+    /// isolated server, validating all four caches after timing. A descriptive screen: its only
+    /// permitted performance outcome is `Indeterminate(ScreenOnly)`.
+    ControlRegistryDiscoveryScreen {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed driving the within-group target order. The counterbalanced rung order and
+        /// the seeded data are both seed-independent: only target order varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
     },
     /// Visible-rows derisking probe for the `EntityOwnerSenderView` candidate (spec c33f2e51): hold
     /// the backing table at a fixed population and vary only how it is partitioned between the
@@ -481,6 +507,22 @@ fn main() -> Result<()> {
             crate::control_registry_step_one_reproducer::control_registry_step_one_reproducer(
                 listen,
                 &module_wasm,
+            )
+        }
+        Command::ControlRegistryDiscoveryScreen {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_registry_discovery_screen::control_registry_discovery_screen(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
             )
         }
         Command::EntityOwnerVisibleRowsProbe {
