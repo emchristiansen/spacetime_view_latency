@@ -9,6 +9,7 @@
 //! `observed` path — and its requirement of live provisioning capabilities — untouched.
 
 mod a_retry_identity_requires_an_earlier_superseded_ordinal;
+mod an_after_observation_failure_splits_on_the_timed_apply;
 mod disposition_must_match_acquisition_depth;
 mod every_failure_kind_maps_to_one_record_shape;
 mod evidence_requires_a_complete_host_bracket;

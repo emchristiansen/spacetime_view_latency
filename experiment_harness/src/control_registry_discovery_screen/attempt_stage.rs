@@ -16,9 +16,11 @@ use crate::control_registry_discovery_screen::failure_kind::FailureKind;
 /// themselves.
 ///
 /// **Deliberately not a timeline.** `TimedSubscription` is `Bracketed` even though it strikes before
-/// the `after` observation is taken, because the driver still closes the bracket afterwards and the
-/// record ends up holding both observations. The stage names the evidence the record carries, not
-/// the chronological position of the failure.
+/// the `after` observation is taken, because in that case the driver still closed the bracket
+/// afterwards and the record ends up holding both observations. Where that same observation *also*
+/// failed, the failure is `HostObservationAfterTimedFailure` and lands in `Unbracketed` instead —
+/// same instant, different stage, because the stage names the evidence the record carries rather
+/// than the chronological position of the failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum AttemptStage {
     /// No instance exists. Only the monotone partial-provisioning prefix is available.
@@ -26,8 +28,9 @@ pub(crate) enum AttemptStage {
     /// An instance was published and is fully identified, but no measurement window opened, so
     /// there is no host observation.
     Unmeasured,
-    /// The timed apply completed but its bracket could not be closed; the `before` observation
-    /// survives and the raw sample is retained as non-evidence.
+    /// The `after` observation failed, so the bracket could not be closed and only the `before`
+    /// observation survives. Whether a raw sample is retained as non-evidence depends on which of
+    /// the two after-observation kinds struck — that is exactly what distinguishes them.
     Unbracketed,
     /// The window opened and closed with both host observations.
     Bracketed,

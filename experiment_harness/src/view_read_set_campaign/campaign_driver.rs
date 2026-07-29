@@ -935,7 +935,17 @@ fn offset_nanos(origin: Instant) -> Result<u64> {
 /// Each parser below selects its line by exact whole-field key and validates that line whole — every
 /// field, including the ones it does not return — so a changed format is an error instead of a
 /// plausible wrong number.
-fn observe_environment(offset_nanos: u64) -> Result<EnvironmentSample> {
+///
+/// **`pub(crate)` although it lives in the dormant campaign file.** The spec's evidence-lifecycle
+/// labels are symbol-level, and the strict `/proc` host-environment observation is labelled
+/// **active**; it merely happens to be implemented here. The narrow
+/// [`ControlRegistry` discovery screen](crate::control_registry_discovery_screen) calls it for its
+/// own before/after bracket rather than duplicating a `/proc` grammar that would then drift.
+/// Widening this one symbol changes no behavior and extends nothing: the campaign's scheduling
+/// helpers, its private [`offset_nanos`], and its fixed
+/// [`POST_ATTEMPT_SAMPLE_OFFSET_NANOS`] all stay here, and the screen computes its own offsets
+/// against its own origin.
+pub(crate) fn observe_environment(offset_nanos: u64) -> Result<EnvironmentSample> {
     let loadavg = read_proc(PROC_LOADAVG)?;
     let meminfo = read_proc(PROC_MEMINFO)?;
     let vmstat = read_proc(PROC_VMSTAT)?;

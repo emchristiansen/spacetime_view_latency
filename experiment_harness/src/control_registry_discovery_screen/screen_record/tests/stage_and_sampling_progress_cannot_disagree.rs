@@ -68,6 +68,7 @@ fn stage_and_sampling_progress_cannot_disagree() {
             FailureKind::Reducer
             | FailureKind::HostObservationBefore
             | FailureKind::TimedSubscription
+            | FailureKind::HostObservationAfterTimedFailure
             | FailureKind::HostObservationAfter
             | FailureKind::ValidationSubscription
             | FailureKind::Sample

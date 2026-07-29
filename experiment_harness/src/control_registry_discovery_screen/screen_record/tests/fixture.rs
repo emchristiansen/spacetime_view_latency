@@ -32,11 +32,15 @@ use crate::view_read_set_campaign::environment_sample::EnvironmentSample;
 /// under test would pass for any mapping at all, including one that filed a semantic mismatch as an
 /// unprovisioned slot. Verified total against [`FailureKind::ALL`] by
 /// [`assert_frozen_tables_are_total`], so a kind cannot be silently dropped from the oracle either.
-pub(super) const FROZEN_STAGES: [(FailureKind, AttemptStage); 9] = [
+pub(super) const FROZEN_STAGES: [(FailureKind, AttemptStage); 10] = [
     (FailureKind::Provision, AttemptStage::Unprovisioned),
     (FailureKind::Connect, AttemptStage::Unmeasured),
     (FailureKind::Reducer, AttemptStage::Unmeasured),
     (FailureKind::HostObservationBefore, AttemptStage::Unmeasured),
+    (
+        FailureKind::HostObservationAfterTimedFailure,
+        AttemptStage::Unbracketed,
+    ),
     (FailureKind::HostObservationAfter, AttemptStage::Unbracketed),
     (FailureKind::TimedSubscription, AttemptStage::Bracketed),
     (FailureKind::ValidationSubscription, AttemptStage::Bracketed),
@@ -46,12 +50,13 @@ pub(super) const FROZEN_STAGES: [(FailureKind, AttemptStage); 9] = [
 
 /// Which kinds are reachable only past a completed timed apply, transcribed from the spec for the
 /// same reason as [`FROZEN_STAGES`].
-pub(super) const FROZEN_REQUIRES_SAMPLE: [(FailureKind, bool); 9] = [
+pub(super) const FROZEN_REQUIRES_SAMPLE: [(FailureKind, bool); 10] = [
     (FailureKind::Provision, false),
     (FailureKind::Connect, false),
     (FailureKind::Reducer, false),
     (FailureKind::HostObservationBefore, false),
     (FailureKind::TimedSubscription, false),
+    (FailureKind::HostObservationAfterTimedFailure, false),
     (FailureKind::HostObservationAfter, true),
     (FailureKind::ValidationSubscription, true),
     (FailureKind::Sample, true),

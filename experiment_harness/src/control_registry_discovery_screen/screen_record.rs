@@ -100,8 +100,10 @@ pub(crate) enum ScreenRecord {
         failure: AttemptFailure,
         release: ResourceDisposition,
     },
-    /// The timed apply completed but its bracket could not be closed. Retains the surviving `before`
-    /// observation and, through the failure's partial evidence, the rejected raw sample.
+    /// The `after` observation failed, so the bracket could not be closed. Retains the surviving
+    /// `before` observation, and — where the timed apply had completed first — the rejected raw
+    /// sample carried by the failure's partial evidence. Where it had not, the failure is
+    /// `HostObservationAfterTimedFailure` and carries one chained diagnostic instead.
     Unbracketed {
         key: AttemptKey,
         composition: ScreenComposition,

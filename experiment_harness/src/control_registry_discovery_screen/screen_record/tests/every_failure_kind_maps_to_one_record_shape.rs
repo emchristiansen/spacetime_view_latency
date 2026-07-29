@@ -25,7 +25,7 @@ use super::fixture::{
 /// The expected constructor comes from [`FROZEN_STAGES`], transcribed from the spec, so this pins
 /// the mapping rather than reading it back out of `kind.stage()`.
 ///
-/// Nine kinds times four constructors, with exactly one acceptance per kind.
+/// Ten kinds times four constructors, with exactly one acceptance per kind.
 #[test]
 fn every_failure_kind_maps_to_one_record_shape() {
     assert_frozen_tables_are_total();

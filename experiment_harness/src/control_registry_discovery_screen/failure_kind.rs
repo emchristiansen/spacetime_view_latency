@@ -8,11 +8,18 @@ use crate::control_registry_discovery_screen::failure_phase::FailurePhase;
 /// The failure classes this screen can produce, each naming one point in the driver's acquisition
 /// and measurement path.
 ///
-/// **A kind determines what evidence is possible**, which is why the subscription failure is split.
+/// **A kind determines what evidence is possible**, which is why two failures are split in two.
 /// `TimedSubscription` names the *measured* subscription failing to apply, so no sample exists;
 /// `ValidationSubscription` names one of the three untimed validation subscriptions failing after
 /// the timed apply already completed, so a raw sample does exist and must be retained. One kind
 /// covering both would leave sample availability undeterminable from the ledger.
+///
+/// The `after`-observation failure is split for exactly the same reason. The observation is attempted
+/// whether or not the timed subscription applied, so its failure has two genuinely different evidence
+/// states behind it: `HostObservationAfterTimedFailure` follows a timed apply that never completed
+/// and therefore has no sample, while `HostObservationAfter` follows one that did and must retain its
+/// rejected nanoseconds. Collapsing them would force one kind to be both sample-bearing and not, which
+/// is the biconditional in [`AttemptFailure`](super::attempt_failure::AttemptFailure) giving up.
 ///
 /// A kind alone does not decide retry eligibility; see
 /// [`AttemptFailure`](super::attempt_failure::AttemptFailure), which combines this kind's
@@ -28,10 +35,19 @@ pub(crate) enum FailureKind {
     Reducer,
     /// The pre-measurement host observation could not be taken, so the window never opened.
     HostObservationBefore,
-    /// The timed subscription failed to apply. No sample was produced.
+    /// The timed subscription failed to apply, and the `after` observation that followed it
+    /// succeeded. No sample was produced, but the host bracket is complete.
     TimedSubscription,
-    /// The post-measurement host observation could not be taken, so the bracket cannot be closed.
-    /// The completed timed apply's raw duration survives as non-evidence.
+    /// The timed subscription failed to apply *and* the `after` observation attempted immediately
+    /// afterwards also failed. No sample exists and no bracket can be closed; the record carries one
+    /// chained diagnostic retaining both failures.
+    ///
+    /// Without this kind the pair would be unrecordable: `TimedSubscription` demands the complete
+    /// host pair its shape carries, and `HostObservationAfter` demands the raw sample a failed apply
+    /// never produced.
+    HostObservationAfterTimedFailure,
+    /// The timed apply completed and the post-measurement host observation could not be taken, so
+    /// the bracket cannot be closed. The completed apply's raw duration survives as non-evidence.
     HostObservationAfter,
     /// One of the three untimed validation subscriptions failed to apply after the timed interval,
     /// so the four caches could not be read.
@@ -44,12 +60,13 @@ pub(crate) enum FailureKind {
 
 impl FailureKind {
     /// Every kind, for exhaustive checks.
-    pub(crate) const ALL: [FailureKind; 9] = [
+    pub(crate) const ALL: [FailureKind; 10] = [
         FailureKind::Provision,
         FailureKind::Connect,
         FailureKind::Reducer,
         FailureKind::HostObservationBefore,
         FailureKind::TimedSubscription,
+        FailureKind::HostObservationAfterTimedFailure,
         FailureKind::HostObservationAfter,
         FailureKind::ValidationSubscription,
         FailureKind::Sample,
@@ -64,7 +81,9 @@ impl FailureKind {
         match self {
             Self::Provision => AttemptStage::Unprovisioned,
             Self::Connect | Self::Reducer | Self::HostObservationBefore => AttemptStage::Unmeasured,
-            Self::HostObservationAfter => AttemptStage::Unbracketed,
+            Self::HostObservationAfterTimedFailure | Self::HostObservationAfter => {
+                AttemptStage::Unbracketed
+            }
             Self::TimedSubscription
             | Self::ValidationSubscription
             | Self::Sample
@@ -86,8 +105,16 @@ impl FailureKind {
             Self::HostObservationBefore | Self::HostObservationAfter => {
                 FailurePhase::HarnessObservation
             }
+            // `HostObservationAfterTimedFailure` sits here, with `TimedSubscription`, rather than
+            // with the two host-observation kinds it is named alongside. Its causally primary
+            // failure *is* the timed subscription failing to apply; the observation failure that
+            // follows only decides which record shape can hold it. Classifying it by the later
+            // failure would let one measurement outcome change phase according to whether a
+            // subsequent `/proc` read happened to succeed, which is a fact about the harness, not
+            // about the measurement.
             Self::Reducer
             | Self::TimedSubscription
+            | Self::HostObservationAfterTimedFailure
             | Self::ValidationSubscription
             | Self::Sample
             | Self::Semantics => FailurePhase::ApplicationOrSemantic,
@@ -115,15 +142,19 @@ impl FailureKind {
     /// a habit: a `Semantics` mismatch reporting no sample, or a `Connect` failure reporting one,
     /// are both rejected.
     ///
-    /// `TimedSubscription` is the instructive exclusion — it names that very apply failing, so it
-    /// is `Bracketed` yet has no sample.
+    /// The two exclusions inside the measurement window are the instructive ones.
+    /// `TimedSubscription` names that very apply failing, so it is `Bracketed` yet has no sample;
+    /// `HostObservationAfterTimedFailure` is `Unbracketed` and has none for the same reason. Only
+    /// `HostObservationAfter` — the *other* after-observation failure, the one reached past a
+    /// completed apply — carries a sample.
     pub(crate) fn requires_sample(self) -> bool {
         match self {
             Self::Provision
             | Self::Connect
             | Self::Reducer
             | Self::HostObservationBefore
-            | Self::TimedSubscription => false,
+            | Self::TimedSubscription
+            | Self::HostObservationAfterTimedFailure => false,
             Self::HostObservationAfter
             | Self::ValidationSubscription
             | Self::Sample
@@ -134,9 +165,9 @@ impl FailureKind {
     /// Whether a failure of this kind can have read the four caches.
     ///
     /// The `after` observation is taken immediately after the timed interval and *before* any
-    /// validation subscription or cache read, so `HostObservationAfter` and `ValidationSubscription`
-    /// both strike while the caches are still unread — they carry a raw sample but no composition.
-    /// Only `Sample` and `Semantics` are reached past the reads.
+    /// validation subscription or cache read, so both after-observation kinds and
+    /// `ValidationSubscription` all strike while the caches are still unread. Only `Sample` and
+    /// `Semantics` are reached past the reads.
     pub(crate) fn can_observe_composition(self) -> bool {
         matches!(self, Self::Sample | Self::Semantics)
     }
