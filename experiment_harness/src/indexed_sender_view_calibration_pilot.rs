@@ -7,15 +7,24 @@
 //! at most [`MAX_PACED_SAMPLES`](calibration_params::MAX_PACED_SAMPLES) production-shaped single-row
 //! rows to the measured identity's own slice, and retains every ordered raw nanosecond.
 //!
+//! **Phase 1 skeleton: nothing here measures anything yet.** The vocabulary, the frozen inventory,
+//! the gate, and the ledger seam are complete, but
+//! [`run_attempt`](calibration_driver) is the sole `todo!()`, so the wired CLI subcommand panics
+//! rather than running a pilot. Every "it runs / appends / retains" statement in this file describes
+//! the frozen method the types encode, not behaviour that exists today.
+//!
 //! **The calibration ceiling is structural, not documentary.** The spec forbids this pilot from
 //! producing any performance, scaling, candidate, or site conclusion and any Arm/Control
 //! comparison, and three properties of this vocabulary enforce that rather than asking a reader to
 //! remember it:
 //!
-//! - [`CalibrationSeries`](calibration_series::CalibrationSeries) is the only type that can hold
-//!   measured durations, and it exposes **no reduction whatsoever** — no median, mean, minimum, or
-//!   maximum, and no per-sample numeric accessor — so no cell statistic can be computed through the
-//!   ordinary API or added to it inattentively. It seals only from a
+//! - Exactly two types hold measured durations —
+//!   [`CalibrationSeries`](calibration_series::CalibrationSeries), which is admitted evidence, and
+//!   [`RejectedSeries`](rejected_series::RejectedSeries), which is retained non-evidence — and
+//!   **neither exposes any reduction whatsoever**: no median, mean, minimum, or maximum, and no
+//!   per-sample numeric accessor, only a count. So no cell statistic can be computed through the
+//!   ordinary API or added to either inattentively. Only `CalibrationSeries` can inhabit a success
+//!   outcome, and it seals only from a
 //!   [`VerifiedPopulation`](verified_population::VerifiedPopulation), a token minted solely by the
 //!   row-by-row composition verifier, so a series measured against a same-cardinality substitution
 //!   cannot be sealed at all.

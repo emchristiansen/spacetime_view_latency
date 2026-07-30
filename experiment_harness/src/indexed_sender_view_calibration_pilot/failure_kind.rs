@@ -130,7 +130,10 @@ impl FailureKind {
     /// Whether a failure of this kind necessarily has a **complete** batch behind it, so a retained
     /// series is mandatory.
     ///
-    /// True exactly for the three kinds reachable only after the batch ran to the frozen count.
+    /// True exactly for the three kinds reachable only after the batch ran to its end. Note that
+    /// "ran to its end" is not "reached the frozen count": [`Self::Sample`] is precisely the kind for
+    /// a batch that terminated normally and still produced a length other than the frozen one, and it
+    /// retains those samples.
     /// Enforced together with [`Self::permits_series`] as a pair of implications rather than the
     /// biconditional the discovery screen can afford.
     ///

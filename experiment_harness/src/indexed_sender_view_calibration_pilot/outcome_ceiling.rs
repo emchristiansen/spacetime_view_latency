@@ -11,9 +11,13 @@ use serde::Serialize;
 /// later reader holding only the ledger sees the limit stated on the line rather than having to know
 /// it from the spec.
 ///
-/// A second variant added later would be a different authorization, and would have to be granted
-/// before it could be written — which is the property this type is for. It is not a comment that a
-/// future edit can quietly contradict.
+/// **What this does and does not enforce.** A single-variant enum excludes nothing at runtime:
+/// adding a wider variant and writing it in [`MethodFacts::frozen`](super::method_facts::MethodFacts)
+/// is a two-line diff inside this module, as quiet as editing a comment. What the type genuinely buys
+/// is that the ceiling is *carried onto every serialized ledger line* — `MethodFacts` has private
+/// fields and one constructor, and all five record shapes hold one — so a ledger-only reader sees the
+/// limit on the line, and widening it is an edit visible in review. A review tripwire, not a grant
+/// requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum OutcomeCeiling {
     /// Evidence for choosing a within-cell sample count, and nothing further.

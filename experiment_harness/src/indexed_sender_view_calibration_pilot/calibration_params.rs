@@ -205,6 +205,23 @@ const _: () = {
         UNRELATED_ACTIVITY_ID_BASE + GLOBAL_ROW_LADDER[BASELINE_RUNG_INDEX] <= OWN_ACTIVITY_ID_BASE,
         "the unrelated key range must end before the own range begins"
     );
+    // Both populations summed — the witness cache's proven size, which
+    // `VerifiedPopulation::verify` adds up and whose `expect` cites this assertion. Stated here
+    // rather than left derivable, because an `expect` citing a proof the freeze does not actually
+    // contain is the same overclaim this block exists to retire. Bounded entirely by frozen
+    // constants once `CalibrationExpectation::after` rejects an append count above the ceiling.
+    let own_at_ceiling = match SUBSCRIBER_OWN_ROWS.checked_add(MAX_PACED_SAMPLES as u64) {
+        Some(rows) => rows,
+        // Unreachable: the assertion above has already failed the build in this case. Written as a
+        // match because `Option::expect` is not const-callable.
+        None => 0,
+    };
+    assert!(
+        own_at_ceiling
+            .checked_add(GLOBAL_ROW_LADDER[BASELINE_RUNG_INDEX])
+            .is_some(),
+        "the own slice at the append ceiling plus the baseline unrelated population must fit u64"
+    );
     assert!(
         TS_STEP_MICROS > 0,
         "timestamps must strictly increase with the activity id"

@@ -1,11 +1,12 @@
 //! The preregistered populations an attempt's caches must hold once its appends are done.
 
+use anyhow::{ensure, Result};
 use serde::Serialize;
 use spacetimedb_sdk::Identity;
 
 use crate::indexed_sender_view_calibration_pilot::calibration_params::{
-    OWN_ACTIVITY_ID_BASE, OWN_CONTROL_UUID, SUBSCRIBER_OWN_ROWS, UNRELATED_ACTIVITY_ID_BASE,
-    UNRELATED_CONTROL_UUID, UNRELATED_IDENTITY_BYTE,
+    MAX_PACED_SAMPLES, OWN_ACTIVITY_ID_BASE, OWN_CONTROL_UUID, SUBSCRIBER_OWN_ROWS,
+    UNRELATED_ACTIVITY_ID_BASE, UNRELATED_CONTROL_UUID, UNRELATED_IDENTITY_BYTE,
 };
 use crate::indexed_sender_view_calibration_pilot::calibration_rung::CalibrationRung;
 use crate::indexed_sender_view_calibration_pilot::expected_population::ExpectedPopulation;
@@ -41,12 +42,29 @@ impl CalibrationExpectation {
     ///
     /// The measured identity is a parameter because it is whichever identity the client connected
     /// as, which is not knowable until runtime; the unrelated owner is derived from a frozen
-    /// constant precisely so it is knowable in advance and provably *not* the measured one.
-    pub(crate) fn after(rung: CalibrationRung, recorded_appends: u64, measured: Identity) -> Self {
+    /// constant so it is knowable in advance and no client ever authenticates as it.
+    ///
+    /// **`recorded_appends` is checked here rather than assumed.** It is the one input the frozen
+    /// constants do not bound — the freeze proves the arithmetic only up to
+    /// [`MAX_PACED_SAMPLES`], so an append count above the ceiling would reach a `checked_add`
+    /// whose `expect` cites a proof that does not cover it. Rejecting it at this boundary is what
+    /// makes every downstream overflow proof in [`calibration_params`] apply to real values:
+    /// past this point `own_rows ≤ SUBSCRIBER_OWN_ROWS + MAX_PACED_SAMPLES`, which is exactly the
+    /// bound `MAX_ACTIVITY_ID` and the timestamp derivation are stated over.
+    pub(crate) fn after(
+        rung: CalibrationRung,
+        recorded_appends: u64,
+        measured: Identity,
+    ) -> Result<Self> {
+        ensure!(
+            recorded_appends <= u64::from(MAX_PACED_SAMPLES),
+            "an attempt cannot have recorded {recorded_appends} appends when the frozen ceiling is \
+             {MAX_PACED_SAMPLES}; the freeze's overflow proofs are stated over that bound",
+        );
         let own_rows = SUBSCRIBER_OWN_ROWS
             .checked_add(recorded_appends)
-            .expect("the compile-time freeze proves the own slice plus every append fits u64");
-        Self {
+            .expect("the check above bounds the append count by the freeze's proven ceiling");
+        Ok(Self {
             own: ExpectedPopulation::new(
                 "own",
                 OWN_ACTIVITY_ID_BASE,
@@ -62,7 +80,7 @@ impl CalibrationExpectation {
                 unrelated_owner(),
             ),
             recorded_appends,
-        }
+        })
     }
 
     /// The measured identity's own population — the seeded slice plus every completed append.

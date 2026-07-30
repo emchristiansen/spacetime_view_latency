@@ -3,7 +3,9 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
-use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
+use crate::indexed_sender_view_calibration_pilot::calibration_params::{
+    MAX_PACED_SAMPLES, MAX_PACED_SAMPLES_USIZE,
+};
 use crate::indexed_sender_view_calibration_pilot::paced_sample_nanos::PacedSampleNanos;
 use crate::indexed_sender_view_calibration_pilot::verified_population::VerifiedPopulation;
 
@@ -95,7 +97,7 @@ impl CalibrationSeries {
         }
         let verified_appends = population.verified_appends();
         ensure!(
-            verified_appends == MAX_PACED_SAMPLES_USIZE as u64,
+            verified_appends == u64::from(MAX_PACED_SAMPLES),
             "this series is complete, so its population must have been verified against all \
              {MAX_PACED_SAMPLES_USIZE} appends, not {verified_appends}",
         );

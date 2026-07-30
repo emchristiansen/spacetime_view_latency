@@ -60,8 +60,9 @@ impl AttemptFailure {
         );
         ensure!(
             !kind.requires_series() || partial.has_series(),
-            "{kind:?} always has a completed paced batch behind it, so it must retain that batch's \
-             samples",
+            "{kind:?} always has a paced batch that returned behind it, so it must retain that \
+             batch's samples — which is not the same as reaching the frozen count, since a batch \
+             that returned short is exactly what a Sample failure reports",
         );
 
         let mismatch = partial.mismatch();

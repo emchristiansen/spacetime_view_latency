@@ -7,9 +7,13 @@
 //! observation, the untimed witness subscription, row-by-row composition verification, typed
 //! settlement, and teardown — without changing the frozen inventory.
 //!
-//! **Every fallible operation except ledger storage itself ends as exactly one terminal record.**
-//! Ledger create, serialization, append, and flush are the deliberate exception: claiming durable
-//! terminal coverage after the storage operation failed would be false.
+//! **Every attempt-level failure ends as exactly one terminal record.** There are two deliberate
+//! exceptions, both of which abandon the run rather than misreport it. Ledger create, serialization,
+//! append, and flush propagate, because claiming durable terminal coverage after the storage
+//! operation failed would be false. And a *harness bug* — a record the type model refuses to build —
+//! propagates out of [`run_attempt`], abandoning that attempt's slot and every later one unrecorded;
+//! that is the accepted screen's contract too, and it is a defect in this harness rather than an
+//! outcome of the experiment.
 //!
 //! **There is no retry scheduler here, and no retry identity to schedule.** This invocation executes
 //! exactly the two frozen originals. `RetryEligibility::Retryable` on a `Provision` or `Connect`
@@ -156,6 +160,9 @@ pub(crate) fn indexed_sender_view_calibration_pilot(
 /// **Phase 1: not implemented.** Phase 2 fills the acquisition and measurement lifecycle described
 /// in this module's header. It must return a record rather than an error for every attempt-level
 /// failure, so each of the ten failure kinds settles into exactly one of the five record shapes.
+/// Only a harness bug — a record the type model refuses to build — propagates, and the caller's `?`
+/// then abandons this slot and every later one without a record. That is the accepted screen's
+/// contract verbatim; it is the one hole in per-attempt coverage, and it is deliberate.
 fn run_attempt(
     _listen: ListenAddress,
     _module_wasm: &Path,
