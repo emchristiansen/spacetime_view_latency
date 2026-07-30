@@ -97,3 +97,6 @@ impl AttemptKey {
             && self.version == other.version
     }
 }
+
+#[cfg(test)]
+mod tests;

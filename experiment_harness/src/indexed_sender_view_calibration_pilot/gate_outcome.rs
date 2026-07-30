@@ -55,3 +55,6 @@ impl GateOutcome {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

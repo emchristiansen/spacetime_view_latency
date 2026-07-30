@@ -115,3 +115,6 @@ pub(crate) fn unrelated_owner() -> Identity {
     bytes[31] = UNRELATED_IDENTITY_BYTE;
     Identity::from_byte_array(bytes)
 }
+
+#[cfg(test)]
+mod tests;

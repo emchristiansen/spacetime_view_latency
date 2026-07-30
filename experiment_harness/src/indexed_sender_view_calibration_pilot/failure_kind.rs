@@ -183,3 +183,6 @@ impl FailureKind {
         matches!(self, Self::Semantics)
     }
 }
+
+#[cfg(test)]
+mod tests;

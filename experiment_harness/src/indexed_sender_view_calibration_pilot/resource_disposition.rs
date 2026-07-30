@@ -61,3 +61,6 @@ impl ResourceDisposition {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

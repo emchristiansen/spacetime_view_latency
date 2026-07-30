@@ -71,6 +71,8 @@ pub(crate) fn indexed_sender_view_calibration_pilot(
     output: &OutputPath,
     seed: u64,
 ) -> Result<()> {
+    phase_two_not_implemented()?;
+
     let inventory = AttemptInventory::frozen()?;
     // Resolved once, before anything is provisioned: a malformed pinned constant must fail at
     // startup rather than after the first attempt has already been measured against it.
@@ -153,6 +155,27 @@ pub(crate) fn indexed_sender_view_calibration_pilot(
     }
 
     Ok(())
+}
+
+/// Refuse the whole invocation while Phase 2 behaviour is unwritten.
+///
+/// Called as the **first statement** of [`indexed_sender_view_calibration_pilot`] — before the
+/// inventory is frozen, before the requested ledger path is examined or created, before the waiter is
+/// resolved or spawned, and before any host observation. Without it the wired subcommand would create
+/// the ledger, block on the real gate for up to its eight-minute budget, and then panic at
+/// [`run_attempt`]'s `todo!()`. That leaves an empty ledger behind, and the "evidence is never
+/// overwritten" precondition then refuses to reuse the path — so a run that measured nothing would
+/// permanently consume the operator's requested output path.
+///
+/// A function returning `Err`, deliberately, rather than a `const` flag or a side-effecting stub: it
+/// cannot be partially satisfied, it reaches the operator as an ordinary contextual error instead of
+/// a panic, and Phase 2 removes it by deleting one call and one function.
+fn phase_two_not_implemented() -> Result<()> {
+    Err(anyhow!(
+        "the append-only E2 calibration pilot is a Phase 1 type skeleton: its measurement behaviour \
+         is not implemented, so this invocation refuses before creating a ledger, before resolving \
+         or running the host waiter, and before provisioning anything"
+    ))
 }
 
 /// One attempt's terminal record, measured on its own fresh isolated instance.
@@ -281,3 +304,6 @@ fn resolve_host_waiter(host_waiter: &Path) -> Result<PathBuf> {
     );
     Ok(resolved)
 }
+
+#[cfg(test)]
+mod tests;

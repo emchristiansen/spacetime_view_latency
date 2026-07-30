@@ -179,3 +179,6 @@ fn check_population(
         ));
     }
 }
+
+#[cfg(test)]
+mod tests;

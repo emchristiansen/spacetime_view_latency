@@ -73,3 +73,6 @@ impl AttemptInventory {
         Ok(Self { order })
     }
 }
+
+#[cfg(test)]
+mod tests;

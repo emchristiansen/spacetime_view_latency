@@ -116,3 +116,6 @@ impl CalibrationSeries {
         self.samples.len()
     }
 }
+
+#[cfg(test)]
+mod tests;
