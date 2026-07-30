@@ -18,17 +18,40 @@ use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixtu
 /// actionable instead of a bare "malformed line".
 #[test]
 fn an_unknown_variant_spelling_fails_decoding() {
+    // Each case is (text to find in the rendered line, its replacement, the token the diagnostic
+    // must name). The find text is not always the bare variant: `Calibration` is a substring of
+    // `MethodCalibrationOnly`, so replacing it bare would silently corrupt the outcome ceiling as
+    // well and the case would then pass for the wrong reason. Matching the tag with its `":` suffix
+    // pins it to the externally-tagged `StageRepetition` position.
     let cases = [
-        ("IndexedControlActivitySenderView", "SomeOtherCandidate"),
-        ("UnrelatedGlobalRows", "SomeOtherAxis"),
-        ("Baseline", "SomeOtherRung"),
-        ("Original", "Superseded"),
-        ("MethodCalibrationOnly", "PerformanceConclusion"),
-        ("PacedVisibleApplyLatency", "SomeOtherChannel"),
+        (
+            "IndexedControlActivitySenderView",
+            "SomeOtherCandidate",
+            "SomeOtherCandidate",
+        ),
+        ("UnrelatedGlobalRows", "SomeOtherAxis", "SomeOtherAxis"),
+        ("Baseline", "SomeOtherRung", "SomeOtherRung"),
+        ("Original", "Superseded", "Superseded"),
+        (
+            "MethodCalibrationOnly",
+            "PerformanceConclusion",
+            "PerformanceConclusion",
+        ),
+        (
+            "PacedVisibleApplyLatency",
+            "SomeOtherChannel",
+            "SomeOtherChannel",
+        ),
+        ("\"Calibration\":", "\"SomeOtherStage\":", "SomeOtherStage"),
     ];
 
-    for (frozen, forged) in cases {
-        let line = LedgerFixture::complete(0).line().replace(frozen, forged);
+    for (frozen, replacement, forged) in cases {
+        let line = LedgerFixture::complete(0).line().replace(frozen, replacement);
+        assert_ne!(
+            line,
+            LedgerFixture::complete(0).line(),
+            "the case for {frozen} must actually change the rendered line, or it proves nothing"
+        );
         // `expect_err` takes a plain message, so the component name is interpolated here rather than
         // left as a brace placeholder that would print literally on failure.
         let error = decode_complete_contents(&line).expect_err(&format!(

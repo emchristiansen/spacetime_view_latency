@@ -51,6 +51,21 @@ fn only_the_frozen_ordinal_set_pairs() {
         PairRefusal::DuplicateOrdinal { replicate: 0 },
         "one attempt counted twice is reported as the duplicate it is, not as a missing original"
     );
+
+    // The overcomplete case: the frozen set is present *and* something else is. A membership test
+    // written as "both originals are here" rather than as set equality would accept this, and the
+    // report would then describe a pair drawn from a file that also contains an undeclared third
+    // attempt. It is a distinct fault from `[2, 3]` — nothing is missing here, only extra — and from
+    // `[0, 1, 0]`, where the extra line is a repeat rather than a new slot.
+    assert_eq!(
+        pair(&[0, 1, 2]).unwrap_err(),
+        PairRefusal::OrdinalsNotFrozenInventory {
+            found: [0, 1, 2].into_iter().collect(),
+            expected: frozen,
+        },
+        "a superset of the frozen inventory is not the frozen inventory; containing both originals \
+         is not the same as being exactly them"
+    );
 }
 
 /// Build a ledger of fully valid lines at `replicates` and offer it for pairing.
