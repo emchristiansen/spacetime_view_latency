@@ -2,9 +2,11 @@
 
 use serde::Serialize;
 
+use crate::analysis::stats::rational::Rational;
 use crate::indexed_sender_view_calibration_analysis::between_replicate_report::BetweenReplicateReport;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
+use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
 use crate::indexed_sender_view_calibration_analysis::window_stability_report::WindowStabilityReport;
 
 /// One candidate `W`'s complete diagnostic row: within-replicate window stability for **both**
@@ -35,9 +37,16 @@ impl WindowDiagnosticsReport {
     pub(crate) fn of(
         pair: &ReplicatePair,
         window: CandidateWindow,
-        first_full_series_median: crate::analysis::stats::rational::Rational,
-        second_full_series_median: crate::analysis::stats::rational::Rational,
+        first_full_series_median: Rational,
+        second_full_series_median: Rational,
     ) -> Self {
-        todo!("both replicates' stability at this width, plus their disagreement")
+        let first = WindowMedianSeries::of(pair.first(), window);
+        let second = WindowMedianSeries::of(pair.second(), window);
+        Self {
+            window,
+            first_replicate: WindowStabilityReport::of(&first, first_full_series_median),
+            second_replicate: WindowStabilityReport::of(&second, second_full_series_median),
+            between_replicates: BetweenReplicateReport::of(&first, &second),
+        }
     }
 }

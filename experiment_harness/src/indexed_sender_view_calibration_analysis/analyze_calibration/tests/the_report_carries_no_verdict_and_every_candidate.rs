@@ -1,11 +1,11 @@
 //! The emitted artifact covers all seven candidates and contains no verdict-shaped key anywhere.
 
-use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
-use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 use crate::indexed_sender_view_calibration_analysis::calibration_diagnostics_report::CalibrationDiagnosticsReport;
-use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
+use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
+use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
+use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
 use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
+use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
 /// Words that would indicate this report had started answering the question rather than informing
@@ -34,7 +34,9 @@ const VERDICT_SHAPED: [&str; 10] = [
 /// would leave the rule unable to consider the candidate it most needs a complete series for.
 #[test]
 fn the_report_carries_no_verdict_and_every_candidate() {
-    let pair = ReplicatePair::of(vec![admitted(0), admitted(1)]).expect("the fixtures pair");
+    let ledger = [offset_line(0), offset_line(1)].join("\n");
+    let records = parse_calibration_ndjson(&ledger).expect("the fixture lines decode");
+    let pair = ReplicatePair::of(LedgerAdmission::of(&records)).expect("the fixtures pair");
     let rendered = serde_json::to_value(CalibrationDiagnosticsReport::of(&pair))
         .expect("the report serializes");
 
@@ -81,15 +83,13 @@ fn collect_verdict_shaped_keys(value: &serde_json::Value, path: &mut String, fou
     }
 }
 
-/// An admitted replicate at `ordinal`, offset so the two series are not identical.
-fn admitted(ordinal: u32) -> CompleteReplicate {
-    let line = LedgerFixture::complete(ordinal)
+/// A valid wire line at `ordinal`, offset so the two series are not identical.
+fn offset_line(ordinal: u32) -> String {
+    LedgerFixture::complete(ordinal)
         .with_samples(
             (0..MAX_PACED_SAMPLES_USIZE)
                 .map(|index| 1_000_000 + u128::from(ordinal) * 37 + index as u128)
                 .collect(),
         )
-        .line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the fixture line is admissible")
+        .line()
 }

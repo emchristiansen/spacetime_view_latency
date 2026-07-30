@@ -1,8 +1,10 @@
 //! Every contiguous-window median of one replicate at one candidate `W`, with its position.
 
+use crate::analysis::stats::median::median;
 use crate::analysis::stats::rational::Rational;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
+use crate::indexed_sender_view_calibration_analysis::exact_samples::exact_samples;
 
 /// The exact median of every contiguous window of width `W`, indexed by the window's 0-based start
 /// position in the series.
@@ -34,7 +36,17 @@ impl WindowMedianSeries {
     /// that window's samples as [`Rational`]s, so an even width averages its two central order
     /// statistics without rounding.
     pub(crate) fn of(replicate: &CompleteReplicate, window: CandidateWindow) -> Self {
-        todo!("contiguous-window exact medians in ascending start position")
+        let samples = exact_samples(replicate);
+        let width = window.get();
+        assert!(
+            width <= samples.len(),
+            "a candidate window cannot be wider than the admitted series; admission fixes the \
+             series at the frozen count and the widest candidate is that count"
+        );
+        // `windows` yields every contiguous slice in ascending start position, so the index of a
+        // median in this vector *is* its window's start position.
+        let medians = samples.windows(width).map(median).collect();
+        Self { window, medians }
     }
 
     /// Which candidate `W` these windows have.

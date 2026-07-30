@@ -21,11 +21,15 @@ fn a_partial_population_proof_refuses_admission() {
     let frozen = FrozenPopulation::complete();
 
     assert_eq!(
-        refusal(&LedgerFixture::complete(0).with_arm_rows(frozen.arm_rows - 1).line()),
-        (AdmissionRefusal::ArmRowsNotFrozen {
+        refusal(
+            &LedgerFixture::complete(0)
+                .with_arm_rows(frozen.arm_rows - 1)
+                .line()
+        ),
+        AdmissionRefusal::ArmRowsNotFrozen {
             arm_rows: frozen.arm_rows - 1,
             expected: frozen.arm_rows,
-        }),
+        },
         "an arm cache proven one row short is not a complete attempt's proof"
     );
 
@@ -35,10 +39,10 @@ fn a_partial_population_proof_refuses_admission() {
                 .with_witness_rows(frozen.witness_rows + 1)
                 .line()
         ),
-        (AdmissionRefusal::WitnessRowsNotFrozen {
+        AdmissionRefusal::WitnessRowsNotFrozen {
             witness_rows: frozen.witness_rows + 1,
             expected: frozen.witness_rows,
-        }),
+        },
         "a witness cache proven one row over is not a complete attempt's proof"
     );
 
@@ -48,10 +52,10 @@ fn a_partial_population_proof_refuses_admission() {
                 .with_verified_appends(frozen.verified_appends - 1)
                 .line()
         ),
-        (AdmissionRefusal::VerifiedAppendsNotFrozen {
+        AdmissionRefusal::VerifiedAppendsNotFrozen {
             verified_appends: frozen.verified_appends - 1,
             expected: frozen.verified_appends,
-        }),
+        },
         "a series whose composition was verified against fewer appends than it has samples cannot \
          be a complete replicate"
     );

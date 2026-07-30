@@ -3,7 +3,6 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::indexed_sender_view_calibration_analysis::admission_refusal::AdmissionRefusal;
 use crate::indexed_sender_view_calibration_analysis::calibration_ingest_error::CalibrationIngestError;
 use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
 
@@ -23,21 +22,17 @@ pub(crate) enum CalibrationAnalysisError {
     LedgerUnreadable { path: PathBuf, diagnostic: String },
     /// A line did not decode into the closed wire contract.
     Malformed(CalibrationIngestError),
-    /// The ledger decoded, but its admitted records are not the frozen inventory's pair.
+    /// The ledger decoded, but it is not the frozen inventory's pair.
     ///
     /// **This is terminal for `W`.** §568 allows no hidden retry and the freeze contains exactly two
     /// originals, so an unpairable ledger does not mean "run it again" — it means the calibration
     /// coverage is lost and Control redesigns or defers rather than manufacturing a count.
     ///
-    /// Carries **both** the pairing refusal and every per-record admission refusal with its 1-based
-    /// line number, because those reasons diagnose *how* the coverage was lost. "Expected ordinals
-    /// {0, 1}, found {0}" alone would leave a reader unable to see that line 2 was replicate 1
-    /// refused for a short series — a different diagnosis, informing a different redesign, from that
-    /// slot never having been reached at all.
-    NotPairable {
-        refusal: PairRefusal,
-        refused: Vec<(u64, AdmissionRefusal)>,
-    },
+    /// Carries only the [`PairRefusal`], because the per-line admission refusals now travel *inside*
+    /// it. An earlier shape carried them alongside, which let them be dropped whenever the pairing
+    /// itself happened to succeed; folding them into the refusal makes "the ledger had other lines"
+    /// a pairing outcome rather than a fact the caller was trusted to forward.
+    NotPairable(PairRefusal),
 }
 
 impl fmt::Display for CalibrationAnalysisError {
@@ -49,13 +44,7 @@ impl fmt::Display for CalibrationAnalysisError {
                 path.display()
             ),
             CalibrationAnalysisError::Malformed(error) => write!(f, "{error}"),
-            CalibrationAnalysisError::NotPairable { refusal, refused } => {
-                write!(f, "{refusal}")?;
-                for (line_number, reason) in refused {
-                    write!(f, "\n  line {line_number}: {reason}")?;
-                }
-                Ok(())
-            }
+            CalibrationAnalysisError::NotPairable(refusal) => write!(f, "{refusal}"),
         }
     }
 }

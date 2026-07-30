@@ -1,7 +1,12 @@
 //! How far the two replicates disagree at one candidate `W`, position by position.
 
+use std::cmp::Ordering;
+
 use serde::Serialize;
 
+use crate::analysis::stats::median::median;
+use crate::analysis::stats::rational::Rational;
+use crate::indexed_sender_view_calibration_analysis::absolute_value::absolute_value;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
 use crate::indexed_sender_view_calibration_analysis::positioned_difference_report::PositionedDifferenceReport;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
@@ -58,8 +63,58 @@ impl BetweenReplicateReport {
     /// Both arguments are the *same* candidate width — they come from one iteration of the per-`W`
     /// loop — and, by admission, have equal length, so the position correspondence is total.
     pub(crate) fn of(first: &WindowMedianSeries, second: &WindowMedianSeries) -> Self {
-        todo!("per-position signed differences, tie-preserving extrema, and the exact median")
+        let firsts = first.medians();
+        let seconds = second.medians();
+        assert_eq!(
+            firsts.len(),
+            seconds.len(),
+            "admission fixes both series at the frozen sample count, so a shared candidate width \
+             yields identically many windows and position i means the same offset in each"
+        );
+
+        let differences: Vec<Rational> = firsts
+            .iter()
+            .zip(seconds)
+            .map(|(first, second)| second.sub(*first))
+            .collect();
+
+        Self {
+            window_count: differences.len(),
+            maximum_signed_difference: extreme(&differences, Ordering::Greater),
+            minimum_signed_difference: extreme(&differences, Ordering::Less),
+            greatest_absolute_difference: extreme(
+                &differences
+                    .iter()
+                    .map(|difference| absolute_value(*difference))
+                    .collect::<Vec<_>>(),
+                Ordering::Greater,
+            ),
+            median_signed_difference: ExactRationalReport::of(median(&differences)),
+        }
     }
+}
+
+/// The extreme value in `direction`, with **every** position attaining it.
+///
+/// One helper for both ends so the two are computed identically — a hand-written maximum and a
+/// hand-written minimum are exactly where a tie-retention rule gets applied to one and forgotten on
+/// the other.
+fn extreme(differences: &[Rational], direction: Ordering) -> PositionedDifferenceReport {
+    let extreme = differences
+        .iter()
+        .copied()
+        .reduce(|running, candidate| match candidate.cmp(&running) == direction {
+            true => candidate,
+            false => running,
+        })
+        .expect("every candidate width admits at least one window over a complete series");
+    let positions = differences
+        .iter()
+        .enumerate()
+        .filter(|(_, difference)| **difference == extreme)
+        .map(|(position, _)| position)
+        .collect();
+    PositionedDifferenceReport::of(extreme, positions)
 }
 
 #[cfg(test)]

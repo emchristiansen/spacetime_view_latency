@@ -3,14 +3,30 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// The typed reason a set of admitted replicates is not an analysable pair.
+use crate::indexed_sender_view_calibration_analysis::refused_line::RefusedLine;
+
+/// The typed reason a ledger is not an analysable pair.
 ///
 /// Separate from [`AdmissionRefusal`](super::admission_refusal::AdmissionRefusal) because the two
 /// answer different questions: that one is about a single record's own completeness, this one is
-/// about the set. A ledger can contain two individually perfect records that still cannot be paired,
-/// and collapsing both into one error type would hide which of those happened.
+/// about the ledger. A ledger can contain two individually perfect records that still cannot be
+/// paired, and collapsing both into one error type would hide which of those happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PairRefusal {
+    /// Some line in the ledger was not admissible, so the ledger is not exactly the frozen
+    /// inventory — whatever its other lines contain.
+    ///
+    /// **Checked before the ordinals, because it is the more general fault.** The freeze contains
+    /// exactly two original records and nothing else. A ledger holding two perfect originals *plus*
+    /// a failed attempt, a `Control` line, or a retry-shaped duplicate is therefore not that
+    /// inventory, and analysing its two good lines would report a §569 pair drawn from an artifact
+    /// whose extra content nobody looked at. The extra line may be the most informative thing in the
+    /// file — a second attempt that failed says something about the method that two successes do
+    /// not.
+    ///
+    /// Every refused line is carried with its position, so the report says *which* lines and *why*
+    /// rather than only that some line failed.
+    LedgerHasRefusedLines { refused: Vec<RefusedLine> },
     /// The admitted ordinals are not exactly the set the frozen inventory declares.
     ///
     /// Covers every way that can happen at once — too few, too many, a duplicate, or a foreign
@@ -32,6 +48,19 @@ pub(crate) enum PairRefusal {
 impl fmt::Display for PairRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            PairRefusal::LedgerHasRefusedLines { refused } => {
+                write!(
+                    f,
+                    "the frozen inventory is exactly two original records, and this ledger contains \
+                     {} line(s) that are not complete replicates, so it is not that inventory and \
+                     no candidate count can be evaluated against it",
+                    refused.len()
+                )?;
+                for line in refused {
+                    write!(f, "\n  {line}")?;
+                }
+                Ok(())
+            }
             PairRefusal::OrdinalsNotFrozenInventory { found, expected } => write!(
                 f,
                 "the decision rule is stated over both complete retained series of the frozen \

@@ -34,17 +34,29 @@
 //! plain integers. So [`CompleteReplicate`](complete_replicate::CompleteReplicate) re-derives every
 //! serialized fact a complete series depends on — frozen method, frozen attempt identity including
 //! the `Arm` role, `Attempted`/`CalibrationRecorded` shape, exact sample count, strict positivity,
-//! and all three population counts — and
-//! [`ReplicatePair`](replicate_pair::ReplicatePair) requires exactly the frozen inventory's ordinal
-//! set. A field this analyzer declines to decode is a field nothing checks, so every key component
-//! is mirrored and matched.
+//! and all three population counts. A field this analyzer declines to decode is a field nothing
+//! checks, so every key component is mirrored and matched.
 //!
-//! **One open question, deliberately not decided here.** The lag set for the autocorrelation
-//! diagnostic is left open by §568/§569/§615; see [`lag_domain`] for the exact wording and the
-//! proposed derivation awaiting Control.
+//! **The unit of admission is the whole ledger, not the line.**
+//! [`ReplicatePair`](replicate_pair::ReplicatePair) is constructed from a
+//! [`LedgerAdmission`](ledger_admission::LedgerAdmission), which carries the refusals together with
+//! the admissions, and it refuses outright if any line was refused before requiring exactly the
+//! frozen inventory's ordinal set. So two perfect originals accompanied by a third line — a failed
+//! attempt, a `Control` record, a retry-shaped duplicate — produce no report rather than a report
+//! that quietly ignores the third.
+//!
+//! **The lag set is derived, not preregistered.** §568/§569/§615 name "lag dependence/effective
+//! information" and "autocorrelation" without fixing a `k`, so [`lag_domain`] derives the domain
+//! `1 ..= (largest candidate window − 1)` from [`CandidateWindow::ALL`] — the smallest domain that
+//! reaches within-window dependence for *every* candidate, not just the smallest one. Each element
+//! publishes its own pair count, so sparse tails are visible rather than censored, and nothing is
+//! summed into an effective sample size, which would read as an answer.
+//!
+//! [`CandidateWindow::ALL`]: candidate_window::CandidateWindow::ALL
 //!
 //! One public entity per file; this entry file is declarative re-exports only.
 
+pub(crate) mod absolute_value;
 pub(crate) mod admission_refusal;
 pub(crate) mod analyze_calibration;
 pub(crate) mod attempt_key_dto;
@@ -61,12 +73,14 @@ pub(crate) mod candidate_id_dto;
 pub(crate) mod candidate_window;
 pub(crate) mod complete_replicate;
 pub(crate) mod exact_rational_report;
+pub(crate) mod exact_samples;
 pub(crate) mod experiment_axis_dto;
 pub(crate) mod frozen_candidate_version;
 pub(crate) mod frozen_population;
 pub(crate) mod frozen_replicate_ordinals;
 pub(crate) mod lag_autocorrelation;
 pub(crate) mod lag_domain;
+pub(crate) mod ledger_admission;
 /// Hand-built wire lines shared by this namespace's pure tests. Test-only, so nothing here widens
 /// the analyzer's real API.
 #[cfg(test)]
@@ -79,6 +93,7 @@ pub(crate) mod pair_refusal;
 pub(crate) mod parse_calibration_ndjson;
 pub(crate) mod positioned_difference_report;
 pub(crate) mod positioned_median_report;
+pub(crate) mod refused_line;
 pub(crate) mod replicate_diagnostics_report;
 pub(crate) mod replicate_pair;
 pub(crate) mod run_role_dto;

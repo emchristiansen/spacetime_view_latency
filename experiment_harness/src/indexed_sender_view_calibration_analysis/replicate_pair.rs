@@ -1,6 +1,10 @@
 //! The two complete replicates §569 evaluates every candidate `W` against.
 
+use std::collections::BTreeSet;
+
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
+use crate::indexed_sender_view_calibration_analysis::frozen_replicate_ordinals::frozen_replicate_ordinals;
+use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
 use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
 
 /// The frozen inventory's two complete replicates, one per declared ordinal.
@@ -11,10 +15,15 @@ use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
 /// instruction is structural here: [`Self::of`] is the only constructor and the diagnostics take a
 /// `ReplicatePair`, so a one-series report has no value to be built from.
 ///
-/// **The requirement is the frozen ordinal *set*, not two distinct ordinals.** Distinctness alone
-/// would accept records at ordinals 2 and 3 — two perfectly distinct attempts that the inventory
-/// never declared — and quietly promote them into "the two originals". The check is therefore set
-/// equality against
+/// **The requirement is the whole ledger, not merely two good lines in it.** [`Self::of`] takes a
+/// [`LedgerAdmission`] — every decoded line, admitted and refused together — so a file containing
+/// two perfect originals *plus* anything else cannot produce a pair. The freeze declares exactly two
+/// records; a third line means the artifact is not that freeze, and reporting from its good two
+/// would describe a pair while silently discarding whatever the extra line said.
+///
+/// **Then the frozen ordinal *set*, not two distinct ordinals.** Distinctness alone would accept
+/// records at ordinals 2 and 3 — two perfectly distinct attempts that the inventory never declared —
+/// and quietly promote them into "the two originals". The check is therefore set equality against
 /// [`frozen_replicate_ordinals`](super::frozen_replicate_ordinals::frozen_replicate_ordinals),
 /// derived from the pilot's own `CalibrationReplicate::ALL`.
 ///
@@ -29,16 +38,53 @@ pub(crate) struct ReplicatePair {
 }
 
 impl ReplicatePair {
-    /// Pair the admitted replicates, refusing anything that is not exactly the frozen inventory.
+    /// Pair a whole ledger's admission outcome, refusing anything that is not exactly the frozen
+    /// inventory.
     ///
-    /// Takes the whole admitted set rather than two arguments, so "there were three", "there was
-    /// one", "one was counted twice", and "one is not a declared slot" are refusals this type states
-    /// rather than conditions a caller must remember to check before picking two.
+    /// Takes the whole outcome rather than two arguments, so "a line was refused", "there were
+    /// three", "there was one", "one was counted twice", and "one is not a declared slot" are
+    /// refusals this type states rather than conditions a caller must remember to check before
+    /// picking two.
     ///
-    /// Duplicates are detected before set equality, so one attempt counted twice is reported as the
+    /// The three checks run from most general to most specific. Any refused line means the artifact
+    /// is not the freeze at all, so that is decided first and the refusals travel with the answer.
+    /// Duplicates come before set equality, so one attempt counted twice is reported as the
     /// duplicate it is rather than as a missing original.
-    pub(crate) fn of(admitted: Vec<CompleteReplicate>) -> Result<Self, PairRefusal> {
-        todo!("duplicate detection, frozen-ordinal set equality, ascending pairing")
+    pub(crate) fn of(admission: LedgerAdmission) -> Result<Self, PairRefusal> {
+        // Any refused line at all: the freeze is exactly two originals, so a ledger with a third
+        // record — however that record failed — is not the inventory the rule is stated over.
+        let (admitted, refused) = admission.into_parts();
+        if !refused.is_empty() {
+            return Err(PairRefusal::LedgerHasRefusedLines { refused });
+        }
+
+        // Duplicates next: `{0, 0}` and `{0}` collapse to the same set, so a later set comparison
+        // would report one attempt counted twice as a *missing* original.
+        let mut found = BTreeSet::new();
+        for replicate in &admitted {
+            if !found.insert(replicate.replicate()) {
+                return Err(PairRefusal::DuplicateOrdinal {
+                    replicate: replicate.replicate(),
+                });
+            }
+        }
+
+        let expected = frozen_replicate_ordinals();
+        if found != expected {
+            return Err(PairRefusal::OrdinalsNotFrozenInventory { found, expected });
+        }
+
+        let mut ascending = admitted;
+        ascending.sort_by_key(CompleteReplicate::replicate);
+        let mut ascending = ascending.into_iter();
+        // Set equality against the frozen inventory has already fixed the count, so both are present.
+        let first = ascending
+            .next()
+            .expect("set equality with the frozen inventory guarantees both ordinals are present");
+        let second = ascending
+            .next()
+            .expect("set equality with the frozen inventory guarantees both ordinals are present");
+        Ok(Self { first, second })
     }
 
     /// The lower-ordinal replicate.

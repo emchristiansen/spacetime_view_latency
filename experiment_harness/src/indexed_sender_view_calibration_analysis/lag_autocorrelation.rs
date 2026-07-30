@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::analysis::finite_f64::FiniteF64;
+use crate::analysis::stats::rational::Rational;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
 use crate::indexed_sender_view_calibration_analysis::normalized_autocorrelation::NormalizedAutocorrelation;
@@ -58,9 +60,104 @@ impl LagAutocorrelation {
     ///
     /// Over the *whole* series and never per candidate window: dependence is a property of the run.
     pub(crate) fn of(replicate: &CompleteReplicate, lag: usize) -> Self {
-        todo!("exact centred numerator and both energies at this lag, then the normalized ratio")
+        let samples: Vec<i128> = replicate
+            .samples()
+            .iter()
+            .map(|sample| {
+                i128::try_from(*sample).expect(OUTSIDE_THE_EXACT_DOMAIN)
+            })
+            .collect();
+        let length = samples.len();
+        assert!(
+            (1..length).contains(&lag),
+            "lag {lag} has no pairs in a series of {length} samples"
+        );
+        let pairs = length - lag;
+
+        // Centring is done on an integer scale rather than through `Rational`, and the two agree
+        // exactly. With `S = Σxᵢ` and `n` the length, `scaledᵢ = n·xᵢ − S` is exactly `n·(xᵢ − x̄)`,
+        // so every product below is `n²` times the corresponding centred product. That common factor
+        // is divided out once, at the end, when each sum becomes a rational — instead of dragging a
+        // thousand-denominator rational through several million multiplications and gcd reductions.
+        let count = i128::try_from(length).expect("the frozen sample count fits i128");
+        // Every step below is checked and fails loud rather than wrapping. No step claims a ceiling
+        // derived from the measurement method — see `OUTSIDE_THE_EXACT_DOMAIN`.
+        let total = samples
+            .iter()
+            .try_fold(0i128, |sum, sample| sum.checked_add(*sample))
+            .expect(OUTSIDE_THE_EXACT_DOMAIN);
+        let scaled: Vec<i128> = samples
+            .iter()
+            .map(|sample| {
+                count
+                    .checked_mul(*sample)
+                    .and_then(|scaled| scaled.checked_sub(total))
+                    .expect(OUTSIDE_THE_EXACT_DOMAIN)
+            })
+            .collect();
+
+        let numerator_scaled = sum_of_products(&scaled, &scaled[lag..], pairs);
+        let left_scaled = sum_of_products(&scaled, &scaled, pairs);
+        let right_scaled = sum_of_products(&scaled[lag..], &scaled[lag..], pairs);
+
+        // Undo the `n²` scaling exactly, so the published components are the real centred sums.
+        let square = count
+            .checked_mul(count)
+            .expect("the squared frozen sample count fits i128");
+        let numerator = Rational::new(numerator_scaled, square);
+        let left = Rational::new(left_scaled, square);
+        let right = Rational::new(right_scaled, square);
+
+        // A zero energy on either side is a genuine `0/0`, not a zero coefficient. The common `n²`
+        // factor cancels in the ratio, so it is computed from the scaled sums directly.
+        let normalized = match left_scaled == 0 || right_scaled == 0 {
+            true => NormalizedAutocorrelation::UndefinedZeroVariance,
+            false => {
+                let denominator = (left_scaled as f64 * right_scaled as f64).sqrt();
+                NormalizedAutocorrelation::Defined {
+                    coefficient: FiniteF64::new(numerator_scaled as f64 / denominator),
+                }
+            }
+        };
+
+        Self {
+            lag,
+            pairs,
+            numerator: ExactRationalReport::of(numerator),
+            left_energy: ExactRationalReport::of(left),
+            right_energy: ExactRationalReport::of(right),
+            normalized,
+        }
     }
 }
+
+/// `Σ_{i<count} left[i] · right[i]`, checked at every step.
+///
+/// Both slices are integer-scaled centred values, so each product is `n²` times a centred product
+/// and the whole sum carries that one common factor out to the caller.
+fn sum_of_products(left: &[i128], right: &[i128], count: usize) -> i128 {
+    (0..count)
+        .try_fold(0i128, |sum, index| {
+            left[index]
+                .checked_mul(right[index])
+                .and_then(|product| sum.checked_add(product))
+        })
+        .expect(OUTSIDE_THE_EXACT_DOMAIN)
+}
+
+/// Why a checked step in the centring arithmetic failing is a crash rather than a recoverable case.
+///
+/// **The domain of this exact report is what `i128` can represent, and nothing narrower.** No
+/// ceiling on a sample's magnitude is claimed here, and none is derived from the measurement method.
+/// If a sample, or any centred sum built from it, leaves `i128`, that series is outside what this
+/// report can state exactly, and the only honest response is to fail loudly rather than wrap a
+/// meaningless value into a plausible-looking coefficient.
+///
+/// One message serves every checked step, because they all report the same fact: the value or the
+/// arithmetic left `i128`.
+const OUTSIDE_THE_EXACT_DOMAIN: &str =
+    "a sample or centred sum left i128, so this series is outside the domain this report can state \
+     exactly; wrapping would yield a plausible-looking but meaningless coefficient";
 
 #[cfg(test)]
 mod tests;

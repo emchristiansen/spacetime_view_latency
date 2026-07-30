@@ -18,7 +18,16 @@ use crate::indexed_sender_view_calibration_analysis::calibration_record_dto::Cal
 pub(crate) fn parse_calibration_ndjson(
     contents: &str,
 ) -> std::result::Result<Vec<CalibrationRecordDto>, CalibrationIngestError> {
-    todo!("per-line decode with 1-based position tagging")
+    contents
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let line_number = u64::try_from(index + 1).expect("a 1-based line number fits u64");
+            serde_json::from_str(line).map_err(|error| {
+                CalibrationIngestError::malformed_line(line_number, error.to_string())
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

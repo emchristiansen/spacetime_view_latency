@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::analysis::stats::rational::Rational;
+use crate::indexed_sender_view_calibration_analysis::absolute_value::absolute_value;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
 use crate::indexed_sender_view_calibration_analysis::positioned_median_report::PositionedMedianReport;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
@@ -46,11 +48,46 @@ impl WindowStabilityReport {
     /// The full-series median is passed in rather than recomputed, so every candidate `W` in a
     /// replicate's report is measured against one and the same centre — otherwise "deviation" would
     /// silently mean a different thing per row of the table.
-    pub(crate) fn of(
-        medians: &WindowMedianSeries,
-        full_series_median: crate::analysis::stats::rational::Rational,
-    ) -> Self {
-        todo!("min/max with positions, exact spread, and tie-retaining worst deviation")
+    pub(crate) fn of(medians: &WindowMedianSeries, full_series_median: Rational) -> Self {
+        let values = medians.medians();
+        assert!(
+            !values.is_empty(),
+            "every candidate width admits at least one window over a complete series"
+        );
+
+        let minimum = *values.iter().min().expect("the window set is nonempty");
+        let maximum = *values.iter().max().expect("the window set is nonempty");
+        // The *first* attaining position for each extreme, so the choice is deterministic rather
+        // than an artefact of which direction the iterator folded from.
+        let minimum_position = values
+            .iter()
+            .position(|value| *value == minimum)
+            .expect("the minimum came from this set");
+        let maximum_position = values
+            .iter()
+            .position(|value| *value == maximum)
+            .expect("the maximum came from this set");
+
+        let deviations: Vec<Rational> = values
+            .iter()
+            .map(|value| absolute_value(value.sub(full_series_median)))
+            .collect();
+        let worst = *deviations.iter().max().expect("the window set is nonempty");
+        let worst_deviation_positions = deviations
+            .iter()
+            .enumerate()
+            .filter(|(_, deviation)| **deviation == worst)
+            .map(|(position, _)| position)
+            .collect();
+
+        Self {
+            window_count: values.len(),
+            minimum: PositionedMedianReport::of(minimum_position, minimum),
+            maximum: PositionedMedianReport::of(maximum_position, maximum),
+            spread: ExactRationalReport::of(maximum.sub(minimum)),
+            worst_absolute_deviation: ExactRationalReport::of(worst),
+            worst_deviation_positions,
+        }
     }
 }
 

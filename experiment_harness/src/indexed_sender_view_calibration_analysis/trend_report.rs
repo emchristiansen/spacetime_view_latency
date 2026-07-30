@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
+use crate::analysis::stats::median::median;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
+use crate::indexed_sender_view_calibration_analysis::exact_samples::exact_samples;
 
 /// One replicate's early/late drift, stated as **numbers rather than a verdict**.
 ///
@@ -37,7 +39,24 @@ impl TrendReport {
     /// Split one replicate's series in half and report both exact segment medians and their exact
     /// difference.
     pub(crate) fn of(replicate: &CompleteReplicate) -> Self {
-        todo!("half-split segment medians and their exact late-minus-early difference")
+        let samples = exact_samples(replicate);
+        let split = samples.len() / 2;
+        assert!(
+            split > 0 && split < samples.len(),
+            "both segments must be nonempty for their medians to be defined; admission fixes the \
+             series at the frozen count, which is far above two"
+        );
+
+        let early_median = median(&samples[..split]);
+        let late_median = median(&samples[split..]);
+        Self {
+            early_samples: split,
+            late_samples: samples.len() - split,
+            early_median: ExactRationalReport::of(early_median),
+            late_median: ExactRationalReport::of(late_median),
+            // Late minus early, so a positive value means later samples ran slower.
+            difference: ExactRationalReport::of(late_median.sub(early_median)),
+        }
     }
 }
 

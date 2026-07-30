@@ -2,13 +2,15 @@
 
 use serde::Serialize;
 
+use crate::analysis::stats::rational::Rational;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
 use crate::indexed_sender_view_calibration_analysis::lag_autocorrelation::LagAutocorrelation;
+use crate::indexed_sender_view_calibration_analysis::lag_domain::lag_domain;
 use crate::indexed_sender_view_calibration_analysis::trend_report::TrendReport;
 
 /// One replicate's whole-series diagnostics: its exact full-series median, its early/late drift, and
-/// its lag-1 dependence.
+/// its dependence at every lag in the derived domain.
 ///
 /// Separate from the per-`W` rows because these are properties of the *run*, not of a candidate
 /// width. Reporting the lag coefficient once per candidate would suggest it varies with `W`, which
@@ -29,8 +31,9 @@ pub(crate) struct ReplicateDiagnosticsReport {
     /// A **vector**, not a single lag. §568 asks for "lag dependence/effective information", which
     /// is a statement about dependence across lags; reporting only `k = 1` would answer a narrower
     /// question than the rule asks. The domain itself is
-    /// [`lag_domain`](super::lag_domain::lag_domain) — derived, and currently pending a Control
-    /// decision recorded there.
+    /// [`lag_domain`](super::lag_domain::lag_domain): `1 ..= (largest candidate window − 1)`,
+    /// derived from [`CandidateWindow::ALL`](super::candidate_window::CandidateWindow::ALL) so it
+    /// moves with the candidate set rather than drifting from it.
     lags: Vec<LagAutocorrelation>,
 }
 
@@ -40,10 +43,16 @@ impl ReplicateDiagnosticsReport {
     /// Takes the already-computed full-series median so the value in this report and the centre used
     /// by every [`WindowStabilityReport`](super::window_stability_report::WindowStabilityReport) are
     /// one and the same number rather than two independent computations that agree by luck.
-    pub(crate) fn of(
-        replicate: &CompleteReplicate,
-        full_series_median: crate::analysis::stats::rational::Rational,
-    ) -> Self {
-        todo!("full-series median, trend, and lag for one replicate")
+    pub(crate) fn of(replicate: &CompleteReplicate, full_series_median: Rational) -> Self {
+        Self {
+            replicate: replicate.replicate(),
+            samples: replicate.samples().len(),
+            full_series_median: ExactRationalReport::of(full_series_median),
+            trend: TrendReport::of(replicate),
+            lags: lag_domain()
+                .into_iter()
+                .map(|lag| LagAutocorrelation::of(replicate, lag))
+                .collect(),
+        }
     }
 }

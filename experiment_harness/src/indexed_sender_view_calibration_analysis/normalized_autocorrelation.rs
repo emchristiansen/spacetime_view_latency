@@ -22,7 +22,12 @@ use crate::analysis::finite_f64::FiniteF64;
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub(crate) enum NormalizedAutocorrelation {
     /// Both energy terms are nonzero; the coefficient is a finite value in `[-1, 1]`.
-    Defined { lag1: FiniteF64 },
+    ///
+    /// Named `coefficient` rather than `lag1`: this type is the normalization of *whichever* lag its
+    /// containing [`LagAutocorrelation`](super::lag_autocorrelation::LagAutocorrelation) element is
+    /// for, and the domain runs to one below the widest candidate. A field spelled `lag1` would be
+    /// false on 998 of the 999 elements.
+    Defined { coefficient: FiniteF64 },
     /// At least one energy term is zero, so the coefficient is a `0/0` form.
     UndefinedZeroVariance,
 }

@@ -48,6 +48,19 @@ impl MethodFactsDto {
     /// built before the change cannot quietly analyse evidence written after it — but it is not a
     /// build-time guarantee, and must not be described as one.
     pub(crate) fn matches_frozen(self) -> bool {
-        todo!("frozen-method equality against the pilot's own constants")
+        let Self {
+            channel,
+            sample_count,
+            paced_sample_delay_ms,
+            seeded_own_rows,
+            with_confirmed_reads,
+            outcome_ceiling,
+        } = self;
+        channel == MeasurementChannelDto::PacedVisibleApplyLatency
+            && sample_count == MAX_PACED_SAMPLES
+            && paced_sample_delay_ms == PACED_SAMPLE_DELAY_MS
+            && seeded_own_rows == SUBSCRIBER_OWN_ROWS
+            && with_confirmed_reads == WITH_CONFIRMED_READS
+            && outcome_ceiling == OutcomeCeilingDto::MethodCalibrationOnly
     }
 }

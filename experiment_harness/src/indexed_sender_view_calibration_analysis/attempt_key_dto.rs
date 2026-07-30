@@ -51,7 +51,22 @@ impl AttemptKeyDto {
     /// frozen inventory, which is a statement about the two records together that no single record
     /// can make.
     pub(crate) fn matches_frozen(self) -> bool {
-        todo!("exact-variant equality against the freeze, plus the frozen candidate version")
+        let Self {
+            candidate,
+            axis,
+            rung,
+            role,
+            // Checked as a set by `ReplicatePair`, not per record — see this method's doc.
+            stage: _,
+            ordinal,
+            version,
+        } = self;
+        candidate == CandidateIdDto::IndexedControlActivitySenderView
+            && axis == ExperimentAxisDto::UnrelatedGlobalRows
+            && rung == CalibrationRungDto::Baseline
+            && role == RunRoleDto::Arm
+            && ordinal == AttemptOrdinalDto::Original
+            && version == frozen_candidate_version()
     }
 
     /// The 0-based replicate index this record belongs to.
