@@ -20,6 +20,7 @@ mod entity_owner_pilot;
 mod entity_owner_smoke;
 mod entity_owner_visible_rows_probe;
 mod execute_run;
+mod indexed_sender_view_calibration_analysis;
 mod indexed_sender_view_calibration_pilot;
 mod manifest;
 mod module_artifact;
@@ -270,6 +271,18 @@ enum Command {
         #[arg(long)]
         seed: u64,
         /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Analyze a completed calibration ledger against SSOT §569's candidate set
+    /// `W ∈ {10, 20, 50, 100, 200, 500, 1000}` and print threshold-free diagnostics as JSON to
+    /// stdout (stdout is JSON only). Read-only: it provisions, measures, and mutates nothing.
+    ///
+    /// Emits **no** recommendation and no chosen `W`. §568 caps the pilot's output at evidence for
+    /// Control to freeze `W`, and Control applies the decision rule in SSOT.
+    IndexedSenderViewCalibrationAnalysis {
+        /// Path to the durable NDJSON ledger written by `IndexedSenderViewCalibrationPilot`. Opened
+        /// read-only; never created, truncated, or appended to.
         #[arg(long)]
         ledger: PathBuf,
     },
@@ -568,6 +581,18 @@ fn main() -> Result<()> {
                 &OutputPath::new(ledger),
                 seed,
             )
+        }
+        Command::IndexedSenderViewCalibrationAnalysis { ledger } => {
+            // Read the completed ledger and print its §569 diagnostics. Stdout carries JSON only,
+            // mirroring `Analyze`. The typed analysis error renders through `anyhow` rather than
+            // being flattened, so an unreadable path, a malformed line, and an unpairable set of
+            // honest records stay distinguishable at the exit boundary.
+            let report = crate::indexed_sender_view_calibration_analysis::analyze_calibration(
+                &ledger,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
         }
         Command::EntityOwnerVisibleRowsProbe {
             server,
