@@ -38,10 +38,12 @@ fn window_medians_are_exact_and_position_aware() {
 
         for position in [0, series.medians().len() - 1] {
             // The exact median of the arithmetic run starting at `position`.
-            let expected = Rational::new(2 * (BASE + position as i128) + width as i128 - 1, 2);
+            let expected = Rational::new(
+                2 * (BASE + position as i128) + width as i128 - 1,
+                2,
+            );
             assert_eq!(
-                series.medians()[position],
-                expected,
+                series.medians()[position], expected,
                 "the width-{width} window at position {position} has an exact median, with no \
                  rounding on an even width"
             );

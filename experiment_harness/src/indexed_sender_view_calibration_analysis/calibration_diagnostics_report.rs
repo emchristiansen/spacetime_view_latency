@@ -52,7 +52,9 @@ impl CalibrationDiagnosticsReport {
         Self {
             first_replicate: ReplicateDiagnosticsReport::of(pair.first(), first_median),
             second_replicate: ReplicateDiagnosticsReport::of(pair.second(), second_median),
-            full_series_median_difference: ExactRationalReport::of(second_median.sub(first_median)),
+            full_series_median_difference: ExactRationalReport::of(
+                second_median.sub(first_median),
+            ),
             candidates: CandidateWindow::ALL
                 .into_iter()
                 .map(|window| {

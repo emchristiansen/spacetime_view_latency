@@ -61,11 +61,7 @@ fn the_report_carries_no_verdict_and_every_candidate() {
 }
 
 /// Walk every key in the tree, recording any whose name is verdict-shaped.
-fn collect_verdict_shaped_keys(
-    value: &serde_json::Value,
-    path: &mut String,
-    found: &mut Vec<String>,
-) {
+fn collect_verdict_shaped_keys(value: &serde_json::Value, path: &mut String, found: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(fields) => {
             for (key, nested) in fields {

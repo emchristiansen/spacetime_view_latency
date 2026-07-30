@@ -63,7 +63,9 @@ impl LagAutocorrelation {
         let samples: Vec<i128> = replicate
             .samples()
             .iter()
-            .map(|sample| i128::try_from(*sample).expect(OUTSIDE_THE_EXACT_DOMAIN))
+            .map(|sample| {
+                i128::try_from(*sample).expect(OUTSIDE_THE_EXACT_DOMAIN)
+            })
             .collect();
         let length = samples.len();
         assert!(

@@ -25,10 +25,7 @@ fn the_split_is_exact_and_late_minus_early() {
     let rendered =
         serde_json::to_value(TrendReport::of(&replicate(samples))).expect("the report serializes");
 
-    assert_eq!(
-        rendered["early_samples"], half,
-        "the split halves the series"
-    );
+    assert_eq!(rendered["early_samples"], half, "the split halves the series");
     assert_eq!(rendered["late_samples"], MAX_PACED_SAMPLES_USIZE - half);
     assert_eq!(rendered["early_median"]["numerator"], 1_000_000);
     assert_eq!(rendered["early_median"]["denominator"], 1);

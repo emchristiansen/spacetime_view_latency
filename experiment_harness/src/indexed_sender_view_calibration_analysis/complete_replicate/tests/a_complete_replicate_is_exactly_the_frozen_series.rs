@@ -36,11 +36,7 @@ fn a_complete_replicate_is_exactly_the_frozen_series() {
 /// Admit a line whose series is `samples` long and strictly positive throughout.
 fn admit_with(samples: usize) -> Result<CompleteReplicate, AdmissionRefusal> {
     let line = LedgerFixture::complete(0)
-        .with_samples(
-            (0..samples)
-                .map(|index| 1_000_000 + index as u128)
-                .collect(),
-        )
+        .with_samples((0..samples).map(|index| 1_000_000 + index as u128).collect())
         .line();
     let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
         .expect("the fixture line decodes")

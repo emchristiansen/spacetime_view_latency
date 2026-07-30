@@ -24,10 +24,8 @@ fn rounding_overshoot_is_canonicalized_to_the_boundary() {
     );
 
     assert_eq!(
-        serde_json::to_value(CorrelationCoefficient::from_rounded_ratio(
-            1.0000000000000002
-        ))
-        .expect("the coefficient serializes"),
+        serde_json::to_value(CorrelationCoefficient::from_rounded_ratio(1.0000000000000002))
+            .expect("the coefficient serializes"),
         serde_json::json!(1.0),
         "the positive end is canonicalized identically, so a sign does not decide whether the \
          boundary is enforced"

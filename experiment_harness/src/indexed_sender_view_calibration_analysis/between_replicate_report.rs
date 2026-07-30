@@ -103,12 +103,10 @@ fn extreme(differences: &[Rational], direction: Ordering) -> PositionedDifferenc
     let extreme = differences
         .iter()
         .copied()
-        .reduce(
-            |running, candidate| match candidate.cmp(&running) == direction {
-                true => candidate,
-                false => running,
-            },
-        )
+        .reduce(|running, candidate| match candidate.cmp(&running) == direction {
+            true => candidate,
+            false => running,
+        })
         .expect("every candidate width admits at least one window over a complete series");
     let positions = differences
         .iter()

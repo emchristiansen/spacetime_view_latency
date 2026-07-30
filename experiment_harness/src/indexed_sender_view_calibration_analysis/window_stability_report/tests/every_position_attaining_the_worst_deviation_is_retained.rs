@@ -81,10 +81,7 @@ fn every_position_attaining_the_worst_deviation_is_retained() {
     );
 
     assert!(
-        rendered["spread"]["numerator"]
-            .as_i64()
-            .expect("an integer")
-            > 0,
+        rendered["spread"]["numerator"].as_i64().expect("an integer") > 0,
         "a non-constant series has a strictly positive max-minus-min spread"
     );
     assert_eq!(
