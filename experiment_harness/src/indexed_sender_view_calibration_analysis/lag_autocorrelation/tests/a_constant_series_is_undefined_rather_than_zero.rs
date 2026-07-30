@@ -1,10 +1,10 @@
 //! A zero-variance series yields the typed undefined form, never a defaulted zero or a NaN.
 
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::lag_autocorrelation::LagAutocorrelation;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
 use crate::indexed_sender_view_calibration_analysis::normalized_autocorrelation::NormalizedAutocorrelation;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
 /// Coverage: the `0/0` boundary, which is the one place this diagnostic could silently lie.
@@ -38,6 +38,8 @@ fn constant_replicate() -> CompleteReplicate {
     let line = LedgerFixture::complete(0)
         .with_samples(vec![1_000_000; MAX_PACED_SAMPLES_USIZE])
         .line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("a constant positive series is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("a constant positive series is admissible")
 }

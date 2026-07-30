@@ -1,10 +1,10 @@
 //! Every candidate width yields `n − W + 1` windows whose medians are exact and hand-checkable.
 
 use crate::analysis::stats::rational::Rational;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
@@ -38,12 +38,10 @@ fn window_medians_are_exact_and_position_aware() {
 
         for position in [0, series.medians().len() - 1] {
             // The exact median of the arithmetic run starting at `position`.
-            let expected = Rational::new(
-                2 * (BASE + position as i128) + width as i128 - 1,
-                2,
-            );
+            let expected = Rational::new(2 * (BASE + position as i128) + width as i128 - 1, 2);
             assert_eq!(
-                series.medians()[position], expected,
+                series.medians()[position],
+                expected,
                 "the width-{width} window at position {position} has an exact median, with no \
                  rounding on an even width"
             );
@@ -67,6 +65,8 @@ fn increasing_replicate() -> CompleteReplicate {
                 .collect(),
         )
         .line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the fixture line is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("the fixture line is admissible")
 }

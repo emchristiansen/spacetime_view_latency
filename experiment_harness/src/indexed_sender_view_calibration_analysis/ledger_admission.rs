@@ -1,10 +1,11 @@
-//! Every decoded ledger line, sorted into what was admitted and what was refused.
+//! Every line of a whole ledger, sorted into what was admitted and what was refused.
 
-use crate::indexed_sender_view_calibration_analysis::calibration_record_dto::CalibrationRecordDto;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
+use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
 use crate::indexed_sender_view_calibration_analysis::refused_line::RefusedLine;
 
-/// The admission outcome for a **whole** ledger: every line offered, none skipped.
+/// The admission outcome for a **whole** ledger file: every line offered, none skipped.
 ///
 /// **This type exists so that "the ledger as a whole" is a thing the code holds, not a thing a
 /// caller is trusted to have checked.** The frozen inventory is exactly two original records. A
@@ -14,14 +15,16 @@ use crate::indexed_sender_view_calibration_analysis::refused_line::RefusedLine;
 /// then silently dropped the moment the two originals happened to admit; the report it produced said
 /// nothing about them at all.
 ///
-/// Carrying both halves together closes that by construction: [`ReplicatePair::of`] takes this type
-/// and can see the refusals, so it cannot succeed on a ledger that had any.
+/// **The whole file, not merely a whole slice.** [`Self::of`] consumes a
+/// [`CalibrationLedger`] by value, and that type can only be obtained by reading a path, so
+/// "every line" means every line of an actual artifact rather than of whatever text a caller
+/// assembled. Source positions arrive already minted by the decoder instead of being re-derived here
+/// from a vector index, which was only correct while that vector happened to be the entire file in
+/// original order.
 ///
 /// **Every line is offered before any refusal is acted on.** Stopping at the first refusal would
 /// report one lost slot and hide the other, and "line 1 was verified against 999 appends" versus
 /// "both lines were" call for different redesigns.
-///
-/// [`ReplicatePair::of`]: super::replicate_pair::ReplicatePair::of
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerAdmission {
     admitted: Vec<CompleteReplicate>,
@@ -29,16 +32,15 @@ pub(crate) struct LedgerAdmission {
 }
 
 impl LedgerAdmission {
-    /// Offer every decoded record for admission, in ledger order.
-    pub(crate) fn of(records: &[CalibrationRecordDto]) -> Self {
+    /// Offer every line of the ledger for admission, in file order.
+    pub(crate) fn of(ledger: CalibrationLedger) -> Self {
         let mut admitted = Vec::new();
         let mut refused = Vec::new();
-        for (index, record) in records.iter().enumerate() {
-            let line_number = u64::try_from(index + 1).expect("a 1-based line number fits u64");
-            match CompleteReplicate::admit(record) {
+        for line in ledger.into_lines() {
+            match CompleteReplicate::admit(&line.record) {
                 Ok(replicate) => admitted.push(replicate),
                 Err(reason) => refused.push(RefusedLine {
-                    line_number,
+                    line_number: line.line_number,
                     reason,
                 }),
             }
@@ -46,12 +48,24 @@ impl LedgerAdmission {
         Self { admitted, refused }
     }
 
-    /// Consume the outcome, yielding the admitted replicates and every refused line.
+    /// Consume the outcome, yielding the complete replicates **only** if nothing was refused.
     ///
-    /// Consuming rather than lending, and yielding **both** halves at once, so a caller cannot take
-    /// the admitted replicates while leaving the refusals behind — which is exactly the drop this
-    /// type exists to prevent.
-    pub(crate) fn into_parts(self) -> (Vec<CompleteReplicate>, Vec<RefusedLine>) {
-        (self.admitted, self.refused)
+    /// **The single exit, and it discharges the refusals rather than handing them over.** An earlier
+    /// shape yielded both halves as a tuple, on the reasoning that a caller taking the pair could not
+    /// drop one of them. It could: nothing stopped it binding the refusals to `_` and proceeding, so
+    /// "the ledger had other lines" remained a fact a caller had to remember to act on. Here the
+    /// refusals are never handed out at all — they are either the reason this fails, or they were
+    /// empty. There is no order of calls that reaches the admitted replicates while a refusal is
+    /// outstanding.
+    ///
+    /// The refusal is a [`PairRefusal`] because that is what the condition means to the only caller:
+    /// a ledger with any refused line is not the frozen inventory, so no pair exists. Every refused
+    /// line travels inside it with its position and reason.
+    pub(crate) fn into_complete_inventory(self) -> Result<Vec<CompleteReplicate>, PairRefusal> {
+        let LedgerAdmission { admitted, refused } = self;
+        if !refused.is_empty() {
+            return Err(PairRefusal::LedgerHasRefusedLines { refused });
+        }
+        Ok(admitted)
     }
 }

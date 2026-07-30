@@ -50,7 +50,10 @@ impl fmt::Display for CalibrationIngestError {
             CalibrationIngestError::MalformedLine {
                 line_number,
                 diagnostic,
-            } => write!(f, "malformed calibration ledger line {line_number}: {diagnostic}"),
+            } => write!(
+                f,
+                "malformed calibration ledger line {line_number}: {diagnostic}"
+            ),
         }
     }
 }

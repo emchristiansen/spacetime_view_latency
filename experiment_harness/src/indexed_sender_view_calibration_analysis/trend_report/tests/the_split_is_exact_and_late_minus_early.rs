@@ -1,8 +1,8 @@
 //! Both halves are equal, both medians are exact, and the difference is late minus early.
 
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::trend_report::TrendReport;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
@@ -25,7 +25,10 @@ fn the_split_is_exact_and_late_minus_early() {
     let rendered =
         serde_json::to_value(TrendReport::of(&replicate(samples))).expect("the report serializes");
 
-    assert_eq!(rendered["early_samples"], half, "the split halves the series");
+    assert_eq!(
+        rendered["early_samples"], half,
+        "the split halves the series"
+    );
     assert_eq!(rendered["late_samples"], MAX_PACED_SAMPLES_USIZE - half);
     assert_eq!(rendered["early_median"]["numerator"], 1_000_000);
     assert_eq!(rendered["early_median"]["denominator"], 1);
@@ -40,6 +43,8 @@ fn the_split_is_exact_and_late_minus_early() {
 /// An admitted replicate carrying `samples`.
 fn replicate(samples: Vec<u128>) -> CompleteReplicate {
     let line = LedgerFixture::complete(0).with_samples(samples).line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the fixture line is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("the fixture line is admissible")
 }

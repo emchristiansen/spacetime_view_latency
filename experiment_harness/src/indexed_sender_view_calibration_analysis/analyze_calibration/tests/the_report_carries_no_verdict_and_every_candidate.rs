@@ -1,10 +1,10 @@
 //! The emitted artifact covers all seven candidates and contains no verdict-shaped key anywhere.
 
 use crate::indexed_sender_view_calibration_analysis::calibration_diagnostics_report::CalibrationDiagnosticsReport;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
@@ -35,8 +35,10 @@ const VERDICT_SHAPED: [&str; 10] = [
 #[test]
 fn the_report_carries_no_verdict_and_every_candidate() {
     let ledger = [offset_line(0), offset_line(1)].join("\n");
-    let records = parse_calibration_ndjson(&ledger).expect("the fixture lines decode");
-    let pair = ReplicatePair::of(LedgerAdmission::of(&records)).expect("the fixtures pair");
+    let ledger_of_fixtures = CalibrationLedger::from_complete_contents_for_tests(&ledger)
+        .expect("the fixture lines decode");
+    let pair =
+        ReplicatePair::of(LedgerAdmission::of(ledger_of_fixtures)).expect("the fixtures pair");
     let rendered = serde_json::to_value(CalibrationDiagnosticsReport::of(&pair))
         .expect("the report serializes");
 
@@ -59,7 +61,11 @@ fn the_report_carries_no_verdict_and_every_candidate() {
 }
 
 /// Walk every key in the tree, recording any whose name is verdict-shaped.
-fn collect_verdict_shaped_keys(value: &serde_json::Value, path: &mut String, found: &mut Vec<String>) {
+fn collect_verdict_shaped_keys(
+    value: &serde_json::Value,
+    path: &mut String,
+    found: &mut Vec<String>,
+) {
     match value {
         serde_json::Value::Object(fields) => {
             for (key, nested) in fields {

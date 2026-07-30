@@ -37,13 +37,20 @@
 //! and all three population counts. A field this analyzer declines to decode is a field nothing
 //! checks, so every key component is mirrored and matched.
 //!
-//! **The unit of admission is the whole ledger, not the line.**
-//! [`ReplicatePair`](replicate_pair::ReplicatePair) is constructed from a
-//! [`LedgerAdmission`](ledger_admission::LedgerAdmission), which carries the refusals together with
-//! the admissions, and it refuses outright if any line was refused before requiring exactly the
-//! frozen inventory's ordinal set. So two perfect originals accompanied by a third line — a failed
-//! attempt, a `Control` record, a retry-shaped duplicate — produce no report rather than a report
-//! that quietly ignores the third.
+//! **The unit of admission is the whole ledger file, and in the production configuration that is
+//! enforced by what cannot be called.** In any build of this crate that is not itself a test binary,
+//! [`CalibrationLedger`](calibration_ledger::CalibrationLedger) is obtainable only by reading a path:
+//! its decoder is private to its own module, so no caller can decode a substring, a hand-assembled
+//! subset, or a single record and pass the result on as a ledger. The sole exception is
+//! `CalibrationLedger::from_complete_contents_for_tests`, which is `#[cfg(test)]` and therefore does
+//! not exist in that configuration; the pure tests below use it to decode hand-built wire lines
+//! without a filesystem, and it is `pub(crate)`, so no other crate can name it in any configuration.
+//! [`LedgerAdmission`](ledger_admission::LedgerAdmission) consumes that value and offers every line,
+//! and its only exit yields the complete replicates *or* the refusal — never both, so refusals cannot
+//! be bound to `_` and forgotten. [`ReplicatePair`](replicate_pair::ReplicatePair) then requires
+//! exactly the frozen inventory's ordinal set. So two perfect originals accompanied by a third line —
+//! a failed attempt, a `Control` record, a retry-shaped duplicate — produce no report rather than a
+//! report that quietly ignores the third.
 //!
 //! **The lag set is derived, not preregistered.** §568/§569/§615 name "lag dependence/effective
 //! information" and "autocorrelation" without fixing a `k`, so [`lag_domain`] derives the domain
@@ -66,6 +73,7 @@ pub(crate) mod between_replicate_report;
 pub(crate) mod calibration_analysis_error;
 pub(crate) mod calibration_diagnostics_report;
 pub(crate) mod calibration_ingest_error;
+pub(crate) mod calibration_ledger;
 pub(crate) mod calibration_record_dto;
 pub(crate) mod calibration_rung_dto;
 pub(crate) mod calibration_series_dto;
@@ -86,12 +94,12 @@ pub(crate) mod ledger_admission;
 /// the analyzer's real API.
 #[cfg(test)]
 pub(crate) mod ledger_fixture;
+pub(crate) mod ledger_line;
 pub(crate) mod measurement_channel_dto;
 pub(crate) mod method_facts_dto;
 pub(crate) mod normalized_autocorrelation;
 pub(crate) mod outcome_ceiling_dto;
 pub(crate) mod pair_refusal;
-pub(crate) mod parse_calibration_ndjson;
 pub(crate) mod positioned_difference_report;
 pub(crate) mod positioned_median_report;
 pub(crate) mod refused_line;

@@ -1,9 +1,9 @@
 //! A zero sample invalidates its own attempt, wherever in the series it sits.
 
 use crate::indexed_sender_view_calibration_analysis::admission_refusal::AdmissionRefusal;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
 /// Coverage: positivity at the first, a middle, and the last position.
@@ -21,10 +21,12 @@ fn a_nonpositive_sample_refuses_admission() {
         samples[position] = 0;
 
         let line = LedgerFixture::complete(0).with_samples(samples).line();
-        let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
+        let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+            .expect("the fixture line decodes")
+            .into_lines();
 
         assert_eq!(
-            CompleteReplicate::admit(&records[0]).unwrap_err(),
+            CompleteReplicate::admit(&lines[0].record).unwrap_err(),
             AdmissionRefusal::NonPositiveSample { position },
             "a zero sample at position {position} invalidates the attempt, and the refusal says where"
         );

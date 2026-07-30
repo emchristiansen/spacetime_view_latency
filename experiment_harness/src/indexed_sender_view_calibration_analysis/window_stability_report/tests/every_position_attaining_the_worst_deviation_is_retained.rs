@@ -2,10 +2,10 @@
 
 use crate::analysis::stats::median::median;
 use crate::analysis::stats::rational::Rational;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
 use crate::indexed_sender_view_calibration_analysis::window_stability_report::WindowStabilityReport;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
@@ -81,7 +81,10 @@ fn every_position_attaining_the_worst_deviation_is_retained() {
     );
 
     assert!(
-        rendered["spread"]["numerator"].as_i64().expect("an integer") > 0,
+        rendered["spread"]["numerator"]
+            .as_i64()
+            .expect("an integer")
+            > 0,
         "a non-constant series has a strictly positive max-minus-min spread"
     );
     assert_eq!(
@@ -100,6 +103,8 @@ fn every_position_attaining_the_worst_deviation_is_retained() {
 /// An admitted replicate carrying `samples`.
 fn replicate(samples: Vec<u128>) -> CompleteReplicate {
     let line = LedgerFixture::complete(0).with_samples(samples).line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the fixture line is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("the fixture line is admissible")
 }

@@ -1,7 +1,7 @@
 //! An unknown field fails the whole line, and the failure names which line.
 
+use super::super::decode_complete_contents;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 
 /// Coverage: the closed wire contract, and position tagging across a multi-line file.
 ///
@@ -18,7 +18,7 @@ fn an_unknown_field_is_rejected_with_its_line_number() {
         .replace("\"schedule_seed\":", "\"unexpected_new_method_fact\":");
     let ledger = format!("{good}\n{tampered}\n");
 
-    let error = parse_calibration_ndjson(&ledger)
+    let error = decode_complete_contents(&ledger)
         .expect_err("an unrecognised field must fail the line rather than be ignored");
     assert_eq!(
         error.line_number(),
@@ -31,6 +31,6 @@ fn an_unknown_field_is_rejected_with_its_line_number() {
         error.diagnostic()
     );
 
-    parse_calibration_ndjson(&format!("{good}\n"))
+    decode_complete_contents(&format!("{good}\n"))
         .expect("the untampered fixture decodes, so the refusal above is about the tampering");
 }

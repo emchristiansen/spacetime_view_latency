@@ -1,10 +1,10 @@
 //! A key component the freeze cannot contain refuses admission rather than being ignored.
 
 use crate::indexed_sender_view_calibration_analysis::admission_refusal::AdmissionRefusal;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::frozen_candidate_version::frozen_candidate_version;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 
 /// Coverage: the hole an earlier draft left open, closed from both of its sides.
 ///
@@ -37,9 +37,11 @@ fn a_forged_key_component_is_refused() {
     );
 
     let unmodified = LedgerFixture::complete(0).line();
-    let records = parse_calibration_ndjson(&unmodified).expect("the fixture line decodes");
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&unmodified)
+        .expect("the fixture line decodes")
+        .into_lines();
     assert!(
-        CompleteReplicate::admit(&records[0]).is_ok(),
+        CompleteReplicate::admit(&lines[0].record).is_ok(),
         "the unmodified fixture is admissible, so the refusals above are about the forged component \
          rather than about the fixture being wrong"
     );
@@ -47,6 +49,9 @@ fn a_forged_key_component_is_refused() {
 
 /// Decode one line, attempt admission, and return the refusal it must produce.
 fn refusal(line: &str) -> AdmissionRefusal {
-    let records = parse_calibration_ndjson(line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect_err("a forged key component must refuse admission")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record)
+        .expect_err("a forged key component must refuse admission")
 }

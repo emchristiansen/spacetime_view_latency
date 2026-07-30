@@ -1,10 +1,10 @@
 //! Disagreement covers the whole window-median series, and the extrema are ordinal, not signed.
 
 use crate::indexed_sender_view_calibration_analysis::between_replicate_report::BetweenReplicateReport;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::candidate_window::CandidateWindow;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
@@ -73,6 +73,8 @@ fn replicate(ordinal: u32, base: u128) -> CompleteReplicate {
                 .collect(),
         )
         .line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the fixture line is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("the fixture line is admissible")
 }

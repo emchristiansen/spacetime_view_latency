@@ -16,10 +16,10 @@ use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
 /// `ReplicatePair`, so a one-series report has no value to be built from.
 ///
 /// **The requirement is the whole ledger, not merely two good lines in it.** [`Self::of`] takes a
-/// [`LedgerAdmission`] — every decoded line, admitted and refused together — so a file containing
-/// two perfect originals *plus* anything else cannot produce a pair. The freeze declares exactly two
-/// records; a third line means the artifact is not that freeze, and reporting from its good two
-/// would describe a pair while silently discarding whatever the extra line said.
+/// [`LedgerAdmission`] — the outcome of offering every line of an actual ledger *file* — so a file
+/// containing two perfect originals *plus* anything else cannot produce a pair. The freeze declares
+/// exactly two records; a third line means the artifact is not that freeze, and reporting from its
+/// good two would describe a pair while silently discarding whatever the extra line said.
 ///
 /// **Then the frozen ordinal *set*, not two distinct ordinals.** Distinctness alone would accept
 /// records at ordinals 2 and 3 — two perfectly distinct attempts that the inventory never declared —
@@ -47,16 +47,15 @@ impl ReplicatePair {
     /// picking two.
     ///
     /// The three checks run from most general to most specific. Any refused line means the artifact
-    /// is not the freeze at all, so that is decided first and the refusals travel with the answer.
-    /// Duplicates come before set equality, so one attempt counted twice is reported as the
-    /// duplicate it is rather than as a missing original.
+    /// is not the freeze at all, so that is decided first — by the admission itself, whose only exit
+    /// yields the complete replicates *or* the refusal, never both. Duplicates come before set
+    /// equality, so one attempt counted twice is reported as the duplicate it is rather than as a
+    /// missing original.
     pub(crate) fn of(admission: LedgerAdmission) -> Result<Self, PairRefusal> {
         // Any refused line at all: the freeze is exactly two originals, so a ledger with a third
-        // record — however that record failed — is not the inventory the rule is stated over.
-        let (admitted, refused) = admission.into_parts();
-        if !refused.is_empty() {
-            return Err(PairRefusal::LedgerHasRefusedLines { refused });
-        }
+        // record — however that record failed — is not the inventory the rule is stated over. This
+        // is not a check performed here but a condition of obtaining the replicates at all.
+        let admitted = admission.into_complete_inventory()?;
 
         // Duplicates next: `{0, 0}` and `{0}` collapse to the same set, so a later set comparison
         // would report one attempt counted twice as a *missing* original.

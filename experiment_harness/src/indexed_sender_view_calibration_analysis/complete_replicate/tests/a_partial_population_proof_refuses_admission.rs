@@ -1,10 +1,10 @@
 //! Every population count is checked, not only the append count.
 
 use crate::indexed_sender_view_calibration_analysis::admission_refusal::AdmissionRefusal;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::frozen_population::FrozenPopulation;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 
 /// Coverage: the full composition predicate, one field at a time.
 ///
@@ -63,7 +63,9 @@ fn a_partial_population_proof_refuses_admission() {
 
 /// Decode one line, attempt admission, and return the refusal it must produce.
 fn refusal(line: &str) -> AdmissionRefusal {
-    let records = parse_calibration_ndjson(line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0])
+    let lines = CalibrationLedger::from_complete_contents_for_tests(line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record)
         .expect_err("a perturbed population proof must refuse admission")
 }

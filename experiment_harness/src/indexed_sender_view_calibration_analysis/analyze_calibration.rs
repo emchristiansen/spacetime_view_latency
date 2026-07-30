@@ -4,8 +4,8 @@ use std::path::Path;
 
 use crate::indexed_sender_view_calibration_analysis::calibration_analysis_error::CalibrationAnalysisError;
 use crate::indexed_sender_view_calibration_analysis::calibration_diagnostics_report::CalibrationDiagnosticsReport;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 
 /// The whole read-only §569 path: load the ledger, decode every line, admit what qualifies, pair the
@@ -22,20 +22,15 @@ use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePa
 pub(crate) fn analyze_calibration(
     ledger: &Path,
 ) -> Result<CalibrationDiagnosticsReport, CalibrationAnalysisError> {
-    let contents = std::fs::read_to_string(ledger).map_err(|error| {
-        CalibrationAnalysisError::LedgerUnreadable {
-            path: ledger.to_path_buf(),
-            diagnostic: error.to_string(),
-        }
-    })?;
-    let records =
-        parse_calibration_ndjson(&contents).map_err(CalibrationAnalysisError::Malformed)?;
+    // Reading and decoding are one step, inside the ledger type: this function never holds the
+    // contents, so it has no opportunity to offer a slice of them for admission.
+    let ledger = CalibrationLedger::read(ledger)?;
 
-    // The whole ledger is offered for admission and the outcome travels onward intact: `LedgerAdmission`
-    // holds the refusals alongside the admissions, so pairing sees both and this function has no way to
-    // forward one without the other.
-    let admission = LedgerAdmission::of(&records);
-    let pair = ReplicatePair::of(admission).map_err(CalibrationAnalysisError::NotPairable)?;
+    // The whole file is offered for admission, and the outcome cannot be split: `LedgerAdmission`'s
+    // only exit yields the complete replicates or the refusal, so this function has no way to forward
+    // admissions while leaving refusals behind.
+    let pair = ReplicatePair::of(LedgerAdmission::of(ledger))
+        .map_err(CalibrationAnalysisError::NotPairable)?;
     Ok(CalibrationDiagnosticsReport::of(&pair))
 }
 

@@ -1,9 +1,9 @@
 //! An admissible series whose exact coefficient is `-1` serializes exactly `-1.0` end to end.
 
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::lag_autocorrelation::LagAutocorrelation;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
 /// Coverage: the reachable one-ULP range violation, through the **production** computation.
@@ -82,6 +82,8 @@ fn witness_replicate() -> CompleteReplicate {
     samples[MAX_PACED_SAMPLES_USIZE - 1] = 4_100_003;
 
     let line = LedgerFixture::complete(0).with_samples(samples).line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("the witness is an admissible replicate")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record).expect("the witness is an admissible replicate")
 }

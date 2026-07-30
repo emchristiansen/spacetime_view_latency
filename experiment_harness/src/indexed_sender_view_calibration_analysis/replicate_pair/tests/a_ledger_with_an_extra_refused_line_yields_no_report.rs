@@ -1,10 +1,10 @@
 //! Two perfect originals plus one refused line is not the frozen inventory, so no `W` is evaluated.
 
 use crate::indexed_sender_view_calibration_analysis::admission_refusal::AdmissionRefusal;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
 use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::refused_line::RefusedLine;
 use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 
@@ -65,14 +65,17 @@ fn a_ledger_with_an_extra_refused_line_yields_no_report() {
         LedgerFixture::complete(0).line(),
         LedgerFixture::complete(1).line(),
     ];
-    let records = parse_calibration_ndjson(&untampered.join("\n")).expect("the lines decode");
-    ReplicatePair::of(LedgerAdmission::of(&records))
+    let ledger_of_fixtures =
+        CalibrationLedger::from_complete_contents_for_tests(&untampered.join("\n"))
+            .expect("the lines decode");
+    ReplicatePair::of(LedgerAdmission::of(ledger_of_fixtures))
         .expect("exactly the two originals pair, so the refusals above are about the extra line");
 }
 
 /// Decode `lines` as one ledger, admit it whole, and return the pairing refusal it must produce.
 fn refusal(lines: &[String]) -> PairRefusal {
-    let records = parse_calibration_ndjson(&lines.join("\n")).expect("the fixture lines decode");
-    ReplicatePair::of(LedgerAdmission::of(&records))
+    let ledger_of_fixtures = CalibrationLedger::from_complete_contents_for_tests(&lines.join("\n"))
+        .expect("the fixture lines decode");
+    ReplicatePair::of(LedgerAdmission::of(ledger_of_fixtures))
         .expect_err("a ledger that is not exactly the frozen inventory produces no pair")
 }

@@ -1,7 +1,7 @@
 //! An unrecognised spelling of a one-variant key component fails to decode, loudly.
 
+use super::super::decode_complete_contents;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 
 /// Coverage: the syntactic half of the key boundary, for every component whose source enum has one
 /// variant.
@@ -31,7 +31,7 @@ fn an_unknown_variant_spelling_fails_decoding() {
         let line = LedgerFixture::complete(0).line().replace(frozen, forged);
         // `expect_err` takes a plain message, so the component name is interpolated here rather than
         // left as a brace placeholder that would print literally on failure.
-        let error = parse_calibration_ndjson(&line).expect_err(&format!(
+        let error = decode_complete_contents(&line).expect_err(&format!(
             "an unrecognised spelling of {frozen} must fail the line rather than decode into \
              something this analyzer then treats as frozen"
         ));
@@ -44,6 +44,6 @@ fn an_unknown_variant_spelling_fails_decoding() {
         );
     }
 
-    parse_calibration_ndjson(&LedgerFixture::complete(0).line())
+    decode_complete_contents(&LedgerFixture::complete(0).line())
         .expect("the untampered fixture decodes, so the refusals above are about the tampering");
 }

@@ -1,10 +1,10 @@
 //! A period-two series is anti-correlated at odd lags and correlated at even ones.
 
 use crate::analysis::stats::rational::Rational;
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
 use crate::indexed_sender_view_calibration_analysis::lag_autocorrelation::LagAutocorrelation;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_pilot::calibration_params::MAX_PACED_SAMPLES_USIZE;
 
 /// Coverage: that the diagnostic detects dependence *beyond* lag 1, and gets its sign right.
@@ -68,6 +68,9 @@ fn alternating_replicate() -> CompleteReplicate {
                 .collect(),
         )
         .line();
-    let records = parse_calibration_ndjson(&line).expect("the fixture line decodes");
-    CompleteReplicate::admit(&records[0]).expect("an alternating positive series is admissible")
+    let lines = CalibrationLedger::from_complete_contents_for_tests(&line)
+        .expect("the fixture line decodes")
+        .into_lines();
+    CompleteReplicate::admit(&lines[0].record)
+        .expect("an alternating positive series is admissible")
 }

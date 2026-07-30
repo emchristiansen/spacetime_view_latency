@@ -1,10 +1,10 @@
 //! Pairing requires exactly the frozen ordinal set — not merely two distinct ordinals.
 
+use crate::indexed_sender_view_calibration_analysis::calibration_ledger::CalibrationLedger;
 use crate::indexed_sender_view_calibration_analysis::frozen_replicate_ordinals::frozen_replicate_ordinals;
 use crate::indexed_sender_view_calibration_analysis::ledger_admission::LedgerAdmission;
 use crate::indexed_sender_view_calibration_analysis::ledger_fixture::LedgerFixture;
 use crate::indexed_sender_view_calibration_analysis::pair_refusal::PairRefusal;
-use crate::indexed_sender_view_calibration_analysis::parse_calibration_ndjson::parse_calibration_ndjson;
 use crate::indexed_sender_view_calibration_analysis::replicate_pair::ReplicatePair;
 
 /// Coverage: every way an all-admissible ledger can still fail to be the frozen inventory.
@@ -59,6 +59,7 @@ fn pair(replicates: &[u32]) -> Result<ReplicatePair, PairRefusal> {
         .iter()
         .map(|replicate| LedgerFixture::complete(*replicate).line())
         .collect();
-    let records = parse_calibration_ndjson(&lines.join("\n")).expect("the fixture lines decode");
-    ReplicatePair::of(LedgerAdmission::of(&records))
+    let ledger_of_fixtures = CalibrationLedger::from_complete_contents_for_tests(&lines.join("\n"))
+        .expect("the fixture lines decode");
+    ReplicatePair::of(LedgerAdmission::of(ledger_of_fixtures))
 }
