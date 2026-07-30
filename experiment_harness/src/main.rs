@@ -20,6 +20,7 @@ mod entity_owner_pilot;
 mod entity_owner_smoke;
 mod entity_owner_visible_rows_probe;
 mod execute_run;
+mod indexed_sender_view_calibration_pilot;
 mod manifest;
 mod module_artifact;
 mod observation;
@@ -239,6 +240,33 @@ enum Command {
         host_waiter: PathBuf,
         /// Explicit seed driving the within-group target order. The counterbalanced rung order and
         /// the seeded data are both seed-independent: only target order varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Append-only E2 method-calibration pilot for the `IndexedControlActivitySenderView` candidate
+    /// (spec c33f2e51): run exactly two independent replicates at the baseline global rung, each
+    /// seeding a ten-row own slice and appending at most a thousand production-shaped single-row
+    /// paced rows, retaining every ordered raw nanosecond. Its only admissible output is evidence
+    /// for freezing the screen's within-cell sample count `W`: no performance, scaling, candidate,
+    /// or site conclusion, and no Arm/Control comparison.
+    IndexedSenderViewCalibrationPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed recorded on every record. Nothing in this pilot's order or seeded data is
+        /// seed-derived — there is one target and one rung, so there is nothing to permute — but the
+        /// value is carried so a ledger line states the run it belongs to.
         #[arg(long)]
         seed: u64,
         /// Path the durable NDJSON ledger is created at, exclusively.
@@ -523,6 +551,22 @@ fn main() -> Result<()> {
                 &host_waiter,
                 &OutputPath::new(ledger),
                 ScheduleSeed::new(seed),
+            )
+        }
+        Command::IndexedSenderViewCalibrationPilot {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::indexed_sender_view_calibration_pilot::indexed_sender_view_calibration_pilot(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                seed,
             )
         }
         Command::EntityOwnerVisibleRowsProbe {

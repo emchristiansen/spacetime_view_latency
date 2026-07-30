@@ -62,6 +62,16 @@ pub(crate) const TABLE_ENTITY_OWNER: &str = "entity_owner";
 /// present and visible to the caller, so an empty answer from the view below is emptiness by
 /// predicate rather than an empty table.
 pub(crate) const TABLE_CONTROL_ACTIVITY_SENDER_VIEW: &str = "control_activity_sender_view";
+/// The `indexed_control_activity_sender_view` subscription query name — the contract with the
+/// module's `#[view(accessor = indexed_control_activity_sender_view, …)]`, site 4's indexed sender
+/// arm and the relation the append-only E2 calibration pilot times.
+pub(crate) const TABLE_INDEXED_CONTROL_ACTIVITY_SENDER_VIEW: &str =
+    "indexed_control_activity_sender_view";
+/// The `indexed_control_activity` base-table subscription query name — the contract with the
+/// module's `#[table(accessor = indexed_control_activity, public)]`. The calibration pilot
+/// subscribes to it untimed after its batch, as the composition witness proving the unrelated
+/// population it measured against was actually seeded.
+pub(crate) const TABLE_INDEXED_CONTROL_ACTIVITY: &str = "indexed_control_activity";
 /// The `control_activity_empty_view` subscription query name — the contract with the module's
 /// `#[view(accessor = control_activity_empty_view, …)]`, the typed-contradiction capability
 /// reproducer for site 4's admin empty-result question.
