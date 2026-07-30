@@ -19,6 +19,15 @@
 //! its own target key and no other, reports that key's *own* observer instant as the sample's
 //! endpoint, and surfaces a failed write instead of letting it expire.
 //!
+//! The calibration pilot's paced **append** barrier is covered the same way again, with one addition
+//! its two-producer channel makes load-bearing: every message is keyed by activity id, failures
+//! included, so a stale contradictory report about an already-sealed append cannot end the sample
+//! that happens to be waiting. Its three tests cover the target insert, foreign-id skipping and the
+//! endpoint instant; a stale failure skipped and a matching one classified; and a channel with no
+//! senders left, which is the harness losing its own channel rather than an elapsed bound. All
+//! instant arithmetic in them goes through [`paced_append_fixture::checked_after`], because the
+//! fail-fast policy is not relaxed for test code.
+//!
 //! The campaign's seeding step adds the one-completion barrier ([`await_reducer_completion`]),
 //! covered for both callback-delivered failures: a reducer refusal and an SDK internal error are
 //! each the application's answer, and each keeps its own wording.
@@ -38,10 +47,13 @@
 //! awaited reducer's remaining branches: a failed issue, an elapsed wait, and a sender dropped
 //! without a callback, none of which a hand-delivered message can produce.
 
+mod a_dropped_paced_append_channel_is_an_infrastructure_failure;
 mod a_duplicate_measured_confirmation_is_rejected;
 mod a_duplicate_prerequisite_confirmation_is_rejected;
 mod a_duplicate_saturated_confirmation_is_rejected;
 mod a_failed_paced_write_is_rejected_as_an_application_failure;
+mod a_paced_append_failure_is_matched_to_its_own_append;
+mod a_paced_append_stops_only_on_its_own_target_id;
 mod a_failed_saturated_write_is_rejected_as_an_application_failure;
 mod a_measured_failure_is_rejected;
 mod a_missing_measured_confirmation_times_out_at_the_supplied_deadline;
@@ -52,5 +64,6 @@ mod a_prerequisite_failure_is_rejected;
 mod a_seeding_internal_error_is_an_application_failure;
 mod a_seeding_reducer_error_is_an_application_failure;
 mod measured_confirmations_seal_in_issue_order;
+mod paced_append_fixture;
 mod prerequisites_confirm_regardless_of_order;
 mod saturated_confirmations_seal_in_issue_order;

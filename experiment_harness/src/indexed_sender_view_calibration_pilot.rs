@@ -7,12 +7,12 @@
 //! at most [`MAX_PACED_SAMPLES`](calibration_params::MAX_PACED_SAMPLES) production-shaped single-row
 //! rows to the measured identity's own slice, and retains every ordered raw nanosecond.
 //!
-//! **Phase 1 skeleton: nothing here measures anything yet.** The vocabulary, the frozen inventory,
-//! the gate, and the ledger seam are complete, but [`run_attempt`](calibration_driver) is the sole
-//! `todo!()`. The CLI subcommand is wired and returns the Phase 1 refusal before any side effect —
-//! before the ledger is created, the waiter resolved or run, or anything provisioned — so `run_attempt`
-//! is unreachable and nothing panics. Every "it runs / appends / retains" statement in this file
-//! describes the frozen method the types encode, not behaviour that exists today.
+//! **The measurement path is implemented and the CLI subcommand runs it.** Each attempt provisions
+//! its own pinned instance, refuses an aliased measured identity before writing anything, seeds both
+//! populations one confirmed single-row transaction at a time, subscribes the measured arm, brackets
+//! the paced append batch with host observations, subscribes the untimed composition witness,
+//! validates both caches row by row, settles into exactly one terminal record, and tears down. No
+//! calibration run has been performed from this code yet, and performing one is a separate act.
 //!
 //! **What the calibration ceiling actually rests on.** The spec forbids this pilot from producing any
 //! performance, scaling, candidate, or site conclusion and any Arm/Control comparison. The record
@@ -56,8 +56,8 @@
 //!
 //! Structurally this is the [`crate::control_registry_discovery_screen`] record model applied to a
 //! paced-append channel: a frozen inventory sealed before the first server is provisioned, one fresh
-//! isolated instance per attempt behind the typed host gate, four closed failure stages onto five
-//! honest terminal record shapes, and terminal-record-before-release settlement. Nothing here
+//! isolated instance per attempt behind the typed host gate, closed failure stages onto honest
+//! terminal record shapes, and terminal-record-before-release settlement. Nothing here
 //! extends the dormant `view_read_set_campaign` namespace; the axis ladder is not re-minted but read
 //! from the Pilot's frozen [`GlobalRowRung`](crate::entity_owner_pilot::global_row_rung::GlobalRowRung).
 //!

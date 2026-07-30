@@ -10,6 +10,8 @@ use spacetimedb_sdk::__codegen::InternalError;
 use spacetimedb_sdk::{DbContext, Identity, Table, TableWithPrimaryKey, Timestamp};
 
 use crate::client::measured_step_failure::MeasuredStepFailure;
+use crate::client::paced_append::PacedAppend;
+use crate::client::paced_append_failure::PacedAppendFailure;
 use crate::client::reconnect_failure::ReconnectFailure;
 use crate::client::view_event_shape::ViewEventShape;
 use crate::dataset::seed_op::SeedOp;
@@ -18,13 +20,15 @@ use crate::dataset::subscribed_rows::SubscribedRows;
 use crate::dataset::subscribed_table::SubscribedTable;
 use crate::entity_owner_pilot::pilot_params::PILOT_ROW_PAYLOAD;
 use crate::module_artifact::bindings::{
-    insert_chronicle_message, insert_control_activity, insert_entity_owner, insert_message,
-    insert_message_visibility, record_control_activity, record_first_control_activity,
-    update_entity_owner, ControlActivity, ControlActivityEmptyViewTableAccess,
-    ControlActivityLatestByControlViewTableAccess, ControlActivitySenderViewTableAccess,
-    ControlActivityTableAccess, ControlRegistry, ControlRegistryAllViewTableAccess,
-    ControlRegistryTableAccess, DbConnection, EntityOwner, EntityOwnerSenderViewTableAccess,
-    EntityOwnerTableAccess, ReducerEventContext, SubscriptionHandle,
+    insert_chronicle_message, insert_control_activity, insert_entity_owner,
+    insert_indexed_control_activity, insert_message, insert_message_visibility,
+    record_control_activity, record_first_control_activity, update_entity_owner, ControlActivity,
+    ControlActivityEmptyViewTableAccess, ControlActivityLatestByControlViewTableAccess,
+    ControlActivitySenderViewTableAccess, ControlActivityTableAccess, ControlRegistry,
+    ControlRegistryAllViewTableAccess, ControlRegistryTableAccess, DbConnection, EntityOwner,
+    EntityOwnerSenderViewTableAccess, EntityOwnerTableAccess, IndexedControlActivity,
+    IndexedControlActivitySenderViewTableAccess, IndexedControlActivityTableAccess,
+    ReducerEventContext, SubscriptionHandle,
 };
 use crate::observation::confirmation_set::ConfirmationSet;
 use crate::observation::dose_event_counter::DoseEventCounter;
@@ -195,6 +199,38 @@ enum PacedMessage {
     },
     /// A paced write failed at the reducer, so its visibility will never arrive.
     Failed { index: usize, error: String },
+}
+
+/// One event the **paced append** channel waits on, over one [`mpsc`] channel shared by the whole
+/// batch.
+///
+/// The insert-shaped twin of [`PacedMessage`], kept separate rather than widened, because the two
+/// channels stop on different events and match on different keys: an update to one of a fixed set of
+/// cycled keys there, the arrival of a brand-new row here. One enum serving both would make the
+/// key's meaning depend on which caller built the channel.
+enum PacedAppendMessage {
+    /// A subscribed row was inserted into the client cache, identified by its primary key and
+    /// carrying the instant the observer saw it.
+    ///
+    /// The instant travels in the message for the same reason it does on the update channel: the
+    /// observer runs on the SDK's callback thread and one observer serves the whole batch, so
+    /// reading a clock after the barrier wakes would put this thread's scheduling inside every
+    /// sample.
+    Visible { id: u64, observed_at: Instant },
+    /// A paced append failed at the reducer, so *that* append's visibility will never arrive.
+    ///
+    /// **Keyed by `id` as well as `index`, and the key is load-bearing.** A completion callback and
+    /// the observer are two producers racing on one channel, so an append's visibility can be
+    /// delivered before its own contradictory completion report — a cache apply followed by an SDK
+    /// internal error for the same call. Without a key the barrier could only read "a failure
+    /// arrived" and would end whichever sample happened to be waiting, attributing a stale report to
+    /// an append that had not failed. With one it is matched to the append it names, exactly as a
+    /// visibility is. `index` rides along for the diagnostic; `id` is what decides.
+    Failed {
+        index: usize,
+        id: u64,
+        error: String,
+    },
 }
 
 /// One callback outcome from the campaign's **saturated** batch (E1).
@@ -765,6 +801,171 @@ impl ConnectedClient {
     /// subscription.
     pub(crate) fn read_control_activity(&self) -> Vec<ControlActivity> {
         self.conn.db.control_activity().iter().collect()
+    }
+
+    /// Seed one `indexed_control_activity` row via its confirmed insertion reducer — the calibration
+    /// pilot's seeding primitive for **both** of its populations.
+    ///
+    /// Copies [`Self::insert_control_activity`] exactly, over `insert_indexed_control_activity`, so
+    /// the indexed arm's seeding waits on the same confirmation primitive as every other candidate's
+    /// and cannot diverge in how it waits. The module's two inserters take an identical argument
+    /// list for exactly this reason.
+    ///
+    /// **`user_identity` is a parameter and is not derived from the sender**, which is what lets one
+    /// connection seed rows owned by an identity it is not connected as — the unrelated population
+    /// the sender-scoped arm must *not* return. `ts` is likewise explicit rather than clock-read, so
+    /// a seeded row is reproducible from the frozen constants alone.
+    pub(crate) fn insert_indexed_control_activity(
+        &self,
+        id: u64,
+        ts: Timestamp,
+        control_uuid: u64,
+        user_identity: Identity,
+    ) -> Result<()> {
+        self.await_reducer(|cb| {
+            self.conn
+                .reducers
+                .insert_indexed_control_activity_then(id, ts, control_uuid, user_identity, cb)
+        })
+        .with_context(|| format!("seeding indexed_control_activity id={id}"))
+    }
+
+    /// Read the indexed sender-scoped view's currently-subscribed rows out of the live client cache,
+    /// issuing no new subscription — the calibration pilot's measured arm.
+    pub(crate) fn read_indexed_control_activity_sender_view(&self) -> Vec<IndexedControlActivity> {
+        self.conn
+            .db
+            .indexed_control_activity_sender_view()
+            .iter()
+            .collect()
+    }
+
+    /// Read the `indexed_control_activity` base table out of the live client cache, issuing no new
+    /// subscription — the calibration pilot's composition witness.
+    pub(crate) fn read_indexed_control_activity(&self) -> Vec<IndexedControlActivity> {
+        self.conn.db.indexed_control_activity().iter().collect()
+    }
+
+    /// The calibration pilot's **paced append** channel: one outstanding single-row append at a
+    /// time, each sample stopped when its new row becomes visible in the subscriber's sender-scoped
+    /// cache.
+    ///
+    /// The append-only analogue of [`Self::measure_paced_visible_batch`], and separate from it
+    /// deliberately. That channel measures an *update* to a row that already exists, cycling a fixed
+    /// key set and stopping on `on_update`; this one measures the production-shaped write the spec
+    /// freezes for site 4 — a brand-new row appearing — and so must stop on `on_insert` and match a
+    /// key that did not exist when the sample began. Widening the existing channel to serve both
+    /// would put a mode switch inside a frozen measured path whose recorded evidence must not move.
+    ///
+    /// **One observer serves the whole batch and is removed before returning on every path**, so
+    /// nothing that runs afterwards on this connection pays a channel send per delivered row. The
+    /// observer is registered here rather than at subscription time, which keeps the arm's initial
+    /// snapshot — the seeded own slice — out of the channel entirely: those rows are applied before
+    /// this callback exists.
+    ///
+    /// **A stopped batch returns its completed samples**, not a bare error, because a paced append
+    /// batch that fails at sample 400 holds four hundred genuine intervals. See
+    /// [`PacedAppendFailure`].
+    pub(crate) fn measure_paced_appends(
+        &self,
+        appends: &[PacedAppend],
+    ) -> std::result::Result<Vec<LatencySample>, PacedAppendFailure> {
+        let (tx, rx) = mpsc::channel::<PacedAppendMessage>();
+        let observer = self.conn.db.indexed_control_activity_sender_view().on_insert({
+            let visible_tx = tx.clone();
+            // The clock is read as this closure's first statement, on the SDK's callback thread.
+            // What precedes it inside the callback is the generated handle's own row reference;
+            // everything after it — the primary-key read, the channel send, this thread's wake — is
+            // outside the sample.
+            move |_ctx, row| {
+                let observed_at = Instant::now();
+                deliver(
+                    &visible_tx,
+                    PacedAppendMessage::Visible {
+                        id: row.id,
+                        observed_at,
+                    },
+                );
+            }
+        });
+
+        let sampled = self.sample_paced_appends(&tx, &rx, appends);
+
+        self.conn
+            .db
+            .indexed_control_activity_sender_view()
+            .remove_on_insert(observer);
+        sampled
+    }
+
+    /// Walk the paced append batch with the observer already registered.
+    ///
+    /// Split from [`Self::measure_paced_appends`] so the observer's removal covers every path out of
+    /// this walk, early returns included, without a `Drop` guard — the split
+    /// [`Self::sample_paced_batch`] exists for, for the same reason.
+    ///
+    /// Each sample's interval is issue-to-visible: the clock starts before the generated issue call
+    /// and stops **in the observer callback** that reported *this* append's key, never when this
+    /// thread wakes. Every reducer argument is prebuilt — the whole batch's rows were built before
+    /// the first sample — so only the timestamp capture and the generated issue call fall inside the
+    /// interval, plus the SDK's own unavoidable `Box::new(callback)` made within it.
+    fn sample_paced_appends(
+        &self,
+        tx: &mpsc::Sender<PacedAppendMessage>,
+        rx: &mpsc::Receiver<PacedAppendMessage>,
+        appends: &[PacedAppend],
+    ) -> std::result::Result<Vec<LatencySample>, PacedAppendFailure> {
+        let mut samples = Vec::with_capacity(appends.len());
+
+        for (index, append) in appends.iter().enumerate() {
+            // Preregistered experimental pacing: a fixed delay *between* completed samples, outside
+            // every measured interval. Applied before every sample except the first (nothing
+            // precedes it) and never after the last — the exact protocol the paced update channel
+            // applies, and the one the recorded `paced_sample_delay_ms` method fact names.
+            if index != 0 {
+                sleep(Duration::from_millis(PACED_SAMPLE_DELAY_MS));
+            }
+
+            let PacedAppend {
+                id,
+                ts,
+                control_uuid,
+                user_identity,
+            } = *append;
+            let paced_tx = tx.clone();
+            let start = Instant::now();
+            if let Err(e) = self.conn.reducers.insert_indexed_control_activity_then(
+                id,
+                ts,
+                control_uuid,
+                user_identity,
+                paced_append_callback(index, id, paced_tx),
+            ) {
+                return Err(PacedAppendFailure {
+                    samples,
+                    failure: MeasuredStepFailure::Infrastructure(anyhow!(
+                        "issuing paced indexed_control_activity append index {index}: {e:?}"
+                    )),
+                });
+            }
+
+            // Checked rather than `+`, but an invariant rather than an outcome. The append has
+            // already been issued and may already have mutated the database, so there is no
+            // truthful "this batch stopped" record to return from here; and a monotonic clock too
+            // near its representable end is a property of the harness's host, not something the
+            // experiment observed. The interval's start stays immediately before the issue, which is
+            // what the estimand requires, and the deadline is derived from it after.
+            let deadline = start
+                .checked_add(PACED_SAMPLE_TIMEOUT)
+                .expect("monotonic sample deadline must be representable");
+
+            match await_visible_append(rx, id, start, deadline) {
+                Ok(sample) => samples.push(sample),
+                Err(failure) => return Err(PacedAppendFailure { samples, failure }),
+            }
+        }
+
+        Ok(samples)
     }
 
     /// Register all three row callbacks on Arm A, reporting each delivery's [`ViewEventShape`].
@@ -1692,6 +1893,86 @@ fn await_visible_update(
     }
 }
 
+/// The paced append channel's per-sample barrier: block until the subscriber cache reports the
+/// insertion of `target_id`, and return that sample as the interval from `start` to **the instant its
+/// own observer callback ran**.
+///
+/// Factored out of the append walk so it depends on nothing but the channel, the key, the sample's
+/// `start`, and one absolute `deadline` — no live server.
+///
+/// **Every message is filtered by id, failures included, and that is the whole protocol.** A
+/// completion callback and the observer are two producers on one channel, so an append's visibility
+/// can be delivered *before* a contradictory completion report about the same call — a cache apply
+/// followed by an SDK internal error. That report then sits unread while the next sample waits. If
+/// the barrier read failures positionally it would end that innocent sample on its predecessor's
+/// stale message, reporting an application failure for an append that had not been issued when the
+/// failure was produced. Matching a failure to the id it names makes that unrepresentable.
+///
+/// **Non-matching messages of either kind are skipped rather than rejected.** For visibilities this
+/// copies [`await_visible_update`]'s protocol; the reasoning differs from that channel's and is worth
+/// stating rather than inheriting. There, other keys arrive because the frozen schedule cycles ten of
+/// them. Here every append is a fresh id, appends are serial, and the observer is registered after
+/// the arm's initial snapshot has applied — so in a healthy batch the channel carries nothing but
+/// this sample's insert. A message naming another id is therefore about a sample that has already
+/// been sealed or has not yet been issued, and neither is this sample's outcome to report: an
+/// unexpected row reaches the ledger through the composition verifier, and a genuinely absent
+/// visibility ends this sample on its own deadline. Rejecting instead would let one stale message
+/// terminate an attempt that was proceeding correctly. A skipped message's instant is discarded with
+/// it: the sample is the *target* id's endpoint, never the last instant seen.
+///
+/// The subtraction is checked, as it is on the update channel: `start` is captured before the append
+/// is issued and `observed_at` in a callback that can only run after it, so an endpoint preceding its
+/// own start is a broken monotonic clock rather than a slow write, and is refused instead of
+/// saturating to a zero-length sample.
+///
+/// A reducer failure arrives on the same channel, so an append whose visibility can never come is
+/// reported as the application error it is rather than as a timeout.
+fn await_visible_append(
+    rx: &mpsc::Receiver<PacedAppendMessage>,
+    target_id: u64,
+    start: Instant,
+    deadline: Instant,
+) -> std::result::Result<LatencySample, MeasuredStepFailure> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = match rx.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(MeasuredStepFailure::Timeout(anyhow!(
+                    "the paced append of indexed_control_activity id {target_id} did not become \
+                     visible in the subscriber cache within {PACED_SAMPLE_TIMEOUT:?}"
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MeasuredStepFailure::Infrastructure(anyhow!(
+                    "the paced append channel disconnected while awaiting indexed_control_activity \
+                     id {target_id}; the measuring thread holds a sender for the whole batch, so a \
+                     disconnect means the harness dropped one"
+                )))
+            }
+        };
+        match message {
+            PacedAppendMessage::Visible { id, observed_at } if id == target_id => {
+                let elapsed = observed_at.checked_duration_since(start).ok_or_else(|| {
+                    MeasuredStepFailure::Infrastructure(anyhow!(
+                        "the observer saw indexed_control_activity id {target_id} before its own \
+                         append was issued, so the monotonic clock did not advance across the sample"
+                    ))
+                })?;
+                return Ok(LatencySample::from_elapsed(elapsed));
+            }
+            PacedAppendMessage::Failed { index, id, error } if id == target_id => {
+                return Err(MeasuredStepFailure::Application(anyhow!(
+                    "paced append index {index} of indexed_control_activity id {id} failed: {error}"
+                )))
+            }
+            // Both skips, together, so the filtering rule reads as one rule over one key rather than
+            // as a special case for failures.
+            PacedAppendMessage::Visible { .. } | PacedAppendMessage::Failed { .. } => {}
+        }
+    }
+}
+
 /// E1's barrier: receive the saturated batch's callbacks into a slot-indexed
 /// [`SaturatedTimingAccumulator`] and seal the timings in issue order once every write confirms.
 ///
@@ -1826,6 +2107,40 @@ fn paced_callback(
             &tx,
             PacedMessage::Failed {
                 index,
+                error: format!("internal error awaiting reducer: {internal:?}"),
+            },
+        ),
+    }
+}
+
+/// Build the completion callback for one **paced append** at issue `index`.
+///
+/// Silent on success, exactly as [`paced_callback`] is: the sample stops on the row's visibility,
+/// which the observer signals, so a confirmation message would be a second unread send per append on
+/// the path this channel measures. It exists for the case visibility can never come, so the failure
+/// surfaces as the application error it is rather than expiring against the deadline.
+///
+/// Unboxed, as [`measured_callback`] is.
+fn paced_append_callback(
+    index: usize,
+    id: u64,
+    tx: mpsc::Sender<PacedAppendMessage>,
+) -> impl FnOnce(&ReducerEventContext, ReducerOutcome) + Send + 'static {
+    move |_ctx, outcome| match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(msg)) => deliver(
+            &tx,
+            PacedAppendMessage::Failed {
+                index,
+                id,
+                error: format!("reducer returned an error: {msg}"),
+            },
+        ),
+        Err(internal) => deliver(
+            &tx,
+            PacedAppendMessage::Failed {
+                index,
+                id,
                 error: format!("internal error awaiting reducer: {internal:?}"),
             },
         ),

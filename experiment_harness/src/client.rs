@@ -4,5 +4,7 @@
 
 pub mod connected_client;
 pub mod measured_step_failure;
+pub mod paced_append;
+pub mod paced_append_failure;
 pub mod reconnect_failure;
 pub mod view_event_shape;

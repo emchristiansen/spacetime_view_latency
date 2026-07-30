@@ -26,6 +26,35 @@ pub(crate) enum FailureKind {
     Provision,
     /// The client could not connect to the published instance.
     Connect,
+    /// The connected measured identity **is** the frozen unrelated population's owner, so the
+    /// sender-scoped arm would contain both populations and the unrelated axis SSOT §562/§564
+    /// authorize would be absent.
+    ///
+    /// Checked as the first act of the measurement path, immediately after the identity is known and
+    /// before any seeding, so the attempt is refused rather than spent — see
+    /// [`ensure_measured_is_not_the_unrelated_owner`](super::calibration_expectation::ensure_measured_is_not_the_unrelated_owner).
+    /// Left unchecked, the arm would hold 2,010 rows against a 1,010-row expectation, verification
+    /// would fail closed, and the terminal record would read as a sender-scope leak.
+    ///
+    /// **Its own kind rather than folded into [`Self::Connect`] or [`Self::Reducer`].** The
+    /// connection succeeded and no reducer ran, so either label would state something that did not
+    /// happen — repeating in miniature the exact misclassification this guard exists to prevent.
+    /// Nor may it escape as the module header's harness-bug exception: an aliased identity is a
+    /// condition of the run, not a record the type model refuses to build, and letting it propagate
+    /// would abandon this slot and every later one unrecorded.
+    ///
+    /// **Application/semantic, therefore non-retryable — and the reason is what could *not* be
+    /// proven.** Half the infrastructure case is established from source: nothing here reuses a
+    /// credential. [`ConnectedClient::connect`](crate::client::connected_client::ConnectedClient)
+    /// presents `None`, the pinned SDK's builder defaults its token to `None` and inserts no
+    /// `Authorization` header when it is absent, the SDK reads no credential store, and every
+    /// attempt runs against a freshly started server and a freshly published database. The other
+    /// half — that a fresh attempt therefore establishes a *different* identity — is a property of
+    /// the pinned server's anonymous-identity minting, whose source this repository does not carry.
+    /// Retryability is a claim that a later attempt would prospectively differ, so classifying this
+    /// as infrastructure would rest a recorded fact on an unproven one. It is filed under the phase
+    /// that promises nothing instead.
+    IdentityCollision,
     /// A seeding reducer refused or errored while establishing the unrelated population or the
     /// subscriber's own slice.
     Reducer,
@@ -77,9 +106,10 @@ pub(crate) enum FailureKind {
 
 impl FailureKind {
     /// Every kind, for exhaustive checks.
-    pub(crate) const ALL: [FailureKind; 11] = [
+    pub(crate) const ALL: [FailureKind; 12] = [
         FailureKind::Provision,
         FailureKind::Connect,
+        FailureKind::IdentityCollision,
         FailureKind::Reducer,
         FailureKind::Subscription,
         FailureKind::HostObservationBefore,
@@ -98,9 +128,11 @@ impl FailureKind {
     pub(crate) fn stage(self) -> AttemptStage {
         match self {
             Self::Provision => AttemptStage::Unprovisioned,
-            Self::Connect | Self::Reducer | Self::Subscription | Self::HostObservationBefore => {
-                AttemptStage::Unmeasured
-            }
+            Self::Connect
+            | Self::IdentityCollision
+            | Self::Reducer
+            | Self::Subscription
+            | Self::HostObservationBefore => AttemptStage::Unmeasured,
             Self::HostObservationAfterBatchFailure | Self::HostObservationAfter => {
                 AttemptStage::Unbracketed
             }
@@ -130,7 +162,8 @@ impl FailureKind {
             // failure that follows only decides which record shape can hold it. Classifying it by
             // the later failure would let one measurement outcome change phase according to whether
             // a subsequent `/proc` read happened to succeed.
-            Self::Reducer
+            Self::IdentityCollision
+            | Self::Reducer
             | Self::Subscription
             | Self::PacedBatch
             | Self::HostObservationAfterBatchFailure
@@ -183,6 +216,7 @@ impl FailureKind {
         match self {
             Self::Provision
             | Self::Connect
+            | Self::IdentityCollision
             | Self::Reducer
             | Self::Subscription
             | Self::HostObservationBefore => false,
