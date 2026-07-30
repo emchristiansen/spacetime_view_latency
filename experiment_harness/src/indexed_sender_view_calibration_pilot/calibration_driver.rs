@@ -128,7 +128,7 @@ pub(crate) fn indexed_sender_view_calibration_pilot(
                 &pinned,
                 seed,
                 NotRunReason::EnvironmentRefused,
-            )?,
+            ),
             Ok(GateOutcome::Admitted) => run_attempt(listen, module_wasm, attempt, &pinned, seed)?,
         };
 
@@ -143,7 +143,7 @@ pub(crate) fn indexed_sender_view_calibration_pilot(
             };
             append_all(
                 ledger,
-                &settle_remaining(&attempts[index + 1..], &pinned, seed, &reason)?,
+                &settle_remaining(&attempts[index + 1..], &pinned, seed, &reason),
             )?;
             return Err(anyhow!(
                 "calibration replicate {} did not provably release every resource it acquired, so \
@@ -182,7 +182,7 @@ fn phase_two_not_implemented() -> Result<()> {
 ///
 /// **Phase 1: not implemented.** Phase 2 fills the acquisition and measurement lifecycle described
 /// in this module's header. It must return a record rather than an error for every attempt-level
-/// failure, so each of the ten failure kinds settles into exactly one of the five record shapes.
+/// failure, so each of the eleven failure kinds settles into exactly one of the five record shapes.
 /// Only a harness bug — a record the type model refuses to build — propagates, and the caller's `?`
 /// then abandons this slot and every later one without a record. That is the accepted screen's
 /// contract verbatim; it is the one hole in per-attempt coverage, and it is deliberate.
@@ -201,12 +201,21 @@ fn run_attempt(
 /// Separated from the append so the settlement is a pure, testable function: the frozen inventory
 /// promises one terminal record per predeclared attempt, and a run that stops early keeps that
 /// promise only if the slots it never reached are recorded rather than omitted.
+///
+/// **Infallible, so building the suffix's records cannot fail.** [`CalibrationRecord::not_run`] has
+/// nothing to reject, so neither has this: one input slot yields exactly one output record, always.
+///
+/// That is a local guarantee and no more. Once this function is invoked, record *construction*
+/// cannot fail; the append and flush that follow still can, and this says nothing about whether the
+/// function is reached — a harness bug propagating out of [`run_attempt`] abandons the suffix before
+/// settlement is invoked at all. Both of those are the module header's two stated exceptions to
+/// per-attempt terminal coverage, and neither is closed here.
 fn settle_remaining(
     remaining: &[AttemptKey],
     pinned: &PinnedArtifactIdentity,
     seed: u64,
     reason: &NotRunReason,
-) -> Result<Vec<CalibrationRecord>> {
+) -> Vec<CalibrationRecord> {
     remaining
         .iter()
         .map(|attempt| CalibrationRecord::not_run(*attempt, pinned, seed, reason.clone()))
@@ -242,7 +251,7 @@ fn settle_gate_inoperable(
     let reason = NotRunReason::GateInoperable {
         diagnostic: DiagnosticArtifact::of_error(&error),
     };
-    append_all(ledger, &settle_remaining(remaining, pinned, seed, &reason)?)?;
+    append_all(ledger, &settle_remaining(remaining, pinned, seed, &reason))?;
     Err(error.context(
         "the host gate did not gate this attempt, so it and every remaining slot were recorded \
          NotRun(GateInoperable) and the pilot stopped",

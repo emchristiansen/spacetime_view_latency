@@ -104,19 +104,31 @@ pub(crate) enum CalibrationRecord {
 
 impl CalibrationRecord {
     /// A slot that never entered acquisition.
+    ///
+    /// **Infallible, and deliberately typed that way.** The other four constructors return `Result`
+    /// because they have something real to reject — a failure whose kind its stage cannot hold, or a
+    /// disposition disagreeing with acquisition depth. This one has neither: there is no failure and
+    /// no acquisition, and this module has no supersession link to validate, which is the reason the
+    /// accepted screen's equivalent is fallible.
+    ///
+    /// That matters beyond tidiness. This constructor is the whole of slot settlement, and the frozen
+    /// inventory promises one terminal record per predeclared attempt. A `Result` here would make
+    /// [`settle_remaining`](super::calibration_driver) fallible, putting a `?` on precisely the path
+    /// that exists to keep that promise — so a run stopping early could fail to record the slots it
+    /// never reached, for a reason that cannot occur.
     pub(crate) fn not_run(
         key: AttemptKey,
         pinned: &PinnedArtifactIdentity,
         seed: u64,
         reason: NotRunReason,
-    ) -> Result<Self> {
-        Ok(Self::NotRun {
+    ) -> Self {
+        Self::NotRun {
             key,
             method: MethodFacts::frozen(),
             pinned: pinned.clone(),
             schedule_seed: seed,
             reason,
-        })
+        }
     }
 
     /// An attempt that failed before any instance existed.

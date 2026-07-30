@@ -48,6 +48,18 @@ pub(crate) enum FailureKind {
     /// The batch ran to the frozen count and the post-measurement host observation could not be
     /// taken, so the bracket cannot be closed. The complete series survives as non-evidence.
     HostObservationAfter,
+    /// The untimed composition-witness subscription failed to apply, so the caches could not be
+    /// read and the composition could not be checked.
+    ///
+    /// Named for this module's own vocabulary rather than copied verbatim from the accepted screen's
+    /// `ValidationSubscription`: there is exactly one untimed subscription here, and every other type
+    /// in this module calls the relation it materializes the
+    /// [`CompositionWitness`](super::calibration_target::CalibrationTarget::CompositionWitness).
+    ///
+    /// Reached only after a completed paced batch and a closed host bracket, and strictly *before*
+    /// any cache read — so it carries the batch's raw series and can never claim a composition it
+    /// never observed. Its mapping is the accepted screen's exactly.
+    WitnessSubscription,
     /// The batch ran to its end and the series could not seal — a nonpositive sample, or a length
     /// that is not exactly the frozen complete count.
     Sample,
@@ -57,7 +69,7 @@ pub(crate) enum FailureKind {
 
 impl FailureKind {
     /// Every kind, for exhaustive checks.
-    pub(crate) const ALL: [FailureKind; 10] = [
+    pub(crate) const ALL: [FailureKind; 11] = [
         FailureKind::Provision,
         FailureKind::Connect,
         FailureKind::Reducer,
@@ -66,6 +78,7 @@ impl FailureKind {
         FailureKind::PacedBatch,
         FailureKind::HostObservationAfterBatchFailure,
         FailureKind::HostObservationAfter,
+        FailureKind::WitnessSubscription,
         FailureKind::Sample,
         FailureKind::Semantics,
     ];
@@ -83,7 +96,10 @@ impl FailureKind {
             Self::HostObservationAfterBatchFailure | Self::HostObservationAfter => {
                 AttemptStage::Unbracketed
             }
-            Self::PacedBatch | Self::Sample | Self::Semantics => AttemptStage::Bracketed,
+            Self::PacedBatch
+            | Self::WitnessSubscription
+            | Self::Sample
+            | Self::Semantics => AttemptStage::Bracketed,
         }
     }
 
@@ -110,6 +126,7 @@ impl FailureKind {
             | Self::Subscription
             | Self::PacedBatch
             | Self::HostObservationAfterBatchFailure
+            | Self::WitnessSubscription
             | Self::Sample
             | Self::Semantics => FailurePhase::ApplicationOrSemantic,
         }
@@ -130,7 +147,7 @@ impl FailureKind {
     /// Whether a failure of this kind necessarily has a **complete** batch behind it, so a retained
     /// series is mandatory.
     ///
-    /// True exactly for the three kinds reachable only after the batch ran to its end. Note that
+    /// True exactly for the four kinds reachable only after the batch ran to its end. Note that
     /// "ran to its end" is not "reached the frozen count": [`Self::Sample`] is precisely the kind for
     /// a batch that terminated normally and still produced a length other than the frozen one, and it
     /// retains those samples.
@@ -147,7 +164,10 @@ impl FailureKind {
     pub(crate) fn requires_series(self) -> bool {
         matches!(
             self,
-            Self::HostObservationAfter | Self::Sample | Self::Semantics
+            Self::HostObservationAfter
+                | Self::WitnessSubscription
+                | Self::Sample
+                | Self::Semantics
         )
     }
 
@@ -169,8 +189,9 @@ impl FailureKind {
     ///
     /// The `after` observation is taken immediately after the paced batch returns and *before* the
     /// untimed witness subscription or any cache read, so both after-observation kinds strike while
-    /// the caches are still unread. `PacedBatch` likewise stops before them. Only `Sample` and
-    /// `Semantics` are reached past the reads.
+    /// the caches are still unread. `PacedBatch` likewise stops before them, and
+    /// `WitnessSubscription` *is* the subscription that would have made the reads possible failing —
+    /// so it too precedes them. Only `Sample` and `Semantics` are reached past the reads.
     pub(crate) fn can_observe_composition(self) -> bool {
         matches!(self, Self::Sample | Self::Semantics)
     }
