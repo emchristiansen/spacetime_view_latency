@@ -858,10 +858,25 @@ impl ConnectedClient {
     /// would put a mode switch inside a frozen measured path whose recorded evidence must not move.
     ///
     /// **One observer serves the whole batch and is removed before returning on every path**, so
-    /// nothing that runs afterwards on this connection pays a channel send per delivered row. The
-    /// observer is registered here rather than at subscription time, which keeps the arm's initial
-    /// snapshot — the seeded own slice — out of the channel entirely: those rows are applied before
-    /// this callback exists.
+    /// nothing that runs afterwards on this connection pays a channel send per delivered row.
+    ///
+    /// **Registering here rather than at subscription time keeps the arm's initial snapshot out of
+    /// the channel, and the pinned SDK proves it rather than the ordering merely suggesting it.**
+    /// `on_insert` does not install a callback; it queues a `PendingMutation::AddInsertCallback`
+    /// (`client_cache.rs:461`), and pending mutations are applied only *around* message processing,
+    /// never within it (`db_connection.rs:568,584,589`). The subscription's applied callback — which
+    /// is what unblocks `subscribe_untimed` — and its row callbacks run inside one
+    /// `process_message`, so a registration queued from this thread cannot be spliced into the
+    /// middle of it. The seeded own slice therefore cannot reach this observer at all.
+    ///
+    /// The same queueing makes the first sample safe from the opposite direction: because
+    /// `apply_pending_mutations` runs *before* each message is processed, the callback is installed
+    /// before any incoming message's callbacks fire, so no append can have its own insert delivered
+    /// to a not-yet-registered observer.
+    ///
+    /// Removal is queued too, so a late insert may still be delivered after `remove_on_insert`
+    /// returns. That is harmless and is the accepted observer's behaviour as well: the channel is
+    /// local to this call and dropped on return, and `deliver` models a dropped receiver explicitly.
     ///
     /// **A stopped batch returns its completed samples**, not a bare error, because a paced append
     /// batch that fails at sample 400 holds four hundred genuine intervals. See

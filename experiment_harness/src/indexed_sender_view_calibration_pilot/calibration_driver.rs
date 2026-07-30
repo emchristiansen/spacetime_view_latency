@@ -543,10 +543,15 @@ fn measure(client: &ConnectedClient, attempt: AttemptKey) -> Result<MeasuredSett
         }
     };
 
-    // Every append the batch will issue is built here, before the bracket opens: the frozen row
-    // recipe — key arithmetic, timestamp derivation, owner and control attribution — must not run
-    // inside any measured interval.
+    // Every append the batch will issue is built here, and the progress line is printed here, before
+    // the bracket opens. The row recipe — key arithmetic, timestamp derivation, owner and control
+    // attribution — must not run inside any measured interval, and the `println!` must not run inside
+    // the bracket: neither would touch a sample, whose clock starts inside the batch loop, but the
+    // bracket is a claim about the host across the measured window and widening it with harness I/O
+    // would make that claim describe something the batch did not do. The accepted screen prepares
+    // everything before its bracket for the same reason.
     let appends = paced_appends(measured);
+    println!("  appending {MAX_PACED_SAMPLES_USIZE} paced single-row transactions");
 
     // The bracket's own origin, anchored immediately before the `before` reading so that reading's
     // offset is genuinely its zero and the `after` offset measures the interval between the two.
@@ -558,7 +563,6 @@ fn measure(client: &ConnectedClient, attempt: AttemptKey) -> Result<MeasuredSett
         }
     };
 
-    println!("  appending {MAX_PACED_SAMPLES_USIZE} paced single-row transactions");
     let batch = client.measure_paced_appends(&appends);
 
     // Attempted immediately after the batch returns whether or not it completed, and before the
