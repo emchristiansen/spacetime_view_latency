@@ -8,8 +8,15 @@ use crate::indexed_sender_view_calibration_analysis::exact_rational_report::Exac
 use crate::indexed_sender_view_calibration_analysis::positioned_median_report::PositionedMedianReport;
 use crate::indexed_sender_view_calibration_analysis::window_median_series::WindowMedianSeries;
 
-/// The bounded, **threshold-free** projection of one replicate's contiguous-window medians at one
-/// candidate `W`.
+/// One replicate's contiguous-window medians at one candidate `W`: the **complete** position-aware
+/// series, together with **threshold-free** projections of it.
+///
+/// **The series is carried, not summarised away.** §615 requires the position-aware contiguous-window
+/// medians themselves to reach the artifact, separately from the extrema and the range. The
+/// projections below state directly the quantities §569's rule weighs; the series is what lets a
+/// reader recompute any of them, or ask a question this type did not anticipate, without rerunning
+/// the analyzer against a ledger that by then may not exist. A summary that cannot be audited against
+/// its own input is a weaker artifact than one that can.
 ///
 /// **Every term is defined here rather than left to a reader's assumption**, because "stability" and
 /// "worst case" are exactly the words a report can hide a judgement inside:
@@ -40,6 +47,15 @@ pub(crate) struct WindowStabilityReport {
     /// than resolved: two windows equally far from the full-series median in opposite directions is
     /// a different story from one outlying window, and picking either would tell the wrong one.
     worst_deviation_positions: Vec<usize>,
+    /// Every window median, ascending by window start position. Its length is exactly
+    /// `window_count`, and each element states its own position rather than leaving it implicit in
+    /// the array index — so a row quoted out of the artifact still says which window it came from.
+    ///
+    /// **Last on purpose.** At `W = 10` this is 991 elements for one replicate at one candidate, and
+    /// roughly ten thousand across the whole report. Placing it after the projections keeps the
+    /// quantities the rule weighs at the top of each row, where they stay readable, instead of behind
+    /// a screen of numbers. The size is the cost of the §615 requirement, not an oversight.
+    medians: Vec<PositionedMedianReport>,
 }
 
 impl WindowStabilityReport {
@@ -87,6 +103,11 @@ impl WindowStabilityReport {
             spread: ExactRationalReport::of(maximum.sub(minimum)),
             worst_absolute_deviation: ExactRationalReport::of(worst),
             worst_deviation_positions,
+            medians: values
+                .iter()
+                .enumerate()
+                .map(|(position, value)| PositionedMedianReport::of(position, *value))
+                .collect(),
         }
     }
 }

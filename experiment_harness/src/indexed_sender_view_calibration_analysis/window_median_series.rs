@@ -9,12 +9,14 @@ use crate::indexed_sender_view_calibration_analysis::exact_samples::exact_sample
 /// The exact median of every contiguous window of width `W`, indexed by the window's 0-based start
 /// position in the series.
 ///
-/// **An analysis-domain type, deliberately not `Serialize`.** At `W = 10` a thousand-sample series
-/// has 991 windows; emitting all of them for all seven candidates and both replicates would bury the
-/// four things §569's rule actually weighs under about ten thousand numbers. This type is the exact
-/// input, and [`WindowStabilityReport`](super::window_stability_report::WindowStabilityReport) is the
-/// bounded projection that reaches the artifact — the same separation the campaign keeps between
-/// `Rational` and its report projections.
+/// **An analysis-domain type, deliberately not `Serialize`** — a domain/report boundary, not a
+/// withholding. These medians are [`Rational`]s, and a `Rational` has no wire form of its own; it
+/// reaches an artifact only through
+/// [`ExactRationalReport`](super::exact_rational_report::ExactRationalReport), which renders it
+/// losslessly as canonical components. §615 requires this full position-aware series in the emitted
+/// report, and [`WindowStabilityReport`](super::window_stability_report::WindowStabilityReport)
+/// carries every element of it alongside the projections derived from it. So nothing here is
+/// summarised away — it is projected, exactly as the campaign projects every other analysis value.
 ///
 /// Windows are **contiguous and position-aware**, which is the whole point: §569 asks whether a
 /// within-cell median of width `W` is stable *wherever in the series it is taken*, so a window's
