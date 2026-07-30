@@ -72,6 +72,7 @@ pub(crate) mod calibration_series_dto;
 pub(crate) mod candidate_id_dto;
 pub(crate) mod candidate_window;
 pub(crate) mod complete_replicate;
+pub(crate) mod correlation_coefficient;
 pub(crate) mod exact_rational_report;
 pub(crate) mod exact_samples;
 pub(crate) mod experiment_axis_dto;

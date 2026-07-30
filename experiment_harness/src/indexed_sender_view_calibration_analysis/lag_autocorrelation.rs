@@ -2,9 +2,9 @@
 
 use serde::Serialize;
 
-use crate::analysis::finite_f64::FiniteF64;
 use crate::analysis::stats::rational::Rational;
 use crate::indexed_sender_view_calibration_analysis::complete_replicate::CompleteReplicate;
+use crate::indexed_sender_view_calibration_analysis::correlation_coefficient::CorrelationCoefficient;
 use crate::indexed_sender_view_calibration_analysis::exact_rational_report::ExactRationalReport;
 use crate::indexed_sender_view_calibration_analysis::normalized_autocorrelation::NormalizedAutocorrelation;
 
@@ -115,7 +115,9 @@ impl LagAutocorrelation {
             false => {
                 let denominator = (left_scaled as f64 * right_scaled as f64).sqrt();
                 NormalizedAutocorrelation::Defined {
-                    coefficient: FiniteF64::new(numerator_scaled as f64 / denominator),
+                    coefficient: CorrelationCoefficient::from_rounded_ratio(
+                        numerator_scaled as f64 / denominator,
+                    ),
                 }
             }
         };
