@@ -19,6 +19,17 @@ use crate::indexed_sender_view_calibration_pilot::sampling_progress::SamplingPro
 /// reader holding only the ledger sees the classification that was actually in force rather than
 /// having to recompute it against whatever the code says today.
 ///
+/// **Known gap, deliberately not fixed here: the typed physical cause is not recoverable.**
+/// [`FailurePhase`] is a settlement-policy bucket, and [`FailureKind`] narrows a failure only to a
+/// lifecycle location and category — `FailureKind::PacedBatch` says the attempt stopped in the paced
+/// batch, not whether a reducer refused, a barrier exceeded its deadline, or a channel dropped.
+/// Below that granularity the retained diagnostic *text* is the only causal detail kept, and nothing
+/// typed distinguishes those cases. That is a real loss of structure, shared verbatim with the
+/// accepted E3 screen rather than introduced by this pilot — remedying it means a coherent redesign
+/// across both modules, which is a follow-up, not this module's work. It cannot affect this pilot's
+/// only admissible output: every failure blocks the attempt and therefore blocks `W` selection
+/// identically, whatever caused it.
+///
 /// **No `Debug`**, inherited from the retained [`PartialEvidence`].
 #[derive(Clone, Serialize)]
 pub(crate) struct AttemptFailure {

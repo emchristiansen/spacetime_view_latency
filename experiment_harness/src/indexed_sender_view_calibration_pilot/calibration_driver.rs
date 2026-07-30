@@ -718,24 +718,29 @@ fn retained(samples: &[LatencySample]) -> Vec<PacedSampleNanos> {
         .collect()
 }
 
-/// The subscriptions that must both be live at the instant the two caches are read.
+/// The two subscription handles this call site supplies, retained across both cache reads.
 ///
-/// **This type exists to make simultaneity a compile-time property rather than a comment.** The
-/// composition is one claim about one instant: a cache read after its subscription had ended would
-/// report an emptiness the seeding did not cause, and would be recorded as a `Semantics` mismatch —
-/// a wrong verdict, not a detected one. Holding the handles in a value whose method performs the
-/// reads means a read cannot be moved past a drop without failing to compile, because
-/// [`Self::verify`] borrows `self`.
+/// **What this type actually guarantees is narrow: the two handles handed to
+/// [`Self::both_applied`] are still owned when [`Self::verify`] performs its reads.** Because
+/// `verify` borrows `self`, neither handle can be dropped between the two reads without failing to
+/// compile. The composition is one claim about one instant, and a cache read after its subscription
+/// had ended would report an emptiness the seeding did not cause and be recorded as a `Semantics`
+/// mismatch — a wrong verdict, not a detected one. Keeping the handles alive across the reads is the
+/// part of that hazard this type removes.
 ///
-/// Pinned SDK 2.7.0 would not in fact end a subscription on drop — `SubscriptionHandleImpl` has no
-/// `Drop` impl and both `unsubscribe`/`unsubscribe_then` consume `self` — so today this is belt and
-/// braces. That is exactly why it is worth a type: the property this check depends on would
-/// otherwise rest on the *absence* of an impl in an undocumented internal, which nothing in this
-/// repository would notice changing.
+/// **What it does not establish**, and must not be read as establishing:
 ///
-/// **Cardinality is structural, not checked.** The only constructor takes both handles, so a value
-/// of this type *is* two applied subscriptions; a caller that subscribed one cannot build one, and
-/// therefore cannot reach [`Self::verify`] to report the empty cache it would have found.
+/// - that the two handles are *distinct*, or that they are the arm and witness subscriptions rather
+///   than the same one passed twice — nothing in the constructor's types says so, and the field
+///   names are the only record of the intent;
+/// - that no *other* holder unsubscribes either query while `verify` runs. `unsubscribe` /
+///   `unsubscribe_then` consume `self`, so this owner cannot, but ownership here says nothing about
+///   the wider connection.
+///
+/// Under pinned SDK 2.7.0 dropping a handle would not end its subscription anyway —
+/// `SubscriptionHandleImpl` has no `Drop` impl — so the retention this type enforces is belt and
+/// braces today. It is still worth a type, because that property rests on the *absence* of an impl
+/// in an undocumented internal, which nothing in this repository would notice changing.
 struct LiveSubscriptions {
     /// Retained but never inspected: what matters is that it is still alive, not what it holds. The
     /// arm's subscription is also the one the whole paced batch measured into, applied long before
@@ -845,9 +850,18 @@ fn seed_populations(
 ///
 /// The measured mutation is a production-shaped single-row append to the subscriber's *own* slice,
 /// so each row carries the measured identity and the own control, and takes the next id above the
-/// seeded slice — which is what makes the own population `S₀ + i` rows deep before sample `i` and
-/// `S₀ + recorded` deep when the attempt ends. Built in one pass before the bracket opens so no
-/// arithmetic falls inside a measured interval.
+/// seeded slice. Built in one pass before the bracket opens so no arithmetic falls inside a measured
+/// interval.
+///
+/// **The `S₀ + i` depth this implies is a success-path statement only.** On a batch that completes
+/// every append, the own slice is `S₀ + i` rows deep before sample `i` and `S₀ + recorded` deep at
+/// the end, which is exactly the expectation [`CalibrationExpectation::after`] is built from. On a
+/// failure path it need not hold: an append that timed out at the barrier, or whose visibility never
+/// arrived, may still have committed server-side, leaving the table one row deeper than the retained
+/// sample count. That discrepancy is unobservable to this module because the expectation is
+/// constructed only after the batch returns `Ok` having completed every frozen append — a failed or
+/// timed-out batch never reaches it, and its retained samples are recorded as a
+/// [`RejectedSeries`] that asserts no cardinality at all.
 fn paced_appends(measured: Identity) -> Vec<PacedAppend> {
     (0..u64::from(MAX_PACED_SAMPLES))
         .map(|sample| {

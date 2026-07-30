@@ -219,13 +219,19 @@ enum PacedAppendMessage {
     Visible { id: u64, observed_at: Instant },
     /// A paced append failed at the reducer, so *that* append's visibility will never arrive.
     ///
-    /// **Keyed by `id` as well as `index`, and the key is load-bearing.** A completion callback and
-    /// the observer are two producers racing on one channel, so an append's visibility can be
-    /// delivered before its own contradictory completion report — a cache apply followed by an SDK
-    /// internal error for the same call. Without a key the barrier could only read "a failure
-    /// arrived" and would end whichever sample happened to be waiting, attributing a stale report to
-    /// an append that had not failed. With one it is matched to the append it names, exactly as a
-    /// visibility is. `index` rides along for the diagnostic; `id` is what decides.
+    /// **Keyed by `id` as well as `index` — defensive correlation, not a reachable race.** Under the
+    /// pinned SDK an append yields a visibility *or* a failure, never both: a successful
+    /// `ReducerResult` applies the update and its row callbacks and then completes the reducer
+    /// callback with success, which this channel deliberately reports as nothing at all, while a
+    /// reducer error or internal error completes the callback *without* applying any update
+    /// (`db_connection.rs:195-221,223-254`). `pop_call_info` removes the callback, so it fires once.
+    /// A parse failure ends the connection rather than producing a second contradictory completion.
+    ///
+    /// So no interleaving in this pin delivers a visibility and then a contradictory failure for one
+    /// append. The key is kept anyway because it costs one `u64` and makes the barrier's rule total:
+    /// a failure ends the sample it names rather than whichever sample happens to be waiting, so an
+    /// unexpected protocol state cannot be read as the current sample's outcome. `index` rides along
+    /// for the diagnostic; `id` is what decides.
     Failed {
         index: usize,
         id: u64,
@@ -857,26 +863,43 @@ impl ConnectedClient {
     /// key that did not exist when the sample began. Widening the existing channel to serve both
     /// would put a mode switch inside a frozen measured path whose recorded evidence must not move.
     ///
-    /// **One observer serves the whole batch and is removed before returning on every path**, so
-    /// nothing that runs afterwards on this connection pays a channel send per delivered row.
+    /// **One observer serves the whole batch, and its removal is enqueued before this returns on
+    /// every path**, so nothing that runs afterwards on this connection keeps paying a channel send
+    /// per delivered row.
     ///
-    /// **Registering here rather than at subscription time keeps the arm's initial snapshot out of
-    /// the channel, and the pinned SDK proves it rather than the ordering merely suggesting it.**
-    /// `on_insert` does not install a callback; it queues a `PendingMutation::AddInsertCallback`
-    /// (`client_cache.rs:461`), and pending mutations are applied only *around* message processing,
-    /// never within it (`db_connection.rs:568,584,589`). The subscription's applied callback — which
-    /// is what unblocks `subscribe_untimed` — and its row callbacks run inside one
-    /// `process_message`, so a registration queued from this thread cannot be spliced into the
-    /// middle of it. The seeded own slice therefore cannot reach this observer at all.
+    /// **No append can become visible before its observer is installed, and the proof is
+    /// same-channel FIFO plus outbound causality — not any claim about when mutations are drained.**
+    /// This connection runs `run_threaded`, whose loop is `advance_one_message_blocking` ->
+    /// `get_message` (`db_connection.rs:594-628,634-640,665-674`): it prefers a ready local mutation,
+    /// but otherwise `tokio::select!`s, so it emphatically does *not* drain pending mutations before
+    /// every websocket message. The ordering that does hold:
     ///
-    /// The same queueing makes the first sample safe from the opposite direction: because
-    /// `apply_pending_mutations` runs *before* each message is processed, the callback is installed
-    /// before any incoming message's callbacks fire, so no append can have its own insert delivered
-    /// to a not-yet-registered observer.
+    /// - `on_insert` installs nothing; it queues `PendingMutation::AddInsertCallback` through
+    ///   `queue_mutation` (`client_cache.rs:451-453,461`);
+    /// - the generated `insert_indexed_control_activity_then` reaches
+    ///   `invoke_reducer_with_callback`, which queues `PendingMutation::InvokeReducerWithCallback`
+    ///   (`db_connection.rs:747-762`);
+    /// - both land on the *same* unbounded MPSC channel — the table handle's sender is a clone of
+    ///   the connection's `pending_mutations_send` (`db_connection.rs:738-743`) — which is FIFO;
+    /// - the connection thread therefore applies the callback registration strictly before it
+    ///   applies the reducer invocation, and only the latter emits the outbound `CallReducer`.
     ///
-    /// Removal is queued too, so a late insert may still be delivered after `remove_on_insert`
-    /// returns. That is harmless and is the accepted observer's behaviour as well: the channel is
-    /// local to this call and dropped on return, and `deliver` models a dropped receiver explicitly.
+    /// So the server has not even been asked to perform the append until the observer is installed,
+    /// and no response or row update can precede its own request. The registration is queued before
+    /// the first `sample_paced_appends` iteration, so this holds for every sample including the
+    /// first.
+    ///
+    /// **The seeded snapshot is excluded for a separate reason.** The arm's subscription-applied
+    /// callback — which is what unblocks `subscribe_untimed` — and that subscription's row callbacks
+    /// are delivered while the connection thread processes one websocket message, and a locally
+    /// queued mutation is a *different* message handled in a later loop iteration. A registration
+    /// queued from the harness thread therefore cannot be spliced into the middle of the snapshot's
+    /// callbacks, and the seeded own slice cannot reach this observer.
+    ///
+    /// **Removal is queued, not immediate** (`client_cache.rs:473-477`), so a row callback for an
+    /// already-selected update may still run after this method returns and attempt one send. That is
+    /// harmless and is the accepted observer's behaviour too: the channel is local to this call and
+    /// dropped on return, and `deliver` models a dropped receiver explicitly.
     ///
     /// **A stopped batch returns its completed samples**, not a bare error, because a paced append
     /// batch that fails at sample 400 holds four hundred genuine intervals. See
@@ -1915,13 +1938,14 @@ fn await_visible_update(
 /// Factored out of the append walk so it depends on nothing but the channel, the key, the sample's
 /// `start`, and one absolute `deadline` — no live server.
 ///
-/// **Every message is filtered by id, failures included, and that is the whole protocol.** A
-/// completion callback and the observer are two producers on one channel, so an append's visibility
-/// can be delivered *before* a contradictory completion report about the same call — a cache apply
-/// followed by an SDK internal error. That report then sits unread while the next sample waits. If
-/// the barrier read failures positionally it would end that innocent sample on its predecessor's
-/// stale message, reporting an application failure for an append that had not been issued when the
-/// failure was produced. Matching a failure to the id it names makes that unrepresentable.
+/// **Every message is filtered by id, failures included, and that is the whole protocol.** Under the
+/// pinned SDK this is defensive rather than load-bearing: one append yields a visibility or a
+/// failure and never both, because a successful `ReducerResult` applies the update and then
+/// completes the callback with a success this channel reports as silence, while any failure
+/// completes the callback without applying an update (`db_connection.rs:195-221,223-254`). Filtering
+/// failures by id is kept because it makes the rule total — a failure ends the sample it *names*,
+/// so no unexpected protocol state can be read as the current sample's outcome — and because one
+/// rule over one key is easier to check than two rules over two.
 ///
 /// **Non-matching messages of either kind are skipped rather than rejected.** For visibilities this
 /// copies [`await_visible_update`]'s protocol; the reasoning differs from that channel's and is worth

@@ -1,5 +1,5 @@
-//! A failure report ends only the append it names: a stale one is skipped, and the current one is
-//! the module's answer rather than a bound exceeded.
+//! A failure report ends only the append it names: one naming a different append is skipped, and the
+//! one naming this append is the module's answer rather than a bound exceeded.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -12,23 +12,23 @@ use super::paced_append_fixture::checked_after;
 /// The activity id this sample's append writes.
 const TARGET_ID: u64 = 1_000_000_010;
 
-/// The id of an earlier append whose failure report arrives late.
+/// A different append's id — the non-matching key the barrier must skip on either message kind.
 const STALE_ID: u64 = 1_000_000_009;
 
 /// A budget so generous that a timeout could only mean a message was mishandled.
 const GENEROUS: Duration = Duration::from_secs(30);
 
-/// Coverage: the race that makes a failure's key load-bearing, and the classification once it
+/// Coverage: the barrier's failure rule is total over the key, and the classification once a failure
 /// matches.
 ///
-/// **The stale half.** A completion callback and the observer are two producers on one channel. An
-/// append's visibility can be delivered *before* a contradictory completion report about the same
-/// call — a cache apply followed by an SDK internal error — and that report then sits unread while
-/// the next sample waits. A barrier reading failures positionally would end this innocent sample on
-/// its predecessor's message, recording an application failure for an append that had not even been
-/// issued when the failure was produced, and abandoning a batch that was proceeding correctly. The
-/// deadline here is generous, so a `Timeout` would mean the stale message was consumed as a stop and
-/// the target's own insert never reached the loop.
+/// **The non-matching half.** This is a *pure* test of the barrier's rule, not a claim that the SDK
+/// can produce this message order. It cannot: an append yields a visibility or a failure and never
+/// both, because a successful `ReducerResult` applies the update and then completes the callback
+/// with a success this channel reports as silence, while any failure completes the callback without
+/// applying an update (`db_connection.rs:195-221,223-254`). What is under test is that the rule is
+/// keyed rather than positional, so a failure naming another append cannot end this one whatever
+/// order the channel presents. The deadline is generous, so a `Timeout` would mean the non-matching
+/// message was consumed as a stop and the target's own insert never reached the loop.
 ///
 /// **The matching half.** The stop condition is visibility, not confirmation, so an append that
 /// failed at the reducer is never visible. Without its failure reaching the same channel the sample
@@ -40,13 +40,14 @@ const GENEROUS: Duration = Duration::from_secs(30);
 /// the failure afterwards; [`MeasuredStepFailure`] carries an `anyhow::Error` and is not `Copy`.
 #[test]
 fn a_paced_append_failure_is_matched_to_its_own_append() {
-    // A stale failure ahead of this sample's own insert: skipped, and the sample still completes.
+    // A failure naming another append, ahead of this sample's own insert: skipped, and the sample
+    // still completes.
     let start = Instant::now();
     let (tx, rx) = mpsc::channel::<PacedAppendMessage>();
     tx.send(PacedAppendMessage::Failed {
         index: 41,
         id: STALE_ID,
-        error: "internal error awaiting reducer: late contradictory report".to_string(),
+        error: "internal error awaiting reducer: a report naming another append".to_string(),
     })
     .expect("the receiver is alive");
     tx.send(PacedAppendMessage::Visible {
