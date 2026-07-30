@@ -76,7 +76,16 @@ pub(crate) const MAX_PACED_SAMPLES_USIZE: usize = {
 /// Not vacuous for this channel, unlike E3's: the pilot issues a real measured write with a real
 /// round trip, so confirmed reads genuinely delimit something here. Recorded from a constant anyway
 /// so a ledger-only check never has to special-case a channel to find it.
-pub(crate) const WITH_CONFIRMED_READS: bool = true;
+///
+/// **Derived from the setting the connection actually applies, never restated.**
+/// [`ConnectedClient::connect`](crate::client::connected_client::ConnectedClient) builds every
+/// connection with `.with_confirmed_reads(crate::params::CONFIRMED_READS)`, so writing `true` here
+/// independently would be a second copy of one truth: flip the real constant and this one would keep
+/// recording a method the run did not use, on every ledger line, silently. The campaign already
+/// solved this the same way — see
+/// [`campaign_params::CONFIRMED_READS`](crate::view_read_set_campaign::campaign_params). The typed
+/// method fact is unchanged; only the duplication is gone.
+pub(crate) const WITH_CONFIRMED_READS: bool = crate::params::CONFIRMED_READS;
 
 /// The published distribution the freeze pins every attempt to.
 ///

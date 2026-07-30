@@ -43,32 +43,38 @@ impl AttemptFailure {
     /// measured sample — the spec's rule verbatim, which leaves `Provision` and `Connect` as the
     /// only retryable kinds.
     ///
-    /// **The series invariant is a pair of implications, not a biconditional**, and that is the one
-    /// place this model departs from the discovery screen's. A cold apply either happened or did
-    /// not, so E3 can insist a kind carries a sample exactly when it requires one. A paced batch is
-    /// up to a thousand appends, so a batch that stops partway holds a genuine partial series — see
-    /// [`FailureKind::permits_series`]. What is still forbidden is a kind that strictly precedes the
-    /// first append reporting samples it could not have taken, and a post-batch kind reporting none.
+    /// **Both evidence invariants are biconditionals.** A kind carries a retained series exactly when
+    /// it can follow the first append, and carries a composition mismatch exactly when it *is* a
+    /// composition mismatch. Neither direction is slack:
+    ///
+    /// - a kind that strictly precedes the first append cannot report samples it could not have
+    ///   taken, and a kind that follows it cannot report none — partiality is an empty or short
+    ///   [`RejectedSeries`](super::rejected_series::RejectedSeries), never an absent one;
+    /// - a `Semantics` failure cannot claim nothing was observed, and no *other* kind may carry a
+    ///   mismatch — which would file a semantic divergence under a label that names a different
+    ///   fault.
     pub(crate) fn observed(
         kind: FailureKind,
         partial: PartialEvidence,
         diagnostic: DiagnosticArtifact,
     ) -> Result<Self> {
         ensure!(
-            !partial.has_series() || kind.permits_series(),
+            !partial.has_series() || kind.requires_series(),
             "{kind:?} strikes before the first append, so it cannot carry a retained series",
         );
         ensure!(
             !kind.requires_series() || partial.has_series(),
-            "{kind:?} always has a paced batch that returned behind it, so it must retain that \
-             batch's samples — which is not the same as reaching the frozen count, since a batch \
-             that returned short is exactly what a Sample failure reports",
+            "{kind:?} can follow the first append, so it must retain that batch's ordered samples — \
+             an empty RejectedSeries when the batch failed on its very first append, never \
+             NothingObserved, which claims the batch was never reached",
         );
 
         let mismatch = partial.mismatch();
         ensure!(
-            mismatch.is_none() || kind.can_observe_composition(),
-            "{kind:?} strikes before the caches are read, so it cannot carry a composition mismatch",
+            mismatch.is_none() || kind.requires_observed_composition(),
+            "{kind:?} is not an observed-versus-expected composition mismatch, so it cannot carry \
+             one; filing a semantic failure under another kind hides which rows diverged behind a \
+             label that says something else went wrong",
         );
         ensure!(
             !kind.requires_observed_composition() || mismatch.is_some(),
@@ -126,3 +132,6 @@ impl AttemptFailure {
         self.partial.retained_samples()
     }
 }
+
+#[cfg(test)]
+mod tests;

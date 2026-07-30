@@ -41,8 +41,10 @@ impl CalibrationExpectation {
     /// `recorded_appends` appends.
     ///
     /// The measured identity is a parameter because it is whichever identity the client connected
-    /// as, which is not knowable until runtime; the unrelated owner is derived from a frozen
-    /// constant so it is knowable in advance and no client ever authenticates as it.
+    /// as, which is not knowable until runtime; the unrelated owner is derived from a frozen constant
+    /// so it is knowable in advance. That the two are distinct — which the whole unrelated axis rests
+    /// on — is *checked* here rather than assumed, via
+    /// [`ensure_measured_is_not_the_unrelated_owner`].
     ///
     /// **`recorded_appends` is checked here rather than assumed.** It is the one input the frozen
     /// constants do not bound — the freeze proves the arithmetic only up to
@@ -56,6 +58,7 @@ impl CalibrationExpectation {
         recorded_appends: u64,
         measured: Identity,
     ) -> Result<Self> {
+        ensure_measured_is_not_the_unrelated_owner(measured)?;
         ensure!(
             recorded_appends <= u64::from(MAX_PACED_SAMPLES),
             "an attempt cannot have recorded {recorded_appends} appends when the frozen ceiling is \
@@ -105,11 +108,52 @@ impl CalibrationExpectation {
     }
 }
 
+/// Fail loud unless the measured identity is distinct from the unrelated population's owner.
+///
+/// **The precondition the axis rests on, checked rather than assumed.** The arm is a pure
+/// sender-equality filter — `indexed_control_activity_sender_view` is
+/// `where user_identity == ctx.sender()` — so if the connecting identity *were*
+/// [`unrelated_owner`], the unrelated rows would fall inside the measured read set and there would be
+/// no unrelated axis at all. SSOT §562/§564 authorize sweeping *unrelated/global* rows; that method
+/// would simply be absent.
+///
+/// **This does not produce false evidence, and the guard is not what stops it doing so.** The arm
+/// cache would hold all 2,010 rows against a 1,010-row expectation, so
+/// [`VerifiedPopulation::verify`](super::verified_population::VerifiedPopulation::verify) fails
+/// closed on the 1,000 unrelated-range rows — nothing is recorded. What it *does* is misdiagnose:
+/// those faults read as a sender-scope leak, which is the most serious thing this candidate can be
+/// accused of, when the actual fault is an identity-configuration collision. The attempt is spent and
+/// the ledger's account of why is wrong.
+///
+/// Ordinary identity derivation makes the collision vanishingly unlikely; it does not make it
+/// impossible, and nothing in the type system excludes it. An `Identity` is a 32-byte value and
+/// [`unrelated_owner`] is a perfectly ordinary one, so the aliased state is structurally
+/// representable. Negligible probability is not a proof, and it is not the standard this module holds
+/// itself to elsewhere — which is the whole reason this is a check rather than a comment.
+///
+/// **Phase 2 must call this at the earliest point the connected identity is known, before seeding or
+/// any other side effect.** [`CalibrationExpectation::after`] also enforces it, so an aliased
+/// expectation is unconstructible — but that runs *after* the batch, and by then a whole attempt
+/// would have been spent measuring the wrong thing.
+pub(crate) fn ensure_measured_is_not_the_unrelated_owner(measured: Identity) -> Result<()> {
+    ensure!(
+        measured != unrelated_owner(),
+        "the measured identity {} is the frozen unrelated owner, so the unrelated population would \
+         sit inside the sender-scoped read set and this attempt would not have an unrelated axis at \
+         all",
+        measured.to_hex(),
+    );
+    Ok(())
+}
+
 /// The fixed non-connecting identity that owns every unrelated row.
 ///
-/// Derived from a frozen constant rather than connected as, so the unrelated population is provably
-/// outside the measured identity's sender-scoped read set: no client ever authenticates as it, so a
-/// row it owns appearing in the arm cache is unambiguously a leak rather than a seeding mistake.
+/// Derived from a frozen constant rather than connected as, so it is knowable before any client
+/// connects. That it lies *outside* the measured identity's sender-scoped read set is not a property
+/// of this constant alone — the view filters on `user_identity == ctx.sender()`, so it holds exactly
+/// when the connecting identity differs from this one. That is checked by
+/// [`ensure_measured_is_not_the_unrelated_owner`], and only once it has been checked is a row this
+/// identity owns appearing in the arm cache unambiguously a leak rather than an aliasing artefact.
 pub(crate) fn unrelated_owner() -> Identity {
     let mut bytes = [0u8; 32];
     bytes[31] = UNRELATED_IDENTITY_BYTE;

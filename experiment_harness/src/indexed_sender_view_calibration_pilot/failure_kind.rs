@@ -45,8 +45,16 @@ pub(crate) enum FailureKind {
     /// also failed. The record carries one chained diagnostic retaining both failures, alongside
     /// whatever partial series existed.
     HostObservationAfterBatchFailure,
-    /// The batch ran to the frozen count and the post-measurement host observation could not be
-    /// taken, so the bracket cannot be closed. The complete series survives as non-evidence.
+    /// The paced batch returned and the post-measurement host observation could not be taken, so the
+    /// bracket cannot be closed. The returned series survives as non-evidence.
+    ///
+    /// Says "returned" rather than "reached the frozen count" deliberately. A batch that stops early
+    /// and is *followed* by a failing observation is
+    /// [`HostObservationAfterBatchFailure`](Self::HostObservationAfterBatchFailure), so in practice
+    /// this kind follows a complete batch — but nothing here enforces the length, and
+    /// [`CalibrationSeries::recorded`](super::calibration_series::CalibrationSeries::recorded) is the
+    /// sole authority on completeness. Claiming a complete series in a doc that does not check one
+    /// would be the overclaim this vocabulary exists to avoid.
     HostObservationAfter,
     /// The untimed composition-witness subscription failed to apply, so the caches could not be
     /// read and the composition could not be checked.
@@ -144,48 +152,56 @@ impl FailureKind {
         )
     }
 
-    /// Whether a failure of this kind necessarily has a **complete** batch behind it, so a retained
-    /// series is mandatory.
+    /// Whether a failure of this kind must carry a retained series — **a biconditional with
+    /// [`Self::can_follow_first_sample`], not a pair of implications.**
     ///
-    /// True exactly for the four kinds reachable only after the batch ran to its end. Note that
-    /// "ran to its end" is not "reached the frozen count": [`Self::Sample`] is precisely the kind for
-    /// a batch that terminated normally and still produced a length other than the frozen one, and it
-    /// retains those samples.
-    /// Enforced together with [`Self::permits_series`] as a pair of implications rather than the
-    /// biconditional the discovery screen can afford.
+    /// A kind that strictly precedes the first append carries no series; a kind that can follow it
+    /// carries exactly one. There is no middle. A `Connect` failure reporting four hundred samples is
+    /// inventing them, and a `PacedBatch` failure reporting *no* series is denying that the batch it
+    /// is named for ever began.
     ///
-    /// **Why not a biconditional.** E3's measured unit is one cold apply: it either completed or it
-    /// did not, so "kind requires a sample" and "evidence carries one" coincide exactly. A paced
-    /// batch is up to a thousand appends issued one at a time, so a batch that stops at 400
-    /// genuinely holds four hundred ordered samples — informative about precisely the stationarity
-    /// and lag questions this pilot exists to answer. Forcing the E3 biconditional here would make
-    /// that partial series unrecordable, and discarding it would throw away most of what a failed
-    /// attempt learned.
+    /// **An earlier draft weakened this to two implications**, arguing that a paced batch is many
+    /// samples where E3's cold apply is one, so a batch failing partway holds a genuine partial series
+    /// that a biconditional would make unrecordable. The premise was right and the conclusion was
+    /// wrong: partiality is carried by the series being *short or empty*, never by its being absent.
+    /// [`RejectedSeries::of`](super::rejected_series::RejectedSeries::of) accepts an empty vector
+    /// precisely so a batch that failed on its first append records "measured, and got nothing" —
+    /// a different fact from "never reached the batch", and exactly the one the weakened form let a
+    /// record blur. Requiring the container, empty or not, keeps both facts and fabricates no sample.
+    ///
+    /// "Can follow the first append" is not "reached the frozen count": [`Self::Sample`] is precisely
+    /// the kind for a batch that returned with a length other than the frozen one, and it retains
+    /// those samples.
+    ///
+    /// **Stated as an exhaustive match, not derived from [`Self::can_follow_first_sample`].** The two
+    /// are equal today, and the taxonomy test asserts that equality — but they are different claims:
+    /// one is about where a failure sits relative to the measurement window, the other about what
+    /// evidence a record must carry. Deriving this from that would let a future change to
+    /// [`Self::stage`] silently rewrite the evidence rule; writing it out means adding a kind forces
+    /// a deliberate answer here, and moving a kind's stage breaks the test loudly instead.
     pub(crate) fn requires_series(self) -> bool {
-        matches!(
-            self,
-            Self::HostObservationAfter
-                | Self::WitnessSubscription
-                | Self::Sample
-                | Self::Semantics
-        )
-    }
-
-    /// Whether a failure of this kind *may* carry a retained series.
-    ///
-    /// Every kind that requires one, plus the two that follow a batch which began and stopped early.
-    /// A kind that strictly precedes the first append carries none, and a partial evidence value
-    /// claiming otherwise is rejected — a `Connect` failure reporting four hundred samples is
-    /// inventing them.
-    pub(crate) fn permits_series(self) -> bool {
-        self.requires_series()
-            || matches!(
-                self,
-                Self::PacedBatch | Self::HostObservationAfterBatchFailure
-            )
+        match self {
+            Self::Provision
+            | Self::Connect
+            | Self::Reducer
+            | Self::Subscription
+            | Self::HostObservationBefore => false,
+            Self::PacedBatch
+            | Self::HostObservationAfterBatchFailure
+            | Self::HostObservationAfter
+            | Self::WitnessSubscription
+            | Self::Sample
+            | Self::Semantics => true,
+        }
     }
 
     /// Whether a failure of this kind can have read the two caches.
+    ///
+    /// **A reachability fact, no longer the mismatch rule.** Carrying a mismatch is now permitted
+    /// exactly for [`Self::requires_observed_composition`] — that is, for `Semantics` alone — because
+    /// a mismatch filed under `Sample` would hide a semantic divergence behind a label naming a
+    /// different fault. This predicate remains as the weaker statement about *when the reads
+    /// happened*, which the taxonomy test pins against that rule.
     ///
     /// The `after` observation is taken immediately after the paced batch returns and *before* the
     /// untimed witness subscription or any cache read, so both after-observation kinds strike while

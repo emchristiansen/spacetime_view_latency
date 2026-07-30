@@ -8,23 +8,28 @@
 //! rows to the measured identity's own slice, and retains every ordered raw nanosecond.
 //!
 //! **Phase 1 skeleton: nothing here measures anything yet.** The vocabulary, the frozen inventory,
-//! the gate, and the ledger seam are complete, but
-//! [`run_attempt`](calibration_driver) is the sole `todo!()`, so the wired CLI subcommand panics
-//! rather than running a pilot. Every "it runs / appends / retains" statement in this file describes
-//! the frozen method the types encode, not behaviour that exists today.
+//! the gate, and the ledger seam are complete, but [`run_attempt`](calibration_driver) is the sole
+//! `todo!()`. The CLI subcommand is wired and returns the Phase 1 refusal before any side effect —
+//! before the ledger is created, the waiter resolved or run, or anything provisioned — so `run_attempt`
+//! is unreachable and nothing panics. Every "it runs / appends / retains" statement in this file
+//! describes the frozen method the types encode, not behaviour that exists today.
 //!
-//! **The calibration ceiling is structural, not documentary.** The spec forbids this pilot from
-//! producing any performance, scaling, candidate, or site conclusion and any Arm/Control
-//! comparison, and three properties of this vocabulary enforce that rather than asking a reader to
-//! remember it:
+//! **What the calibration ceiling actually rests on.** The spec forbids this pilot from producing any
+//! performance, scaling, candidate, or site conclusion and any Arm/Control comparison. The record
+//! vocabulary makes a reduced cell statistic, a comparison, or a candidate verdict **unrepresentable
+//! in a ledger line** — there is no field, variant, or evidence type shaped to hold one. It does not
+//! make the raw values unreachable: they must serialize, so a deliberate round trip recovers them.
+//! Authorized interpretation is enforced by review and by SSOT, not by the type system. Three
+//! properties carry the representable half:
 //!
-//! - Exactly two types hold measured durations —
+//! - A raw duration is represented by [`PacedSampleNanos`](paced_sample_nanos::PacedSampleNanos) and
+//!   collected in exactly two series containers —
 //!   [`CalibrationSeries`](calibration_series::CalibrationSeries), which is admitted evidence, and
-//!   [`RejectedSeries`](rejected_series::RejectedSeries), which is retained non-evidence — and
-//!   **neither exposes any reduction whatsoever**: no median, mean, minimum, or maximum, and no
+//!   [`RejectedSeries`](rejected_series::RejectedSeries), which is retained non-evidence. **None of
+//!   the three exposes any reduction whatsoever**: no median, mean, minimum, or maximum, and no
 //!   per-sample numeric accessor, only a count. So no cell statistic can be computed through the
-//!   ordinary API or added to either inattentively. Only `CalibrationSeries` can inhabit a success
-//!   outcome, and it seals only from a
+//!   ordinary API or added to any of them inattentively. Only `CalibrationSeries` can inhabit a
+//!   success outcome, and it seals only from a
 //!   [`VerifiedPopulation`](verified_population::VerifiedPopulation), a token minted solely by the
 //!   row-by-row composition verifier, so a series measured against a same-cardinality substitution
 //!   cannot be sealed at all.
@@ -56,13 +61,16 @@
 //! extends the dormant `view_read_set_campaign` namespace; the axis ladder is not re-minted but read
 //! from the Pilot's frozen [`GlobalRowRung`](crate::entity_owner_pilot::global_row_rung::GlobalRowRung).
 //!
-//! **The one genuine departure from the E3 record model is partial series retention.** E3's measured
-//! unit is a single cold apply, so a failed measurement has no sample by construction and its
-//! kind-to-sample mapping is a biconditional. A paced batch is up to a thousand samples, so a batch
-//! that fails partway may genuinely hold some — see
-//! [`FailureKind::requires_series`](failure_kind::FailureKind::requires_series) and
-//! [`permits_series`](failure_kind::FailureKind::permits_series), which weaken that biconditional to
-//! the pair of implications a many-sample channel can actually satisfy.
+//! **The E3 record model's biconditional is kept, not weakened.** E3's measured unit is a single cold
+//! apply, so a failed measurement has no sample by construction. A paced batch is up to a thousand
+//! samples, and an earlier draft read that as a reason to relax the rule to a pair of implications —
+//! wrongly. Partiality is carried by the retained series being *short or empty*, never by its being
+//! absent: a batch that failed on its first append records an empty
+//! [`RejectedSeries`](rejected_series::RejectedSeries), which is a different fact from never having
+//! reached the batch. So
+//! [`FailureKind::requires_series`](failure_kind::FailureKind::requires_series) is a biconditional,
+//! and so is the mismatch rule — a composition mismatch may be carried only by the kind that *is*
+//! one.
 //!
 //! Enums carry only variants this module can produce. A variant added later must not reinterpret
 //! evidence already written under this vocabulary.
