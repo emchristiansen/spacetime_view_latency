@@ -13,8 +13,12 @@ use crate::indexed_sender_view_calibration_analysis::correlation_coefficient::Co
 /// why the exact numerator and energy terms remain the retained authority.
 ///
 /// `1.5` is chosen because it is far outside any rounding budget — roughly `10^15` times the
-/// ceiling — so this asserts the gate, not its exact numeric edge, which
-/// `rounding_overshoot_is_canonicalized_to_the_boundary` pins instead.
+/// ceiling — so this asserts that the gate exists at all, and deliberately nothing about where its
+/// edge falls. The edge itself is pinned by a pair of neighbouring assertions elsewhere:
+/// `rounding_overshoot_is_canonicalized_to_the_boundary` accepts `1 + 4·EPSILON` and
+/// `a_ratio_one_ulp_beyond_the_ceiling_is_rejected` refuses the next representable value above it.
+/// Neither bounds the constant alone; this test bounds it least of all, and would pass against any
+/// ceiling below `0.5`.
 #[test]
 #[should_panic(expected = "indicates a defect in the normalization or evaluation path")]
 fn a_gross_out_of_range_ratio_panics() {

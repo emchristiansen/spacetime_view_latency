@@ -21,10 +21,17 @@ const BASE: i128 = 1_000_000;
 /// *reaches the report*, and a projection that quietly kept only the extrema would satisfy the
 /// domain-level test unchanged. So every claim here is read back out of `serde_json::Value`.
 ///
-/// **Every element is checked, not a sample of them.** A projection that truncated, deduplicated, or
-/// reordered in the middle of the series would survive spot checks at the ends. Each element is
-/// compared against a whole expected object, which additionally pins that an element carries exactly
-/// its position and its median and nothing else.
+/// **Every element is checked, not a sample of them.** A projection that truncated or deduplicated
+/// in the middle of the series would survive spot checks at the ends. Each element is compared
+/// against a whole expected object, which additionally pins that an element carries exactly its
+/// position and its median and nothing else.
+///
+/// **What this fixture cannot show, and where that is shown instead.** Its medians are strictly
+/// ascending, so a projection that sorted the series before enumerating positions would reproduce it
+/// exactly. Checking every element excludes every *other* permutation — the expected numerator is
+/// strictly increasing in the index, so any transposition, reversal, or rotation fails here — but not
+/// that one. The position-to-median association is established on a non-sorted series by
+/// `the_serialized_medians_follow_window_order`.
 ///
 /// # Why these medians are exactly hand-derivable
 ///

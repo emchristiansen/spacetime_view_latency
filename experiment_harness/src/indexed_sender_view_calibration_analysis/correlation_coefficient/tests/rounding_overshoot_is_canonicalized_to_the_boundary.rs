@@ -12,7 +12,14 @@ use crate::indexed_sender_view_calibration_analysis::correlation_coefficient::Co
 /// reachable rather than hypothetical: the `f64` path returns `-1.0000000000000002`.
 ///
 /// Asserted against the serialized form as well as the value, because the artifact is what Control
-/// reads, and `#[serde(transparent)]` is the only thing keeping the JSON a bare number.
+/// reads.
+///
+/// `#[serde(transparent)]` is *not* uniquely load-bearing for that shape: `serde_json` serializes a
+/// one-field newtype through `serialize_newtype_struct`, which forwards straight to the inner value,
+/// so this would render as a bare number without the attribute. What the attribute buys is the
+/// declared intent and a wire contract that survives a format which does not flatten newtypes on its
+/// own. Asserting the rendered form here is what keeps the artifact's shape checked rather than
+/// inferred from either of them.
 #[test]
 fn rounding_overshoot_is_canonicalized_to_the_boundary() {
     let overshot = CorrelationCoefficient::from_rounded_ratio(-1.0000000000000002);

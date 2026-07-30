@@ -55,8 +55,14 @@ impl LedgerAdmission {
     /// drop one of them. It could: nothing stopped it binding the refusals to `_` and proceeding, so
     /// "the ledger had other lines" remained a fact a caller had to remember to act on. Here the
     /// refusals are never handed out at all — they are either the reason this fails, or they were
-    /// empty. There is no order of calls that reaches the admitted replicates while a refusal is
-    /// outstanding.
+    /// empty. No sequence of calls on a `LedgerAdmission` reaches *its* admitted replicates while
+    /// any of its own lines was refused: this is its only exit, and it consumes `self`.
+    ///
+    /// **That is a guarantee about this value, deliberately not about the crate.**
+    /// [`CompleteReplicate::admit`] is `pub(crate)`, so a caller holding lines can always run
+    /// admission itself and keep both halves side by side. What this type removes is the accidental
+    /// separation on the path the analyzer actually takes — not the possibility of someone writing a
+    /// second, unchecked path beside it.
     ///
     /// The refusal is a [`PairRefusal`] because that is what the condition means to the only caller:
     /// a ledger with any refused line is not the frozen inventory, so no pair exists. Every refused

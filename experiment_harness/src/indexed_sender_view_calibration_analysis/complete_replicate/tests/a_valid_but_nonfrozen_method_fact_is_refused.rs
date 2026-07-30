@@ -12,9 +12,12 @@ use crate::view_read_set_campaign::campaign_params::PACED_SAMPLE_DELAY_MS;
 /// Coverage: the four method facts whose wrong values are **type-correct**, so nothing but the
 /// frozen-value comparison can catch them.
 ///
-/// The method block's other two fields — `channel` and `outcome_ceiling` — are mirrored enums, so a
-/// wrong value there is not a value at all and fails syntactic decode; that half is covered by
-/// `an_unknown_variant_spelling_fails_decoding`. These four are a `u32`, two `u64`s, and a `bool`.
+/// The method block's other two fields are mirrored enums, and they are covered separately because
+/// they fail in two different ways. `OutcomeCeilingDto` has a single variant, so a wrong value there
+/// is not a value at all and dies at decode — covered by `an_unknown_variant_spelling_fails_decoding`.
+/// `MeasurementChannelDto` restates all four real channels, so a *different real channel* is a
+/// perfectly valid value that decodes cleanly and is caught only by the frozen comparison — covered
+/// by `a_valid_but_nonfrozen_channel_is_refused`. These four are a `u32`, two `u64`s, and a `bool`.
 /// Any number is a valid number and either boolean is a valid boolean, so the *only* thing standing
 /// between this analyzer and a series measured under a different method is
 /// `MethodFactsDto::matches_frozen` actually comparing each one.

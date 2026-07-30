@@ -28,6 +28,7 @@ pub(crate) struct LedgerFixture {
     verified_appends: u64,
     role: &'static str,
     version: u32,
+    channel: &'static str,
     sample_count: u32,
     paced_sample_delay_ms: u64,
     seeded_own_rows: u64,
@@ -50,11 +51,25 @@ impl LedgerFixture {
             verified_appends: population.verified_appends,
             role: "Arm",
             version: frozen_candidate_version(),
+            channel: "PacedVisibleApplyLatency",
             sample_count: MAX_PACED_SAMPLES,
             paced_sample_delay_ms: PACED_SAMPLE_DELAY_MS,
             seeded_own_rows: SUBSCRIBER_OWN_ROWS,
             with_confirmed_reads: WITH_CONFIRMED_READS,
         }
+    }
+
+    /// Override the declared measurement channel, by wire spelling.
+    ///
+    /// **Takes a spelling rather than a variant** for the same reason the whole method block is
+    /// written out as literals: a fixture that named the mirrored DTO's variant would agree with it
+    /// by construction. Passing a real `MeasurementChannel` spelling here produces a line that
+    /// decodes cleanly and is refused only by the frozen comparison; passing an invented one
+    /// produces a line that fails to decode at all. Those are different properties, and this lets a
+    /// test choose which one it is about.
+    pub(crate) fn with_channel(mut self, channel: &'static str) -> Self {
+        self.channel = channel;
+        self
     }
 
     /// Override the method's declared sample count, leaving the series itself frozen.
@@ -189,11 +204,12 @@ impl LedgerFixture {
     /// detect a wire-shape disagreement. The frozen *values*, by contrast, follow the SSOT constants
     /// — writing `true` for confirmed reads or `1000` for the sample count would create a second
     /// copy of a truth the pilot deliberately single-sources, so flipping the real constant would
-    /// leave these tests asserting a method no run uses. The four varying facts default to exactly
-    /// those constants, so a fixture that overrides none of them still restates the freeze.
+    /// leave these tests asserting a method no run uses. The four scalar varying facts default to
+    /// exactly those constants and the channel defaults to the frozen spelling, so a fixture that
+    /// overrides none of them still restates the freeze.
     fn method(&self) -> serde_json::Value {
         json!({
-            "channel": "PacedVisibleApplyLatency",
+            "channel": self.channel,
             "sample_count": self.sample_count,
             "paced_sample_delay_ms": self.paced_sample_delay_ms,
             "seeded_own_rows": self.seeded_own_rows,

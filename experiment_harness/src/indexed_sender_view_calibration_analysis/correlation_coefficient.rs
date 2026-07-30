@@ -47,12 +47,22 @@ impl CorrelationCoefficient {
     ///
     /// **What gating the clamp does and does not buy.** The clamp is bounded by
     /// `RATIO_ROUNDING_CEILING`, a bound derived from the operation sequence rather than observed
-    /// from data, so a deviation *larger than* that ceiling — the shape a sign error, a wrong slice
-    /// offset, or a broken centring identity typically produces — fails loudly instead of being
-    /// pulled to the boundary. It does **not** establish that every implementation defect exceeds
-    /// the ceiling: one landing within a few ULPs of the boundary is indistinguishable from rounding
-    /// and would be repaired silently. An unconditional clamp would absorb every case and is
-    /// deliberately not what this does.
+    /// from data, so a deviation *larger than* that ceiling fails loudly instead of being pulled to
+    /// the boundary.
+    ///
+    /// **What it can catch is exactly what breaks the Cauchy–Schwarz relation** between the
+    /// numerator and the two energies it is divided by: a numerator summed over a different index
+    /// range than those energies, for instance, is no longer bounded by them and can leave the range
+    /// by an arbitrary margin. It is blind to any defect that *preserves* that relation, and two
+    /// worth naming because they look catchable and are not. A wrong centring is invisible: the
+    /// bound holds for whatever vector the centring step produces, correct or not, since the
+    /// numerator and both energies are formed from that same vector. A sign error is invisible too:
+    /// the gate tests `abs()`, which a negation leaves unchanged.
+    ///
+    /// It does **not** establish that every implementation defect exceeds the ceiling: one landing
+    /// within a few ULPs of the boundary is indistinguishable from rounding and would be repaired
+    /// silently. An unconditional clamp would absorb every case and is deliberately not what this
+    /// does.
     ///
     /// The exact numerator and both energy terms are retained separately by the containing report
     /// and remain the authority; this value is the derived convenience projection.
