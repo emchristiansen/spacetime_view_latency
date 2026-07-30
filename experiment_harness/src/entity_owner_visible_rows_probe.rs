@@ -76,6 +76,12 @@ const HOST_WAITER_ARGS: [&str; 12] = [
     "8",
 ];
 
+/// Tells the waiter to exit with a distinct status when it reaches its deadline and refuses, so a
+/// refusal is distinguishable from the raise every operational failure produces. Three because zero
+/// is admission, one is what Nushell raises, and two is argument misuse.
+const REFUSAL_EXIT_CODE_FLAG: &str = "--refusal-exit-code";
+const GATE_REFUSAL_EXIT_CODE: i32 = 3;
+
 /// The ladder must ascend, must fit the table, must not collide with the unrelated key space, and
 /// must own the whole measured write slice — the schedule cycles the first
 /// `SUBSCRIBER_VISIBLE_ROWS_BASELINE` owned keys, so a rung below it would write a row the measured
@@ -231,7 +237,13 @@ pub(crate) fn entity_owner_visible_rows_probe(
     let mut ledger: Option<File> = None;
     for (block, attempt) in plan {
         println!("probe: block {block} attempt {}", attempt.canonical_tag());
-        wait_for_free_ish_host(&host_waiter, block, attempt)?;
+        if !wait_for_free_ish_host(&host_waiter, block, attempt)? {
+            println!(
+                "probe: block {block} attempt {} skipped, the host gate refused",
+                attempt.canonical_tag()
+            );
+            continue;
+        }
         let ledger = match &mut ledger {
             Some(ledger) => ledger,
             empty => empty.insert(create_ledger(output)?),
@@ -278,14 +290,24 @@ fn resolve_host_waiter(host_waiter: &Path) -> Result<PathBuf> {
 }
 
 /// Block until the host is free-ish. Runs immediately before an attempt provisions anything, so a
-/// contended host stops the probe rather than being measured: a failed gate means no server started
-/// and no evidence line written for this attempt. Inherits stdout, so its per-sample diagnostics
-/// stream during a wait that can last minutes.
-fn wait_for_free_ish_host(host_waiter: &Path, block: u32, attempt: ProbeAttempt) -> Result<()> {
+/// contended host is never measured: no server is started and no evidence line is written for this
+/// attempt. Inherits stdout, so its per-sample diagnostics stream during a wait that can last
+/// minutes.
+///
+/// Returns `false` when the waiter reached its deadline and refused, which the caller skips over so
+/// the remaining rungs stay runnable. Any other nonzero exit is still a hard error: those are the
+/// waiter's operational raises, and reading one as a refusal would skip every attempt in seconds
+/// while looking exactly like a busy host.
+fn wait_for_free_ish_host(host_waiter: &Path, block: u32, attempt: ProbeAttempt) -> Result<bool> {
     let status = Command::new(host_waiter)
         .args(HOST_WAITER_ARGS)
+        .arg(REFUSAL_EXIT_CODE_FLAG)
+        .arg(GATE_REFUSAL_EXIT_CODE.to_string())
         .status()
         .with_context(|| format!("running the host waiter {}", host_waiter.display()))?;
+    if status.code() == Some(GATE_REFUSAL_EXIT_CODE) {
+        return Ok(false);
+    }
     ensure!(
         status.success(),
         "the host waiter {} exited unsuccessfully ({status}), so block {block} attempt {} was not \
@@ -293,7 +315,7 @@ fn wait_for_free_ish_host(host_waiter: &Path, block: u32, attempt: ProbeAttempt)
         host_waiter.display(),
         attempt.canonical_tag(),
     );
-    Ok(())
+    Ok(true)
 }
 
 /// One block's attempts, permuted by a domain-separated digest of `(seed, block, attempt)`. Sorting

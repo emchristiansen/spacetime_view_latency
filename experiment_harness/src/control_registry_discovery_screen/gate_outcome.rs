@@ -17,9 +17,8 @@ pub(crate) const GATE_REFUSAL_EXIT_CODE: i32 = 3;
 
 /// The waiter flag that carries [`GATE_REFUSAL_EXIT_CODE`].
 ///
-/// Supplying it is what opts this caller into the typed contract. The visible-rows probe supplies
-/// neither, so the waiter keeps raising on refusal for that caller and every nonzero exit stays the
-/// hard error the probe has always treated it as.
+/// Supplying it is what opts this caller into the typed contract; a caller that supplies neither
+/// keeps the waiter's historical raise-on-refusal behaviour.
 pub(crate) const REFUSAL_EXIT_CODE_FLAG: &str = "--refusal-exit-code";
 
 /// The three things running the gate can mean, and the only three.
