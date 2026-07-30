@@ -15,10 +15,13 @@ use crate::indexed_sender_view_calibration_pilot::calibration_rung::CalibrationR
 /// authorize would simply be absent.
 ///
 /// The consequence is not false evidence. The arm would hold 2,010 rows against a 1,010-row
-/// expectation, so `VerifiedPopulation::verify` fails closed on the 1,000 unrelated-range rows and
-/// records nothing. The harm is that it fails *for the wrong stated reason*: those faults read as a
-/// sender-scope leak — the gravest charge against this candidate — when the real fault is an identity
-/// collision. This guard makes the attempt refuse before it is spent, and refuse with the truth.
+/// expectation, so `VerifiedPopulation::verify` fails closed on the 1,000 unrelated-range rows and no
+/// `CalibrationRecorded` outcome — no successful series — can be produced. The attempt still settles
+/// as a terminal record, as every attempt must; it settles as a `Semantics` failure.
+///
+/// The harm is that it fails *for the wrong stated reason*: those faults read as a sender-scope leak,
+/// the gravest charge against this candidate, when the real fault is an identity collision. This
+/// guard makes the attempt refuse before it is spent, and refuse with the truth.
 ///
 /// Nothing in the type system excludes the alias — an `Identity` is 32 bytes and `unrelated_owner` is
 /// an ordinary one — so the state is structurally representable however unlikely ordinary derivation

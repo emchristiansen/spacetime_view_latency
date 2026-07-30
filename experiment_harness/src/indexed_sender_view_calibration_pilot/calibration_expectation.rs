@@ -120,10 +120,14 @@ impl CalibrationExpectation {
 /// **This does not produce false evidence, and the guard is not what stops it doing so.** The arm
 /// cache would hold all 2,010 rows against a 1,010-row expectation, so
 /// [`VerifiedPopulation::verify`](super::verified_population::VerifiedPopulation::verify) fails
-/// closed on the 1,000 unrelated-range rows — nothing is recorded. What it *does* is misdiagnose:
-/// those faults read as a sender-scope leak, which is the most serious thing this candidate can be
-/// accused of, when the actual fault is an identity-configuration collision. The attempt is spent and
-/// the ledger's account of why is wrong.
+/// closed on the 1,000 unrelated-range rows: no token is minted, so no
+/// [`CalibrationRecorded`](super::attempted_outcome::AttemptedOutcome) outcome and no successful
+/// series can be produced. The attempt still settles as a terminal record, as every attempt must — a
+/// `Semantics` failure retaining the mismatch.
+///
+/// What goes wrong is the *classification*. Those faults read as a sender-scope leak, the gravest
+/// charge against this candidate, when the actual fault is an identity-configuration collision. The
+/// attempt is spent and the ledger's account of why is wrong.
 ///
 /// Ordinary identity derivation makes the collision vanishingly unlikely; it does not make it
 /// impossible, and nothing in the type system excludes it. An `Identity` is a 32-byte value and
