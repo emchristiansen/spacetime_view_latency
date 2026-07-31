@@ -11,7 +11,24 @@ pub mod chronicle_message_type;
 pub mod chronicle_point_view_table;
 pub mod chronicle_query_pk_view_table;
 pub mod chronicle_query_view_table;
+pub mod control_activity_empty_view_table;
+pub mod control_activity_latest_by_control_view_table;
+pub mod control_activity_sender_view_table;
+pub mod control_activity_table;
+pub mod control_activity_type;
+pub mod control_registry_all_view_table;
+pub mod control_registry_table;
+pub mod control_registry_type;
+pub mod entity_owner_sender_view_table;
+pub mod entity_owner_table;
+pub mod entity_owner_type;
+pub mod indexed_control_activity_sender_view_table;
+pub mod indexed_control_activity_table;
+pub mod indexed_control_activity_type;
 pub mod insert_chronicle_message_reducer;
+pub mod insert_control_activity_reducer;
+pub mod insert_entity_owner_reducer;
+pub mod insert_indexed_control_activity_reducer;
 pub mod insert_message_reducer;
 pub mod insert_message_visibility_reducer;
 pub mod message_query_pk_view_table;
@@ -22,13 +39,33 @@ pub mod message_type;
 pub mod message_visibility_table;
 pub mod message_visibility_type;
 pub mod messages_point_view_table;
+pub mod record_control_activity_reducer;
+pub mod record_first_control_activity_reducer;
+pub mod update_entity_owner_reducer;
 
 pub use chronicle_message_table::*;
 pub use chronicle_message_type::ChronicleMessage;
 pub use chronicle_point_view_table::*;
 pub use chronicle_query_pk_view_table::*;
 pub use chronicle_query_view_table::*;
+pub use control_activity_empty_view_table::*;
+pub use control_activity_latest_by_control_view_table::*;
+pub use control_activity_sender_view_table::*;
+pub use control_activity_table::*;
+pub use control_activity_type::ControlActivity;
+pub use control_registry_all_view_table::*;
+pub use control_registry_table::*;
+pub use control_registry_type::ControlRegistry;
+pub use entity_owner_sender_view_table::*;
+pub use entity_owner_table::*;
+pub use entity_owner_type::EntityOwner;
+pub use indexed_control_activity_sender_view_table::*;
+pub use indexed_control_activity_table::*;
+pub use indexed_control_activity_type::IndexedControlActivity;
 pub use insert_chronicle_message_reducer::insert_chronicle_message;
+pub use insert_control_activity_reducer::insert_control_activity;
+pub use insert_entity_owner_reducer::insert_entity_owner;
+pub use insert_indexed_control_activity_reducer::insert_indexed_control_activity;
 pub use insert_message_reducer::insert_message;
 pub use insert_message_visibility_reducer::insert_message_visibility;
 pub use message_query_pk_view_table::*;
@@ -39,6 +76,9 @@ pub use message_type::Message;
 pub use message_visibility_table::*;
 pub use message_visibility_type::MessageVisibility;
 pub use messages_point_view_table::*;
+pub use record_control_activity_reducer::record_control_activity;
+pub use record_first_control_activity_reducer::record_first_control_activity;
+pub use update_entity_owner_reducer::update_entity_owner;
 
 #[derive(Clone, PartialEq, Debug)]
 
@@ -52,6 +92,23 @@ pub enum Reducer {
         uuid: u64,
         payload: String,
     },
+    InsertControlActivity {
+        id: u64,
+        ts: __sdk::Timestamp,
+        control_uuid: u64,
+        user_identity: __sdk::Identity,
+    },
+    InsertEntityOwner {
+        entity_uuid: u64,
+        owner: __sdk::Identity,
+        record: String,
+    },
+    InsertIndexedControlActivity {
+        id: u64,
+        ts: __sdk::Timestamp,
+        control_uuid: u64,
+        user_identity: __sdk::Identity,
+    },
     InsertMessage {
         id: u64,
         sender: __sdk::Identity,
@@ -61,6 +118,21 @@ pub enum Reducer {
         id: u64,
         viewer: __sdk::Identity,
         message_uuid: u64,
+    },
+    RecordControlActivity {
+        id: u64,
+        control_uuid: u64,
+        ts: __sdk::Timestamp,
+    },
+    RecordFirstControlActivity {
+        id: u64,
+        control_uuid: u64,
+        user_identity: __sdk::Identity,
+        ts: __sdk::Timestamp,
+    },
+    UpdateEntityOwner {
+        entity_uuid: u64,
+        record: String,
     },
 }
 
@@ -72,8 +144,14 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::InsertChronicleMessage { .. } => "insert_chronicle_message",
+            Reducer::InsertControlActivity { .. } => "insert_control_activity",
+            Reducer::InsertEntityOwner { .. } => "insert_entity_owner",
+            Reducer::InsertIndexedControlActivity { .. } => "insert_indexed_control_activity",
             Reducer::InsertMessage { .. } => "insert_message",
             Reducer::InsertMessageVisibility { .. } => "insert_message_visibility",
+            Reducer::RecordControlActivity { .. } => "record_control_activity",
+            Reducer::RecordFirstControlActivity { .. } => "record_first_control_activity",
+            Reducer::UpdateEntityOwner { .. } => "update_entity_owner",
             _ => unreachable!(),
         }
     }
@@ -84,6 +162,41 @@ impl __sdk::Reducer for Reducer {
                 &insert_chronicle_message_reducer::InsertChronicleMessageArgs {
                     uuid: uuid.clone(),
                     payload: payload.clone(),
+                },
+            ),
+            Reducer::InsertControlActivity {
+                id,
+                ts,
+                control_uuid,
+                user_identity,
+            } => __sats::bsatn::to_vec(
+                &insert_control_activity_reducer::InsertControlActivityArgs {
+                    id: id.clone(),
+                    ts: ts.clone(),
+                    control_uuid: control_uuid.clone(),
+                    user_identity: user_identity.clone(),
+                },
+            ),
+            Reducer::InsertEntityOwner {
+                entity_uuid,
+                owner,
+                record,
+            } => __sats::bsatn::to_vec(&insert_entity_owner_reducer::InsertEntityOwnerArgs {
+                entity_uuid: entity_uuid.clone(),
+                owner: owner.clone(),
+                record: record.clone(),
+            }),
+            Reducer::InsertIndexedControlActivity {
+                id,
+                ts,
+                control_uuid,
+                user_identity,
+            } => __sats::bsatn::to_vec(
+                &insert_indexed_control_activity_reducer::InsertIndexedControlActivityArgs {
+                    id: id.clone(),
+                    ts: ts.clone(),
+                    control_uuid: control_uuid.clone(),
+                    user_identity: user_identity.clone(),
                 },
             ),
             Reducer::InsertMessage {
@@ -106,6 +219,37 @@ impl __sdk::Reducer for Reducer {
                     message_uuid: message_uuid.clone(),
                 },
             ),
+            Reducer::RecordControlActivity {
+                id,
+                control_uuid,
+                ts,
+            } => __sats::bsatn::to_vec(
+                &record_control_activity_reducer::RecordControlActivityArgs {
+                    id: id.clone(),
+                    control_uuid: control_uuid.clone(),
+                    ts: ts.clone(),
+                },
+            ),
+            Reducer::RecordFirstControlActivity {
+                id,
+                control_uuid,
+                user_identity,
+                ts,
+            } => __sats::bsatn::to_vec(
+                &record_first_control_activity_reducer::RecordFirstControlActivityArgs {
+                    id: id.clone(),
+                    control_uuid: control_uuid.clone(),
+                    user_identity: user_identity.clone(),
+                    ts: ts.clone(),
+                },
+            ),
+            Reducer::UpdateEntityOwner {
+                entity_uuid,
+                record,
+            } => __sats::bsatn::to_vec(&update_entity_owner_reducer::UpdateEntityOwnerArgs {
+                entity_uuid: entity_uuid.clone(),
+                record: record.clone(),
+            }),
             _ => unreachable!(),
         }
     }
@@ -119,6 +263,16 @@ pub struct DbUpdate {
     chronicle_point_view: __sdk::TableUpdate<ChronicleMessage>,
     chronicle_query_pk_view: __sdk::TableUpdate<ChronicleMessage>,
     chronicle_query_view: __sdk::TableUpdate<ChronicleMessage>,
+    control_activity: __sdk::TableUpdate<ControlActivity>,
+    control_activity_empty_view: __sdk::TableUpdate<ControlActivity>,
+    control_activity_latest_by_control_view: __sdk::TableUpdate<ControlActivity>,
+    control_activity_sender_view: __sdk::TableUpdate<ControlActivity>,
+    control_registry: __sdk::TableUpdate<ControlRegistry>,
+    control_registry_all_view: __sdk::TableUpdate<ControlRegistry>,
+    entity_owner: __sdk::TableUpdate<EntityOwner>,
+    entity_owner_sender_view: __sdk::TableUpdate<EntityOwner>,
+    indexed_control_activity: __sdk::TableUpdate<IndexedControlActivity>,
+    indexed_control_activity_sender_view: __sdk::TableUpdate<IndexedControlActivity>,
     message: __sdk::TableUpdate<Message>,
     message_query_pk_view: __sdk::TableUpdate<Message>,
     message_query_view: __sdk::TableUpdate<Message>,
@@ -145,6 +299,44 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "chronicle_query_view" => db_update.chronicle_query_view.append(
                     chronicle_query_view_table::parse_table_update(table_update)?,
                 ),
+                "control_activity" => db_update
+                    .control_activity
+                    .append(control_activity_table::parse_table_update(table_update)?),
+                "control_activity_empty_view" => db_update.control_activity_empty_view.append(
+                    control_activity_empty_view_table::parse_table_update(table_update)?,
+                ),
+                "control_activity_latest_by_control_view" => {
+                    db_update.control_activity_latest_by_control_view.append(
+                        control_activity_latest_by_control_view_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
+                "control_activity_sender_view" => db_update.control_activity_sender_view.append(
+                    control_activity_sender_view_table::parse_table_update(table_update)?,
+                ),
+                "control_registry" => db_update
+                    .control_registry
+                    .append(control_registry_table::parse_table_update(table_update)?),
+                "control_registry_all_view" => db_update.control_registry_all_view.append(
+                    control_registry_all_view_table::parse_table_update(table_update)?,
+                ),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(entity_owner_table::parse_table_update(table_update)?),
+                "entity_owner_sender_view" => db_update.entity_owner_sender_view.append(
+                    entity_owner_sender_view_table::parse_table_update(table_update)?,
+                ),
+                "indexed_control_activity" => db_update.indexed_control_activity.append(
+                    indexed_control_activity_table::parse_table_update(table_update)?,
+                ),
+                "indexed_control_activity_sender_view" => {
+                    db_update.indexed_control_activity_sender_view.append(
+                        indexed_control_activity_sender_view_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
                 "message" => db_update
                     .message
                     .append(message_table::parse_table_update(table_update)?),
@@ -192,6 +384,21 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.chronicle_message = cache
             .apply_diff_to_table::<ChronicleMessage>("chronicle_message", &self.chronicle_message)
             .with_updates_by_pk(|row| &row.uuid);
+        diff.control_activity = cache
+            .apply_diff_to_table::<ControlActivity>("control_activity", &self.control_activity)
+            .with_updates_by_pk(|row| &row.id);
+        diff.control_registry = cache
+            .apply_diff_to_table::<ControlRegistry>("control_registry", &self.control_registry)
+            .with_updates_by_pk(|row| &row.control_uuid);
+        diff.entity_owner = cache
+            .apply_diff_to_table::<EntityOwner>("entity_owner", &self.entity_owner)
+            .with_updates_by_pk(|row| &row.entity_uuid);
+        diff.indexed_control_activity = cache
+            .apply_diff_to_table::<IndexedControlActivity>(
+                "indexed_control_activity",
+                &self.indexed_control_activity,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.message = cache
             .apply_diff_to_table::<Message>("message", &self.message)
             .with_updates_by_pk(|row| &row.id);
@@ -217,6 +424,42 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.chronicle_query_view,
             )
             .with_updates_by_pk(|row| &row.uuid);
+        diff.control_activity_empty_view = cache
+            .apply_diff_to_table::<ControlActivity>(
+                "control_activity_empty_view",
+                &self.control_activity_empty_view,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.control_activity_latest_by_control_view = cache
+            .apply_diff_to_table::<ControlActivity>(
+                "control_activity_latest_by_control_view",
+                &self.control_activity_latest_by_control_view,
+            )
+            .with_updates_by_pk(|row| &row.control_uuid);
+        diff.control_activity_sender_view = cache
+            .apply_diff_to_table::<ControlActivity>(
+                "control_activity_sender_view",
+                &self.control_activity_sender_view,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.control_registry_all_view = cache
+            .apply_diff_to_table::<ControlRegistry>(
+                "control_registry_all_view",
+                &self.control_registry_all_view,
+            )
+            .with_updates_by_pk(|row| &row.control_uuid);
+        diff.entity_owner_sender_view = cache
+            .apply_diff_to_table::<EntityOwner>(
+                "entity_owner_sender_view",
+                &self.entity_owner_sender_view,
+            )
+            .with_updates_by_pk(|row| &row.entity_uuid);
+        diff.indexed_control_activity_sender_view = cache
+            .apply_diff_to_table::<IndexedControlActivity>(
+                "indexed_control_activity_sender_view",
+                &self.indexed_control_activity_sender_view,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.message_query_pk_view = cache
             .apply_diff_to_table::<Message>("message_query_pk_view", &self.message_query_pk_view)
             .with_updates_by_pk(|row| &row.id);
@@ -245,6 +488,36 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "chronicle_query_view" => db_update
                     .chronicle_query_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_activity" => db_update
+                    .control_activity
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_activity_empty_view" => db_update
+                    .control_activity_empty_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_activity_latest_by_control_view" => db_update
+                    .control_activity_latest_by_control_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_activity_sender_view" => db_update
+                    .control_activity_sender_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_registry" => db_update
+                    .control_registry
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "control_registry_all_view" => db_update
+                    .control_registry_all_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "entity_owner_sender_view" => db_update
+                    .entity_owner_sender_view
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "indexed_control_activity" => db_update
+                    .indexed_control_activity
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "indexed_control_activity_sender_view" => db_update
+                    .indexed_control_activity_sender_view
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "message" => db_update
                     .message
@@ -289,6 +562,36 @@ impl __sdk::DbUpdate for DbUpdate {
                 "chronicle_query_view" => db_update
                     .chronicle_query_view
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_activity" => db_update
+                    .control_activity
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_activity_empty_view" => db_update
+                    .control_activity_empty_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_activity_latest_by_control_view" => db_update
+                    .control_activity_latest_by_control_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_activity_sender_view" => db_update
+                    .control_activity_sender_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_registry" => db_update
+                    .control_registry
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "control_registry_all_view" => db_update
+                    .control_registry_all_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "entity_owner" => db_update
+                    .entity_owner
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "entity_owner_sender_view" => db_update
+                    .entity_owner_sender_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "indexed_control_activity" => db_update
+                    .indexed_control_activity
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "indexed_control_activity_sender_view" => db_update
+                    .indexed_control_activity_sender_view
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "message" => db_update
                     .message
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -326,6 +629,16 @@ pub struct AppliedDiff<'r> {
     chronicle_point_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     chronicle_query_pk_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
     chronicle_query_view: __sdk::TableAppliedDiff<'r, ChronicleMessage>,
+    control_activity: __sdk::TableAppliedDiff<'r, ControlActivity>,
+    control_activity_empty_view: __sdk::TableAppliedDiff<'r, ControlActivity>,
+    control_activity_latest_by_control_view: __sdk::TableAppliedDiff<'r, ControlActivity>,
+    control_activity_sender_view: __sdk::TableAppliedDiff<'r, ControlActivity>,
+    control_registry: __sdk::TableAppliedDiff<'r, ControlRegistry>,
+    control_registry_all_view: __sdk::TableAppliedDiff<'r, ControlRegistry>,
+    entity_owner: __sdk::TableAppliedDiff<'r, EntityOwner>,
+    entity_owner_sender_view: __sdk::TableAppliedDiff<'r, EntityOwner>,
+    indexed_control_activity: __sdk::TableAppliedDiff<'r, IndexedControlActivity>,
+    indexed_control_activity_sender_view: __sdk::TableAppliedDiff<'r, IndexedControlActivity>,
     message: __sdk::TableAppliedDiff<'r, Message>,
     message_query_pk_view: __sdk::TableAppliedDiff<'r, Message>,
     message_query_view: __sdk::TableAppliedDiff<'r, Message>,
@@ -363,6 +676,56 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ChronicleMessage>(
             "chronicle_query_view",
             &self.chronicle_query_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlActivity>(
+            "control_activity",
+            &self.control_activity,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlActivity>(
+            "control_activity_empty_view",
+            &self.control_activity_empty_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlActivity>(
+            "control_activity_latest_by_control_view",
+            &self.control_activity_latest_by_control_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlActivity>(
+            "control_activity_sender_view",
+            &self.control_activity_sender_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlRegistry>(
+            "control_registry",
+            &self.control_registry,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ControlRegistry>(
+            "control_registry_all_view",
+            &self.control_registry_all_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<EntityOwner>(
+            "entity_owner",
+            &self.entity_owner,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<EntityOwner>(
+            "entity_owner_sender_view",
+            &self.entity_owner_sender_view,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<IndexedControlActivity>(
+            "indexed_control_activity",
+            &self.indexed_control_activity,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<IndexedControlActivity>(
+            "indexed_control_activity_sender_view",
+            &self.indexed_control_activity_sender_view,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Message>("message", &self.message, event);
@@ -1055,6 +1418,16 @@ impl __sdk::SpacetimeModule for RemoteModule {
         chronicle_point_view_table::register_table(client_cache);
         chronicle_query_pk_view_table::register_table(client_cache);
         chronicle_query_view_table::register_table(client_cache);
+        control_activity_table::register_table(client_cache);
+        control_activity_empty_view_table::register_table(client_cache);
+        control_activity_latest_by_control_view_table::register_table(client_cache);
+        control_activity_sender_view_table::register_table(client_cache);
+        control_registry_table::register_table(client_cache);
+        control_registry_all_view_table::register_table(client_cache);
+        entity_owner_table::register_table(client_cache);
+        entity_owner_sender_view_table::register_table(client_cache);
+        indexed_control_activity_table::register_table(client_cache);
+        indexed_control_activity_sender_view_table::register_table(client_cache);
         message_table::register_table(client_cache);
         message_query_pk_view_table::register_table(client_cache);
         message_query_view_table::register_table(client_cache);
@@ -1067,6 +1440,16 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "chronicle_point_view",
         "chronicle_query_pk_view",
         "chronicle_query_view",
+        "control_activity",
+        "control_activity_empty_view",
+        "control_activity_latest_by_control_view",
+        "control_activity_sender_view",
+        "control_registry",
+        "control_registry_all_view",
+        "entity_owner",
+        "entity_owner_sender_view",
+        "indexed_control_activity",
+        "indexed_control_activity_sender_view",
         "message",
         "message_query_pk_view",
         "message_query_view",

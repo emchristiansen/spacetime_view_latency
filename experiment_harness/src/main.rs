@@ -11,8 +11,17 @@
 mod analysis;
 mod campaign;
 mod client;
+mod control_activity_empty_view_reproducer;
+mod control_activity_latest_by_control_view_reproducer;
+mod control_registry_discovery_screen;
+mod control_registry_step_one_reproducer;
 mod dataset;
+mod entity_owner_pilot;
+mod entity_owner_smoke;
+mod entity_owner_visible_rows_probe;
 mod execute_run;
+mod indexed_sender_view_calibration_analysis;
+mod indexed_sender_view_calibration_pilot;
 mod manifest;
 mod module_artifact;
 mod observation;
@@ -21,6 +30,7 @@ mod plan;
 mod provision;
 mod quick_run;
 mod roles;
+mod view_read_set_campaign;
 
 use std::path::PathBuf;
 
@@ -162,6 +172,190 @@ enum Command {
         /// smoke cells, 4-8 = A-E), instead of the default full pass.
         #[arg(long)]
         cell_index: Option<usize>,
+    },
+    /// Smoke stage for the `EntityOwnerSenderView` candidate (spec c33f2e51): provision a fresh
+    /// isolated server, seed owned and non-owned `entity_owner` rows, subscribe to
+    /// `entity_owner_sender_view`, and assert the security-scoped result set is exact.
+    EntityOwnerSmoke {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// Capability reproducer for site 4's admin empty-result question (spec c33f2e51): provision a
+    /// fresh isolated server, seed `control_activity` rows for the measured identity, and assert
+    /// the sender view returns them while the typed-contradiction `control_activity_empty_view`
+    /// returns none. Answers whether the server accepts and empties such a query; measures nothing.
+    ControlActivityEmptyViewReproducer {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// Bounded capability probe for site 4's discovery comparator (spec c33f2e51): provision a fresh
+    /// isolated server, seed a small `control_activity` history, and prove the four frozen criteria
+    /// for `control_activity_latest_by_control_view` — it compiles, publishes, materializes exactly
+    /// one latest row per control, and is invalidated when a strictly later row is inserted into the
+    /// unindexed table it scans. Answers a capability; measures nothing.
+    ControlActivityLatestByControlViewReproducer {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// `ControlRegistry` Step 1 (spec c33f2e51): provision a fresh isolated server, seed K=10
+    /// controls and N=1000 history rows through the two atomic registry reducers only, and prove
+    /// Arm A, Diagnostic Arm B, and the base registry agree on the same K logical rows — before and
+    /// after live repeat activity — and that all four fail-loud preconditions roll back. Capability
+    /// and semantics only; measures nothing.
+    ControlRegistryStepOne {
+        /// Explicit `host:port` listen address for the fresh isolated standalone.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+    },
+    /// `ControlRegistry` discovery E3 screen (spec c33f2e51): freeze the sixteen predeclared
+    /// attempts — four measured targets at each of two ladder endpoints in each of two
+    /// counterbalanced blocks — and time one cold subscription apply per attempt on its own fresh
+    /// isolated server, validating all four caches after timing. A descriptive screen: its only
+    /// permitted performance outcome is `Indeterminate(ScreenOnly)`.
+    ControlRegistryDiscoveryScreen {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed driving the within-group target order. The counterbalanced rung order and
+        /// the seeded data are both seed-independent: only target order varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Append-only E2 method-calibration pilot for the `IndexedControlActivitySenderView` candidate
+    /// (spec c33f2e51): run exactly two independent replicates at the baseline global rung, each
+    /// seeding a ten-row own slice and appending at most a thousand production-shaped single-row
+    /// paced rows, retaining every ordered raw nanosecond. Its only admissible output is evidence
+    /// for freezing the screen's within-cell sample count `W`: no performance, scaling, candidate,
+    /// or site conclusion, and no Arm/Control comparison.
+    IndexedSenderViewCalibrationPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed recorded on every record. Nothing in this pilot's order or seeded data is
+        /// seed-derived — there is one target and one rung, so there is nothing to permute — but the
+        /// value is carried so a ledger line states the run it belongs to.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Analyze a completed calibration ledger against SSOT §569's candidate set
+    /// `W ∈ {10, 20, 50, 100, 200, 500, 1000}` and print threshold-free diagnostics as JSON to
+    /// stdout (stdout is JSON only). Read-only: it provisions, measures, and mutates nothing.
+    ///
+    /// Emits **no** recommendation and no chosen `W`. §568 caps the pilot's output at evidence for
+    /// Control to freeze `W`, and Control applies the decision rule in SSOT.
+    IndexedSenderViewCalibrationAnalysis {
+        /// Path to the durable NDJSON ledger written by `IndexedSenderViewCalibrationPilot`. Opened
+        /// read-only; never created, truncated, or appended to.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Visible-rows derisking probe for the `EntityOwnerSenderView` candidate (spec c33f2e51): hold
+    /// the backing table at a fixed population and vary only how it is partitioned between the
+    /// measured identity and a non-connecting other owner, measuring the paced and saturated
+    /// channels per rung on a fresh isolated server per attempt. Each block runs one Arm per rung
+    /// plus exactly one Control, which is invariant to the partition.
+    EntityOwnerVisibleRowsProbe {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Executable run immediately before each attempt provisions, which must exit zero once the
+        /// host is quiet enough to measure on: `scripts/wait-for-free-ish-host.nu`. Required, so no
+        /// attempt can be measured on an ungated host.
+        #[arg(long)]
+        host_waiter: PathBuf,
+        /// Explicit seed driving the within-block attempt order. The seeded data is
+        /// seed-independent: only execution order varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at, exclusively.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Pilot stage for the `EntityOwnerSenderView` candidate (spec c33f2e51): freeze the ten
+    /// predeclared attempts in a seeded randomized order, then walk the frozen `N_global` ladder on
+    /// a fresh isolated server per attempt, appending progressive rung evidence and exactly one
+    /// terminal record per attempt to a durable NDJSON ledger. Records raw evidence and data
+    /// adequacy only — never a performance conclusion.
+    EntityOwnerPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Explicit seed driving the frozen block and arm/control execution order. The seeded data
+        /// is deliberately seed-independent: the five blocks are replicates of one preregistered
+        /// configuration, so every attempt seeds the identical key ranges, ownership, and payload
+        /// and only the order in which they run varies.
+        #[arg(long)]
+        seed: u64,
+        /// Path the durable NDJSON ledger is created at. Created exclusively; an existing path is a
+        /// fail-fast error rather than a truncation, so a rerun cannot overwrite prior evidence.
+        #[arg(long)]
+        ledger: PathBuf,
+    },
+    /// Calibration-Pilot stage of the fresh-server campaign for the `EntityOwnerSenderView`
+    /// candidate (spec c33f2e51): provision a fresh isolated server per scale point, hold that
+    /// point's cardinality fixed while measuring all four channels in the frozen E3/E4/E2/E1 order,
+    /// and append exactly one terminal record per attempt that runs — every frozen logical slot's
+    /// original, plus any retry identity a slot earned — to a durable NDJSON ledger. Records raw
+    /// evidence and data adequacy only — never a performance conclusion.
+    ViewReadSetCampaignPilot {
+        /// Explicit `host:port` listen address every attempt's fresh isolated standalone binds to.
+        #[arg(long)]
+        server: String,
+        /// Path to the built module WASM whose bytes are hash-verified before each publication.
+        #[arg(long)]
+        module_wasm: PathBuf,
+        /// Path the durable NDJSON ledger is created at. Created exclusively; an existing path is a
+        /// fail-fast error rather than a truncation, so a rerun cannot overwrite prior evidence.
+        #[arg(long)]
+        ledger: PathBuf,
+        /// Directory the content-addressed observed row sets are retained under. Composition
+        /// findings point at these files rather than summarizing them, so a reader can re-run every
+        /// comparison instead of trusting that a validator once returned `Ok`.
+        #[arg(long)]
+        artifacts_dir: PathBuf,
     },
 }
 
@@ -318,6 +512,134 @@ fn main() -> Result<()> {
                 }
             }
             Ok(())
+        }
+        Command::EntityOwnerSmoke {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_smoke::entity_owner_sender_view_smoke(listen, &module_wasm)
+        }
+        Command::ControlActivityEmptyViewReproducer {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_activity_empty_view_reproducer::control_activity_empty_view_reproducer(
+                listen,
+                &module_wasm,
+            )
+        }
+        Command::ControlActivityLatestByControlViewReproducer {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_activity_latest_by_control_view_reproducer::control_activity_latest_by_control_view_reproducer(
+                listen,
+                &module_wasm,
+            )
+        }
+        Command::ControlRegistryStepOne {
+            server,
+            module_wasm,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_registry_step_one_reproducer::control_registry_step_one_reproducer(
+                listen,
+                &module_wasm,
+            )
+        }
+        Command::ControlRegistryDiscoveryScreen {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::control_registry_discovery_screen::control_registry_discovery_screen(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
+            )
+        }
+        Command::IndexedSenderViewCalibrationPilot {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::indexed_sender_view_calibration_pilot::indexed_sender_view_calibration_pilot(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                seed,
+            )
+        }
+        Command::IndexedSenderViewCalibrationAnalysis { ledger } => {
+            // Read the completed ledger and print its §569 diagnostics. Stdout carries JSON only,
+            // mirroring `Analyze`. The typed analysis error renders through `anyhow` rather than
+            // being flattened, so an unreadable path, a malformed line, and an unpairable set of
+            // honest records stay distinguishable at the exit boundary.
+            let report = crate::indexed_sender_view_calibration_analysis::analyze_calibration(
+                &ledger,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        Command::EntityOwnerVisibleRowsProbe {
+            server,
+            module_wasm,
+            host_waiter,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_visible_rows_probe::entity_owner_visible_rows_probe(
+                listen,
+                &module_wasm,
+                &host_waiter,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
+            )
+        }
+        Command::EntityOwnerPilot {
+            server,
+            module_wasm,
+            seed,
+            ledger,
+        } => {
+            let listen = ListenAddress::parse(&server)?;
+            crate::entity_owner_pilot::entity_owner_sender_view_pilot(
+                listen,
+                &module_wasm,
+                &OutputPath::new(ledger),
+                ScheduleSeed::new(seed),
+            )
+        }
+        Command::ViewReadSetCampaignPilot {
+            server,
+            module_wasm,
+            ledger,
+            artifacts_dir,
+        } => {
+            // No seed argument: this campaign's execution order derives from the frozen
+            // CAMPAIGN_SEED, so there is no run-time input that could produce a different
+            // preregistration.
+            let listen = ListenAddress::parse(&server)?;
+            crate::view_read_set_campaign::view_read_set_campaign_pilot(
+                listen,
+                &module_wasm,
+                &OutputPath::new(ledger),
+                &artifacts_dir,
+            )
         }
     }
 }

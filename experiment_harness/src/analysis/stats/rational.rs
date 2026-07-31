@@ -111,6 +111,28 @@ impl Rational {
         Self::new(self.num, den)
     }
 
+    /// The exact quotient `self / other` for a nonzero `other`.
+    ///
+    /// Distinct from [`div_int`](Self::div_int), which divides by an integer. The endpoint factor
+    /// `T = S_last / S_first` divides one rational by another, and computing it by hand at the call
+    /// site would lose the loud overflow behaviour every other operation here guarantees. A zero
+    /// divisor is an invariant violation rather than a recoverable input, so it fails loud —
+    /// campaign callers hold a strictly positive cell statistic and cannot reach it.
+    pub(crate) fn div(self, other: Self) -> Self {
+        assert!(other.num != 0, "rational division by zero is undefined");
+        let num = self
+            .num
+            .checked_mul(other.den)
+            .expect("rational quotient numerator fits i128");
+        let den = self
+            .den
+            .checked_mul(other.num)
+            .expect("rational quotient denominator fits i128");
+        // `new` moves the sign onto the numerator when `other` is negative, keeping the canonical
+        // form every comparison here relies on.
+        Self::new(num, den)
+    }
+
     /// The canonical numerator (sign lives here; denominator is always positive).
     pub(crate) fn numerator(self) -> i128 {
         self.num
