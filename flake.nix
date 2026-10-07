@@ -1,8 +1,8 @@
 {
   description = "SpacetimeDB view latency Rust development environment";
 
-  # Reuse rig's cached Rust 1.92 nixpkgs pin: ethnum 1.5.2 fails E0512 on rustc >= 1.98, and this repo declares no toolchain.
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/e6eae2ee2110f3d31110d5c222cd395303343b08";
+  # Reuse Muninn's cached Rust 1.95 nixpkgs pin: ethnum 1.5.2 fails E0512 on rustc >= 1.98, and this repo declares no toolchain.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/453eb764bf6c16a9d9f7cbd488fc6f13eb1bdb9b";
 
   outputs =
     { nixpkgs, ... }:
