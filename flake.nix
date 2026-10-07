@@ -1,9 +1,8 @@
 {
   description = "SpacetimeDB view latency Rust development environment";
 
-  # Pinned to the same nixpkgs revision as token-vault's dev shell, so the toolchain
-  # comes from the binary cache.
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/c7def046b9a883d46974757852106483d741586f";
+  # Reuse rig's cached Rust 1.92 nixpkgs pin: ethnum 1.5.2 fails E0512 on rustc >= 1.98, and this repo declares no toolchain.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/e6eae2ee2110f3d31110d5c222cd395303343b08";
 
   outputs =
     { nixpkgs, ... }:
