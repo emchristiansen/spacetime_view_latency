@@ -14,6 +14,9 @@
     {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
+          # The SpacetimeDB client's native TLS links OpenSSL.
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
           packages = [
             pkgs.cargo
             pkgs.rustc
